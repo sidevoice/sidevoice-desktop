@@ -15,7 +15,6 @@ mod developer_options;
 mod downloads;
 mod hold;
 mod i18n;
-mod output_names;
 pub mod pairings;
 mod platform;
 mod surface;
@@ -352,7 +351,7 @@ fn run_app() {
                     // The screen stays on while a model download runs: the system suspends the app soon after it turns off.
                     downloads: Arc::new(downloads::KeepScreenOn::new(handle.clone())),
                     // The built-in outputs are worded by their type and the page's language, not by the phone's model (Android).
-                    devices: Arc::new(output_names::OutputNames::new(handle.clone())),
+                    devices: Arc::new(call::outputs::OutputNames::new(handle.clone())),
                 },
             ));
             // The room's call holds the call's service (Android), for the host's current page.

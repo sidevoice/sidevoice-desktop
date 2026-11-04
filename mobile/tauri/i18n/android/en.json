@@ -1,5 +1,3 @@
 {
-  "devices.speakerFixed": "Sidevoice plays through the phone's current output: speaker, headphones or Bluetooth. Change it from the quick settings or the volume panel.",
-  "devices.output.earpiece": "Phone",
-  "devices.output.speaker": "Speaker"
+  "devices.speakerFixed": "Sidevoice plays through the phone's current output: speaker, headphones or Bluetooth. Change it from the quick settings or the volume panel."
 }

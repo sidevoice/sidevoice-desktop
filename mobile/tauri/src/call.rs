@@ -863,6 +863,203 @@ pub fn run_on_page(app: &AppHandle, request: serde_json::Value) {
     }
 }
 
+/// The outputs the page's picker lists, worded for the person: Android names the built-in ones by the phone's model
+/// (`22101316G (Earpiece)`, `22101316G (Speaker)`, `22101316G`), so the plugin tells each by its type and the app words the
+/// kind in the page's language (`callCard.language`, the last the page reported). The words are the call card's
+/// (`call_route_*` in the plugin's strings). A built-in output the picker does not offer is left out; every other device keeps
+/// the name it gives itself (docs/MOBILE.md → "The outputs' names").
+pub mod outputs {
+    use std::{collections::HashMap, sync::Mutex};
+
+    use sidevoice_mobile_plugin::{id_of, outputs, OutputKind};
+    use sidevoice_shared::{app::DeviceLabels, sidevoice_voice::AudioDevices};
+    use tauri::{AppHandle, Manager};
+
+    /// The earpiece's and the loudspeaker's words, in each language of the page (the plugin's `call_route_earpiece` and
+    /// `call_route_speaker`).
+    const WORDS: [(&str, &str, &str); 8] = [
+        ("en", "Phone", "Speaker"),
+        ("de", "Telefon", "Lautsprecher"),
+        ("es", "Teléfono", "Altavoz"),
+        ("fr", "Téléphone", "Haut-parleur"),
+        ("it", "Telefono", "Altoparlante"),
+        ("ja", "受話口", "スピーカー"),
+        ("pl", "Telefon", "Głośnik"),
+        ("zh-Hans", "听筒", "扬声器"),
+    ];
+
+    /// The words of `language`, English for one the app does not word.
+    fn words(language: &str) -> (&'static str, &'static str) {
+        let find = |wanted: &str| WORDS.iter().find(|(name, ..)| *name == wanted);
+        let (_, earpiece, speaker) = find(language)
+            .or_else(|| find("en"))
+            .copied()
+            .unwrap_or(WORDS[0]);
+        (earpiece, speaker)
+    }
+
+    /// The devices' wording. An output is asked of the plugin once, the first time it is listed (the devices come and go,
+    /// but an id is one device): the listing every two seconds does not reach the plugin, and a plugin that does not
+    /// answer leaves what was known.
+    pub struct OutputNames {
+        app: AppHandle,
+        kinds: Mutex<HashMap<i32, OutputKind>>,
+    }
+
+    impl OutputNames {
+        pub fn new(app: AppHandle) -> Self {
+            Self {
+                app,
+                kinds: Mutex::default(),
+            }
+        }
+
+        /// The page's language, as it last said, English before it has.
+        fn language(&self) -> String {
+            let last = self.app.state::<crate::LastReport>();
+            let report = last.0.lock().unwrap_or_else(|e| e.into_inner());
+            report
+                .language
+                .as_str()
+                .filter(|language| !language.is_empty())
+                .unwrap_or("en")
+                .to_owned()
+        }
+    }
+
+    impl DeviceLabels for OutputNames {
+        fn label(&self, devices: &mut AudioDevices) {
+            let mut kinds = self.kinds.lock().unwrap_or_else(|e| e.into_inner());
+            let unknown = devices
+                .outputs
+                .iter()
+                .filter_map(|device| id_of(&device.id))
+                .any(|id| id >= 0 && !kinds.contains_key(&id));
+            if unknown {
+                for output in outputs(&self.app).unwrap_or_default() {
+                    kinds.insert(output.id, output.kind);
+                }
+            }
+            let (earpiece, speaker) = words(&self.language());
+            rename(devices, &kinds, earpiece, speaker);
+        }
+    }
+
+    /// The speakers among `devices` by their `kinds`: the earpiece and the loudspeaker named by `earpiece` and `speaker`,
+    /// the hidden ones left out. The microphones and the rest stay.
+    fn rename(
+        devices: &mut AudioDevices,
+        kinds: &HashMap<i32, OutputKind>,
+        earpiece: &str,
+        speaker: &str,
+    ) {
+        let kind = |id: &str| id_of(id).and_then(|id| kinds.get(&id).copied());
+        devices
+            .outputs
+            .retain(|device| kind(&device.id) != Some(OutputKind::Hidden));
+        for output in &mut devices.outputs {
+            match kind(&output.id) {
+                Some(OutputKind::Earpiece) => output.label = earpiece.to_owned(),
+                Some(OutputKind::Speaker) => output.label = speaker.to_owned(),
+                _ => {}
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sidevoice_shared::sidevoice_voice::AudioDevice;
+
+        fn device(id: &str, label: &str) -> AudioDevice {
+            AudioDevice {
+                id: id.into(),
+                label: label.into(),
+            }
+        }
+
+        fn listing() -> AudioDevices {
+            AudioDevices {
+                inputs: vec![device("aaudio:12", "22101316G (Microphone)")],
+                outputs: vec![
+                    device("aaudio:-1", "Default Device"),
+                    device("aaudio:2", "22101316G (Earpiece)"),
+                    device("aaudio:3", "22101316G (Speaker)"),
+                    device("aaudio:4", "22101316G (Speaker)"),
+                    device("aaudio:5", "22101316G"),
+                    device("aaudio:9", "AirPods de Ana"),
+                ],
+                input: None,
+                output: Some("aaudio:3".into()),
+                output_selectable: true,
+                lost: None,
+            }
+        }
+
+        fn kinds() -> HashMap<i32, OutputKind> {
+            HashMap::from([
+                (2, OutputKind::Earpiece),
+                (3, OutputKind::Speaker),
+                (4, OutputKind::Hidden),
+                (5, OutputKind::Hidden),
+                (9, OutputKind::External),
+            ])
+        }
+
+        #[test]
+        fn the_earpiece_and_the_loudspeaker_are_named_by_type_the_hidden_are_left_out_and_the_rest_keep_their_names(
+        ) {
+            let mut devices = listing();
+            rename(&mut devices, &kinds(), "Teléfono", "Altavoz");
+            let labels: Vec<&str> = devices.outputs.iter().map(|d| d.label.as_str()).collect();
+            assert_eq!(
+                labels,
+                ["Default Device", "Teléfono", "Altavoz", "AirPods de Ana"]
+            );
+            assert_eq!(
+                devices.inputs[0].label, "22101316G (Microphone)",
+                "an input is left alone"
+            );
+            assert_eq!(
+                devices.output.as_deref(),
+                Some("aaudio:3"),
+                "the choice is by id, which stays"
+            );
+        }
+
+        #[test]
+        fn no_two_outputs_are_given_the_same_name() {
+            let mut devices = listing();
+            rename(&mut devices, &kinds(), "Teléfono", "Altavoz");
+            let mut labels: Vec<&str> = devices.outputs.iter().map(|d| d.label.as_str()).collect();
+            labels.sort_unstable();
+            labels.dedup();
+            assert_eq!(labels.len(), devices.outputs.len());
+        }
+
+        #[test]
+        fn an_output_with_no_known_kind_keeps_the_system_s_name() {
+            let mut devices = listing();
+            rename(&mut devices, &HashMap::new(), "Teléfono", "Altavoz");
+            assert_eq!(devices, listing());
+        }
+
+        #[test]
+        fn the_words_are_in_every_language_the_page_has_and_english_for_the_rest() {
+            let languages: Vec<&str> = WORDS.iter().map(|(name, ..)| *name).collect();
+            assert_eq!(languages, sidevoice_shared_tauri::messages::LANGUAGES);
+            for (language, earpiece, speaker) in WORDS {
+                assert!(
+                    !earpiece.is_empty() && !speaker.is_empty() && earpiece != speaker,
+                    "{language}"
+                );
+            }
+            assert_eq!(words("es"), ("Teléfono", "Altavoz"));
+            assert_eq!(words("pt"), ("Phone", "Speaker"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -524,10 +524,10 @@ interrupts anyway (the person left the app) goes on where it stopped. Native bac
 
 The voice lists the speakers by cpal's AAudio host, which names a built-in output by `AudioDeviceInfo.getProductName()`, the
 phone's model (`22101316G (Earpiece)`, `22101316G (Speaker)`, `22101316G`). The host takes the app's wording of its devices
-(`Hooks::devices`, `DeviceLabels`, applied to every listing, choice answer and `devices` event): `mobile/tauri/src/output_names.rs`
+(`Hooks::devices`, `DeviceLabels`, applied to every listing, choice answer and `devices` event): `call::outputs` (`mobile/tauri/src/call.rs`)
 asks the plugin (`MobilePlugin.audioOutputs`) once per output id for its kind (the number after `aaudio:` is
-`AudioDeviceInfo.getId()`), and words the earpiece and the loudspeaker in the page's language (`callCard.language`) from
-`devices.output.*` in `i18n/android/<language>.json` (the same words as the call card's). Left out of the list: the safe
+`AudioDeviceInfo.getId()`), and words the earpiece and the loudspeaker in the page's language (`callCard.language`) from a table of its own in the same
+module (the same words as the call card's; they are not web catalogue keys, which the page overlay is held to). Left out of the list: the safe
 loudspeaker path beside the plain one, the telephony path (it plays nothing) and the platform's bus output. A headset, USB or
 Bluetooth device keeps the name it gives itself. The choice stays by id. The own call's default route is
 `CallRoute.communicationDevice`: a Bluetooth headset or hearing aid, else wired or USB headphones, else the loudspeaker, never

@@ -1,5 +1,3 @@
 {
-  "devices.speakerFixed": "Sidevoice spielt über den aktuellen Ausgang des Telefons ab: Lautsprecher, Kopfhörer oder Bluetooth. Ändere ihn in den Schnelleinstellungen oder im Lautstärkemenü.",
-  "devices.output.earpiece": "Telefon",
-  "devices.output.speaker": "Lautsprecher"
+  "devices.speakerFixed": "Sidevoice spielt über den aktuellen Ausgang des Telefons ab: Lautsprecher, Kopfhörer oder Bluetooth. Ändere ihn in den Schnelleinstellungen oder im Lautstärkemenü."
 }
