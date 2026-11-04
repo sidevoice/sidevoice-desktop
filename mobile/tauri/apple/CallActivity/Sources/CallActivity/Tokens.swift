@@ -25,10 +25,11 @@ struct Tone {
     /// and offline grey.
     static func of(_ phase: CallState.Phase, dark: Bool) -> Tone {
         switch phase {
-        case .listening, .transcribing, .said, .speaking:
+        case .listening, .transcribing, .speaking:
             return dark ? Tone(ink: Color(hex: 0xcdbbf0), fill: Color(hex: 0xc9b6ec), soft: Color(hex: 0x2f2741))
                 : Tone(ink: Color(hex: 0x4a2f6b), fill: Color(hex: 0x4a2f6b), soft: Color(hex: 0xece4f7))
-        case .working:
+        case .working, .said:
+            // Your words are not a state of their own (D-LA-SAID-STATE): the call is working, and says so.
             return dark ? Tone(ink: Color(hex: 0x74d3a6), fill: Color(hex: 0x74d3a6), soft: Color(hex: 0x14271e))
                 : Tone(ink: Color(hex: 0x1d6b45), fill: Color(hex: 0x1d6b45), soft: Color(hex: 0xe2f3e9))
         case .holding:

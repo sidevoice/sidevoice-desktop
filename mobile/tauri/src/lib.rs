@@ -230,7 +230,14 @@ async fn call_still(
     px: u32,
 ) -> Result<(), String> {
     use base64::Engine as _;
-    the_page(&app, &webview)?;
+    if let Err(error) = the_page(&app, &webview) {
+        log::warn!("call_still: {id} from a webview that is not the page: {error}");
+        return Err(error);
+    }
+    log::info!(
+        "call_still: {id} ({} base64 bytes, {px} px) from page {page}",
+        png.len()
+    );
     if png.len() > sidevoice_mobile_plugin::STILL_LIMIT / 3 * 4 + 4 {
         return Err("call_still: larger than a still".into());
     }
@@ -289,6 +296,9 @@ fn run_app() {
         // both while the call runs), with the window's own crates at `warn`.
         .plugin(
             tauri_plugin_log::Builder::new()
+                // On iOS the plugin's targets (stdout, the log folder) are not the unified log, which `log show` and a
+                // sysdiagnose read: every line goes there too, subsystem `ai.sidevoice`.
+                .target(unified_log())
                 .level(log::LevelFilter::Info)
                 .level_for("tao", log::LevelFilter::Warn)
                 .level_for("wry", log::LevelFilter::Warn)
@@ -455,6 +465,23 @@ fn run_app() {
                 }
             }
         });
+}
+
+/// The unified log as one of the app's log targets (iOS: through the Swift side's `SidevoiceLog`; nothing elsewhere, whose
+/// log already is the system's). The category is `stills` for the call's stills, `app` for the rest.
+fn unified_log() -> tauri_plugin_log::Target {
+    use tauri_plugin_log::{fern, Target, TargetKind};
+    Target::new(TargetKind::Dispatch(fern::Dispatch::new().chain(
+        fern::Output::call(|record| {
+            let message = record.args().to_string();
+            let category = if message.contains("still") {
+                "stills"
+            } else {
+                "app"
+            };
+            sidevoice_mobile_plugin::os_log(category, &format!("[{}] {message}", record.level()));
+        }),
+    )))
 }
 
 #[cfg(test)]

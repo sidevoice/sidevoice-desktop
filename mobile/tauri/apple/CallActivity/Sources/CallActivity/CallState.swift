@@ -70,10 +70,9 @@ public struct CallState: Codable, Hashable {
     public var route: Route?
     /// The connected headphones' name, as the system gives it ("AirPods Pro").
     public var routeName = ""
-    /// Speaking: the page of the reply the voice is on; said: the person's words.
+    /// Speaking: the chunk of the reply the voice is in; said: a chunk of the person's words (`TextChunker`: built to fit,
+    /// one update per chunk). No karaoke: all of it is drawn at full strength.
     public var text: String?
-    /// Speaking: how much of `text` has been heard, in UTF-16 units (never ahead of the voice).
-    public var lit = 0
     public var words = Words()
     /// The page's language (BCP 47), for what the system words itself on the activity (the working timer on
     /// Always-On); empty: the device's.
@@ -103,17 +102,6 @@ public struct CallState: Codable, Hashable {
     public var routeLabel: String {
         let name = route == .speaker ? words.speaker : routeName
         return words.route.replacingOccurrences(of: "{route}", with: name)
-    }
-
-    /// The same, but for the captions: what may wait (iOS throttles local updates; one every ~2 s, HANDOVER §5).
-    public func sameButText(_ other: CallState) -> Bool {
-        var a = self
-        var b = other
-        a.text = nil
-        a.lit = 0
-        b.text = nil
-        b.lit = 0
-        return a == b
     }
 }
 

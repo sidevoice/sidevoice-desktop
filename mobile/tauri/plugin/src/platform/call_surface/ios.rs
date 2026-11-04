@@ -62,6 +62,18 @@ impl Os for Native {
         }
     }
 
+    fn os_log(category: &str, message: &str) {
+        // Not `bridge()`: a build without the Swift side has no log to write to, and says nothing.
+        let Some(log) = AnyClass::get(c"SidevoiceLog") else {
+            return;
+        };
+        let (category, message) = (NSString::from_str(category), NSString::from_str(message));
+        // SAFETY: `+[SidevoiceLog log:message:]` takes two strings and returns nothing (SidevoiceLog.swift), from any thread.
+        unsafe {
+            let _: () = msg_send![log, log: &*category, message: &*message];
+        }
+    }
+
     fn running() -> bool {
         // Not `bridge()`: this is asked on every report, and a build without the bridge has said so once.
         let Some(bridge) = AnyClass::get(c"SidevoiceCallActivity") else {

@@ -87,6 +87,11 @@ struct Report: Decodable {
         try? JSONDecoder().decode(Report.self, from: Data(json.utf8))
     }
 
+    /// How much of the spoken page the voice has said (UTF-16 units, at a word's start): where the chunker's pager is.
+    var heard: Int {
+        surface?.page?.lit ?? 0
+    }
+
     /// The activity's state: the page's, with the audio route the system has now.
     func state(route: (route: CallState.Route, name: String)?) -> CallState {
         var state = CallState()
@@ -108,7 +113,6 @@ struct Report: Decodable {
         switch state.phase {
         case .speaking:
             state.text = surface.page?.text
-            state.lit = surface.page?.lit ?? 0
         case .said:
             state.text = surface.said
         default:
@@ -136,9 +140,8 @@ struct Report: Decodable {
     }
 }
 
-/// Starts, updates and ends the activity (main queue). Every change goes out at once, except the captions: a change of
-/// the reply's page alone waits until ~2 s after the last update (iOS throttles local updates that come too often;
-/// HANDOVER §5). Each update moves `staleDate` three minutes ahead, and while the call lasts the activity is updated at
+/// Starts, updates and ends the activity (main queue). Every change goes out at once; the words change once per chunk,
+/// at least 2.5 s apart (`TextPager`), so they never come too often for iOS's throttle (HANDOVER §5). Each update moves `staleDate` three minutes ahead, and while the call lasts the activity is updated at
 /// least every minute even when nothing changed (the working timer is the system's), so a live call never reads stale.
 /// The updates and the end go to ActivityKit one after the other, in order.
 ///
@@ -154,7 +157,10 @@ final class Controller {
     private var report: Report?
     private var sent: CallState?
     private var sentAt = Date.distantPast
-    private var later: DispatchWorkItem?
+    /// The words in chunks (`TextPager`): one chunk per update, at least 2.5 s each, never ahead of the voice. The page's
+    /// text is chunked here, where the updates are made and DM Sans is at hand; `wake` is when the next chunk is due.
+    private var pager = TextPager(chunker: .dmSans())
+    private var wake: DispatchWorkItem?
     private var refresh: Timer?
     private var observers: [NSObjectProtocol] = []
     /// When a request last failed: publishing does not ask again for `retryAfter` (a persistent error would otherwise be
@@ -165,7 +171,6 @@ final class Controller {
     /// The last of ActivityKit's calls asked for: each waits for the one before.
     private var queue: Task<Void, Never>?
 
-    static let captionInterval: TimeInterval = 2
     static let staleAfter: TimeInterval = 180
     static let refreshInterval: TimeInterval = 60
     static let retryAfter: TimeInterval = 30
@@ -205,8 +210,9 @@ final class Controller {
     /// Ends the call's activity, and any other of the app's (one an earlier run left), at once.
     func end() {
         lifecycle.end()
-        later?.cancel()
-        later = nil
+        wake?.cancel()
+        wake = nil
+        pager = TextPager(chunker: .dmSans())
         refresh?.invalidate()
         refresh = nil
         watching?.cancel()
@@ -339,7 +345,30 @@ final class Controller {
     }
 
     private func current() -> CallState {
-        (report ?? Report()).state(route: AudioRoute.current())
+        let report = report ?? Report()
+        var state = report.state(route: AudioRoute.current())
+        let kind: TextPager.Kind? = state.phase == .speaking ? .reply : state.phase == .said ? .said : nil
+        let page = pager.page(kind: kind, text: state.text, heard: report.heard, now: Date())
+        state.text = page.text
+        due = page.wake
+        return state
+    }
+
+    /// When the next chunk is due, as the last `current()` found.
+    private var due: Date?
+
+    /// Looks again when the next chunk is due (its predecessor has been up 2.5 s): the voice may be past it, and no report
+    /// may come to say so.
+    private func scheduleWake() {
+        wake?.cancel()
+        wake = nil
+        guard let due else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.wake = nil
+            self?.publish()
+        }
+        wake = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due.timeIntervalSinceNow), execute: work)
     }
 
     /// Sends the state when it changed; `refresh`: even when it did not, to move its `staleDate`.
@@ -348,21 +377,8 @@ final class Controller {
         if activity == nil, Date().timeIntervalSince(failedAt) > Self.retryAfter { requestIfWanted() }
         guard let activity else { return }
         let state = current()
+        scheduleWake()
         if state == sent && !refresh { return }
-        let wait = Self.captionInterval - Date().timeIntervalSince(sentAt)
-        if !refresh, let sent, state.sameButText(sent), wait > 0 {
-            if later == nil {
-                let work = DispatchWorkItem { [weak self] in
-                    self?.later = nil
-                    self?.publish()
-                }
-                later = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
-            }
-            return
-        }
-        later?.cancel()
-        later = nil
         sent = state
         sentAt = Date()
         let stale = Date().addingTimeInterval(Self.staleAfter)

@@ -1,11 +1,11 @@
 import CoreText
 import SwiftUI
 
-/// Text on the gallery's own line height. SwiftUI's lines are the font's (DM Sans: 1.302 × its size), taller than the
-/// gallery's captions (15 on 18 and 15 on 19), and it has no line height below that, so the lines are broken here, as
-/// CoreText breaks them for the same font and width, and each is drawn in its own box. Where the text needs more than
-/// `lines`, the last one ends in an ellipsis after a whole word, never inside one. `lit` (UTF-16 units) is drawn in
-/// `ink`, the rest in `rest`.
+/// Text on the gallery's own line height, all of it at full strength (no karaoke, D-LA-CHUNKS). SwiftUI's lines are the
+/// font's (DM Sans: 1.302 × its size), taller than the gallery's (15 on 18), and it has no line height below that, so the
+/// lines are broken here, as CoreText breaks them for the same font and width, and each is drawn in its own box. A chunk
+/// (`TextChunker`) is built to fit, so the ellipsis, after a whole word, is only a safety net: when it shows, the
+/// measurement has drifted from the device's, and the chunk is logged (subsystem ai.sidevoice, category text).
 @available(iOS 16.1, *)
 struct Lines: View {
     var text: String
@@ -14,13 +14,12 @@ struct Lines: View {
     var tracking: CGFloat = 0
     var lineHeight: CGFloat
     var lines: Int
-    var lit: Int?
     var ink: Color
-    var rest: Color
 
     var body: some View {
         GeometryReader { box in
             let broken = Self.lines(text, width: box.size.width, font: DMSans.ctFont(size, weight), tracking: tracking, max: lines)
+            let _ = Self.report(broken, text, width: box.size.width)
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(broken.enumerated()), id: \.offset) { _, line in
                     draw(line)
@@ -35,15 +34,14 @@ struct Lines: View {
     }
 
     private func draw(_ line: Line) -> Text {
-        let whole = text as NSString
-        let heard = min(max(lit ?? whole.length, line.range.location), line.range.upperBound)
-        let piece = { (from: Int, to: Int) -> String in
-            whole.substring(with: NSRange(location: from, length: to - from)).replacingOccurrences(of: "\n", with: " ")
-        }
-        let heardText = Text(piece(line.range.location, heard)).foregroundColor(ink)
-        let restText = Text(piece(heard, line.range.upperBound)).foregroundColor(rest)
-        guard line.ellipsis else { return heardText + restText }
-        return heardText + restText + Text("…").foregroundColor((self.lit ?? whole.length) > line.range.upperBound ? ink : rest)
+        let piece = (text as NSString).substring(with: line.range).replacingOccurrences(of: "\n", with: " ")
+        return Text(line.ellipsis ? piece + "…" : piece).foregroundColor(ink)
+    }
+
+    /// Logs a chunk the view had to cut: the chunker's measurement drifted from the device's.
+    private static func report(_ lines: [Line], _ text: String, width: CGFloat) {
+        guard lines.last?.ellipsis == true else { return }
+        CallLog.text.error("chunk cut by the view at \(Int(width)) pt: \(text, privacy: .public)")
     }
 
     struct Line {

@@ -125,8 +125,26 @@ public struct ExpandedBody: View {
         self.state = state
     }
 
+    /// The island's own paddings (D-LA-PADDINGS, B2; the corners' curve clipped letters and the hang-up button): top 40
+    /// (speaking 42), 18 at the sides, 18 below the voice views and 14 below speaking; the closed states keep their row
+    /// 10 pt from the bottom. Everything is inside them, so a button sits wholly inside the curve.
     public var body: some View {
-        Group { content }.environment(\.locale, state.locale)
+        Group { content }
+            .environment(\.locale, state.locale)
+            .padding(.horizontal, Self.side)
+            .padding(.top, state.phase == .speaking ? 42 : Self.top)
+            .padding(.bottom, Self.bottom(state.phase))
+    }
+
+    public static let side: CGFloat = 18
+    public static let top: CGFloat = 40
+
+    public static func bottom(_ phase: CallState.Phase) -> CGFloat {
+        switch phase {
+        case .speaking: 14
+        case .listening, .transcribing, .said: 18
+        default: 10
+        }
     }
 
     @ViewBuilder
@@ -147,7 +165,7 @@ public struct ExpandedBody: View {
                 VoiceHeader(state: state)
                 Lines(
                     text: state.text ?? "", size: 15, weight: 550, lineHeight: 19, lines: 2,
-                    ink: Palette.island.text, rest: Palette.island.text)
+                    ink: Palette.island.text)
             }
         case .idle, .working, .holding, .offline:
             VStack(spacing: 8) {
@@ -235,47 +253,35 @@ struct VoiceHeader: View {
     }
 }
 
-/// Your bars in a lila capsule, 36 tall, with Cancelar envío as an × at its right end.
+/// Your bars in the person's balloon, 36 tall, with Cancelar envío as an × at its right end.
 @available(iOS 16.1, *)
 struct VoiceCapsule: View {
     var state: CallState
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             VoiceBars(dim: state.phase == .transcribing)
                 .frame(maxWidth: .infinity)
             ActionButton(action: .cancelSend, enabled: state.canCancelSend) {
-                // The design's drawn ×: a 13-pt box, about 8 across, a 1.1-pt stroke.
-                CrossMark()
-                    .stroke(Palette.island.text, style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
-                    .frame(width: 13, height: 13)
+                // The × of the app's balloon: 28 pt on the person's wash, a white 12-pt xmark in the regular weight.
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color.white)
                     .frame(width: 28, height: 28)
                     .background(Circle().fill(Color.white.opacity(0.14)))
             }
             .accessibilityLabel(state.words.cancelSend)
         }
-        .padding(.leading, 14)
+        .padding(.leading, 12)
         .padding(.trailing, 4)
         .frame(height: 36)
-        .background(Capsule().fill(Color(hex: 0xc9b6ec, alpha: 0.14)))
+        // The person's balloon (`--sv-chat-person-bg`, dark).
+        .background(Capsule().fill(Color(hex: 0x46366a)))
     }
 }
 
-/// The capsule's ×: two strokes inset 2.5 pt in their box.
-struct CrossMark: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let inset: CGFloat = 2.5
-        path.move(to: CGPoint(x: rect.minX + inset, y: rect.minY + inset))
-        path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY - inset))
-        path.move(to: CGPoint(x: rect.maxX - inset, y: rect.minY + inset))
-        path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.maxY - inset))
-        return path
-    }
-}
-
-/// Speaking: the creature (30 pt, beside the camera, 10 pt in from B's edge), the reply's page, 15 on 18, four lines, the
-/// heard words lit and the rest at 38 %; Saltar 4 pt below it, right. All of it in `.bottom` (variant B): the creature is
+/// Speaking: the creature (30 pt, beside the camera, 10 pt in from B's edge), the reply's chunk, 15 on 18, four lines, all
+/// at full strength (no karaoke); Saltar 4 pt below it, right. All of it in `.bottom` (variant B): the creature is
 /// drawn 32 pt above the region's top, where the camera row is.
 @available(iOS 16.1, *)
 struct Reply: View {
@@ -285,7 +291,7 @@ struct Reply: View {
         VStack(alignment: .trailing, spacing: 4) {
             Lines(
                 text: state.text ?? "", size: 15, weight: 550, tracking: -0.075, lineHeight: 18, lines: 4,
-                lit: state.lit, ink: Palette.island.text, rest: Palette.island.text.opacity(0.38))
+                ink: Palette.island.text)
             if state.canSkip {
                 // Never an ellipsis on a button: the label whole, or the glyph alone.
                 ViewThatFits(in: .horizontal) {

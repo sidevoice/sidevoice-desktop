@@ -311,7 +311,7 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   `workingSince` (ms since the epoch, the room's busy clock, which may start a few seconds before the stage shows
   working; absent when the page does not know it: no time is made up), `still`, up to three `others` (`{title, still}`),
   `conversationCount` (every conversation, the current one included), `page` (`{text, lit}`, the spoken page while
-  speaking, `lit` in UTF-16 code units of `text`), `said`, and `words` (`state`, `offline`, `mute`, `unmute`, `skip`,
+  speaking, `lit` in UTF-16 code units of `text`: the voice's position, which only paces the chunks), `said`, and `words` (`state`, `offline`, `mute`, `unmute`, `skip`,
   `skipName`, `cancelSend`, `hangUp`, `route` with `{route}` to fill, `speaker`, `conversations`), all in the page's
   language. `language` is the page's (`callCard.language`; empty: the device's), for what the system words itself
   on a surface (iOS: the working timer on Always-On). `offline` is always there: a surface the app stopped updating draws the offline state with it. While the call
@@ -387,8 +387,14 @@ its buttons need iOS 17 (before that it only shows the call).
   follows its state (`ActivityLifecycle`, `activityStateUpdates`), drops it when it is over and requests a new one with the
   next state (at once if the app is in front, else when it next is); at launch and whenever it comes to the front it ends
   the app's activities that are not the call's (what a crash left). The buttons log `Sidevoice: intent …` when they run.
-- **Updates.** Every change goes out at once, except the reply's captions: a change of the spoken page alone waits until
-  about 2 s after the last update (iOS throttles local updates that come too often). Each update moves the activity's
+- **Updates.** Every change goes out at once. **The words** (the expanded island only: never on the Lock Screen, in the
+  compact or minimal) are chunked by the app, where the updates are made (`TextChunker`, `TextPager` in the package; the
+  port of research/live-activity-design-2026-11-02/src/text-chunks.js): the page's `page.text` is cut into chunks that fit
+  four lines (your words: two lines, 2.5 s each, at most three, the last ending in "…"), measured with DM Sans 550 at 15 pt
+  at 330 pt, whole sentences first, then a clause break, then a word; no karaoke. One update per chunk: a chunk stays at
+  least 2.5 s and the next shows only once the voice (`page.lit`) has reached its first word, jumping to the chunk the voice
+  is in, never ahead of it; the controller wakes itself when the next is due. If a device ever has to cut a chunk it logs
+  it (category `text`). During your words the header shows the call's real state (working, with its timer). Each update moves the activity's
   `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing
   changed, so only an activity the app stopped updating goes stale; a stale one draws the offline state with the page's
   offline word (D-LA-OFFLINE). The updates and the end reach ActivityKit one after the other, in order. A call that
@@ -403,9 +409,13 @@ its buttons need iOS 17 (before that it only shows the call).
   while the call is on the speaker, until they go.
 - **The words** are the page's (`words` in the call surface), so the activity has no catalogue of its own; the output's
   name in the audio switch's accessible name is the system's.
+- **Diagnostics.** The app's log (the Rust side's `log::`) is a file, which `log show` does not read; on iOS every line also goes
+  to the unified log (`SidevoiceLog`, subsystem `ai.sidevoice`, public strings, category `stills` for the creatures' stills,
+  `intent`, `text`, `app`). A still the activity cannot draw is a placeholder, the Sidevoice mark (white, 56 % of its slot, on
+  the slot's ground), never an empty slot, and the cause is logged once.
 - **Evidence.** `cargo xtask mobile renders ios` runs the package's tests on an iPhone Pro Max simulator: every state's
   views drawn to PNG at 3× (`ImageRenderer`) into dist/live-activity/, one sheet per state laid out as the gallery's
-  `pieces-<state>.png`, plus the mic off, Always-On, stale, half-heard captions, the audio on the speaker, no headphones,
+  `pieces-<state>.png`, plus the mic off, Always-On, stale, the reply's and your words' chunks, missing stills, the audio on the speaker, no headphones,
   long texts and a Pro Max; it also fails a card or an expanded island taller than 160 pt. CI uploads them as
   `Sidevoice-ios-live-activity-renders`.
 

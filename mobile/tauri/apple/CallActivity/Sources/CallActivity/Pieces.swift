@@ -4,22 +4,69 @@ import os
 
 // The pieces the presentations share: the creature in its slots, the state's glyphs, your voice's bars, the stack.
 
-/// A creature's still from the stills folder; none (not kept, or no App Group) draws nothing.
+/// A creature's still from the stills folder. One that has not arrived (not named, not kept, no App Group, does not decode)
+/// is never an empty slot (D-LA-STILL-FALLBACK): the Sidevoice mark, white, on the slot's own ground. `overflow` lets a
+/// big accessory stand out of the slot, by the still's `k`; the mark never does.
 @available(iOS 16.1, *)
 struct Still: View {
+    /// The ground a missing still's mark sits on: the tile's own (the tile draws it, the mark is 56 % of the slot), or a
+    /// `#2f2741` disc (the compact, the minimal and the stack's faces, the mark at 60 %).
+    enum Ground { case tile, disc }
+
     var creature: CallState.Creature?
     var grey = false
+    var ground = Ground.tile
+    var overflow = false
 
-    var body: some View {
+    @ViewBuilder var body: some View {
         if let file = creature?.file, let image = CallStills.image(file) {
             let still = Image(uiImage: image).resizable().interpolation(.high).scaledToFit()
-            if grey {
+            let drawn = grey
                 // Offline: the gallery's `grayscale(1) brightness(.85)` at 70 %.
-                still.grayscale(1).colorMultiply(Color(white: 0.85)).opacity(0.7)
+                ? AnyView(still.grayscale(1).colorMultiply(Color(white: 0.85)).opacity(0.7))
+                : AnyView(still)
+            if overflow {
+                drawn.scaleEffect(creature?.k ?? 1, anchor: UnitPoint(x: 0.5, y: 0.96))
             } else {
-                still
+                drawn
+            }
+        } else {
+            let _ = CallStills.missing(creature)
+            GeometryReader { box in
+                ZStack {
+                    if ground == .disc {
+                        Circle().fill(Color(hex: 0x2f2741))
+                    }
+                    SidevoiceMark()
+                        .frame(width: box.size.width * (ground == .disc ? 0.6 : 0.56))
+                        .opacity(grey ? 0.7 : 1)
+                }
+                .frame(width: box.size.width, height: box.size.height)
             }
         }
+    }
+}
+
+/// The Sidevoice mark (assets/brand/sidevoice-mark-white.svg): five rounded bars on a 24 grid, white, the fourth at 45 %.
+struct SidevoiceMark: View {
+    private static let bars: [(x: CGFloat, y: CGFloat, height: CGFloat, opacity: Double)] = [
+        (1.5, 9, 6, 1), (6, 6, 12, 1), (10.5, 1.5, 21, 1), (15, 6, 12, 0.45), (19.5, 9, 6, 1),
+    ]
+
+    var body: some View {
+        GeometryReader { box in
+            let unit = box.size.width / 24
+            ZStack(alignment: .topLeading) {
+                ForEach(0..<Self.bars.count, id: \.self) { index in
+                    let bar = Self.bars[index]
+                    Capsule()
+                        .fill(Color.white.opacity(bar.opacity))
+                        .frame(width: 3 * unit, height: bar.height * unit)
+                        .offset(x: bar.x * unit, y: bar.y * unit)
+                }
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
     }
 }
 
@@ -50,9 +97,8 @@ struct CreatureTile: View {
                             // CSS `circle` to the farthest corner from (50 %, 70 %).
                             endRadius: size * 0.8602))
             }
-            Still(creature: state.creature, grey: state.phase == .offline)
+            Still(creature: state.creature, grey: state.phase == .offline, overflow: true)
                 .frame(width: inner, height: inner)
-                .scaleEffect(state.creature?.k ?? 1, anchor: UnitPoint(x: 0.5, y: 0.96))
         }
         .frame(width: size, height: size)
         // The badge's 2-pt ring is a gap cut out of the tile, so whatever is behind the card shows through it (the Lock
@@ -100,7 +146,7 @@ struct RoundFace: View {
     var size: CGFloat
 
     var body: some View {
-        Still(creature: state.creature, grey: state.phase == .offline)
+        Still(creature: state.creature, grey: state.phase == .offline, ground: .disc)
             .frame(width: size, height: size)
             .clipShape(Circle())
     }
@@ -118,9 +164,8 @@ struct OthersStack: View {
             HStack(spacing: 0) {
                 HStack(spacing: -8) {
                     ForEach(Array(state.others.prefix(3).enumerated()), id: \.offset) { _, other in
-                        Still(creature: other)
+                        Still(creature: other, ground: .disc, overflow: true)
                             .frame(width: 26, height: 26)
-                            .scaleEffect(other?.k ?? 1, anchor: UnitPoint(x: 0.5, y: 0.96))
                     }
                 }
                 if state.conversationCount > 0 {
@@ -165,7 +210,7 @@ struct StateLine: View {
 
     private func label(_ tone: Tone) -> Text {
         let words = Text(state.words.state)
-        guard state.phase == .working, let since = state.workingSince else { return words }
+        guard state.phase == .working || state.phase == .said, let since = state.workingSince else { return words }
         // Tabular digits, so "0:42" keeps its width as it counts.
         let time = (Text("· ") + Text(since, style: .timer)).monospacedDigit()
         // The gallery's 6-pt gap: an en space (7.5 pt at 15, 7 at 14), the closest a run of text has.
@@ -186,9 +231,9 @@ struct StateGlyph: View {
             switch phase {
             case .idle:
                 EmptyView()
-            case .listening, .transcribing, .said:
+            case .listening, .transcribing:
                 GlyphBars(phase: phase).frame(width: size, height: size)
-            case .working:
+            case .working, .said:
                 symbol("ellipsis", effect: .bounce)
             case .speaking:
                 symbol("speaker.wave.2.fill", effect: .pulse)
@@ -285,31 +330,45 @@ struct Stretch: ViewModifier {
     }
 }
 
-/// Your voice's bars in the expanded island's capsule: 28 bars, 3 wide every 6, centred (the gallery's `BAR_HEIGHTS`, a
-/// smooth waveform with no bar under 8), lila; 40 % and greyed while transcribing. Listening: they rise (vertical only),
-/// left to right, 0.035 s apart. Transcribing: they settle to 40 % in the same order.
+/// Your voice's bars in the expanded island's capsule, as the app draws a voice note (its `VoiceWaveform`, the person's
+/// balloon): white, 3 wide every 6, fully rounded, in a 24-pt box, right-anchored (the newest next to the ×, as the app's
+/// waveform scrolls in from the right), 6 pt at least (never a dot). A capsule narrower than the 44 columns drops them
+/// from the left; nothing is squeezed. Transcribing: the same frame at 80 %, as the app's still fallback. Listening: they
+/// rise in place (vertical scale 0.15 -> 1.12 -> 1, about 0.7 s, once; no horizontal scale).
 @available(iOS 16.1, *)
 struct VoiceBars: View {
     var dim: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isLuminanceReduced) private var reduced
-    static let heights: [CGFloat] = [8, 10, 12, 11, 14, 17, 15, 12, 16, 20, 22, 18, 15, 17, 21, 19, 14, 12, 15, 18, 16, 13, 11, 13, 12, 10, 9, 8]
+    static let heights: [CGFloat] = [
+        6, 7, 9, 12, 10, 8, 6, 6, 9, 14, 18, 15, 11, 13, 17, 20, 16, 12, 9, 7, 6, 6, 8, 11, 15, 19, 22, 18, 14, 16, 19, 15, 11,
+        8, 7, 10, 13, 17, 14, 10, 8, 6, 7, 6,
+    ]
+    static let width: CGFloat = 3
+    static let gap: CGFloat = 3
+
+    /// How many of the columns a capsule `width` wide holds (the newest ones).
+    static func columns(in width: CGFloat) -> Int {
+        min(heights.count, max(0, Int(((width + gap) / (Self.width + gap)).rounded(.down))))
+    }
 
     var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<Self.heights.count, id: \.self) { index in
-                Capsule()
-                    .fill(Color(hex: 0xc9b6ec))
-                    .frame(width: 3, height: Self.heights[index])
-                    // The gallery's `opacity .4` and `grayscale(.5)`.
-                    .saturation(dim ? 0.5 : 1)
-                    .opacity(dim ? 0.4 : 1)
-                    .animation(.easeInOut(duration: 0.6).delay(0.035 * Double(index)), value: dim)
-                    .transition(reduceMotion || reduced ? .identity : .modifier(active: Stretch(y: 0.15, anchor: .center), identity: Stretch(y: 1, anchor: .center))
-                        .animation(.spring(response: 0.5, dampingFraction: 0.55).delay(0.035 * Double(index))))
+        GeometryReader { box in
+            HStack(spacing: Self.gap) {
+                ForEach(Array(Self.heights.suffix(Self.columns(in: box.size.width)).enumerated()), id: \.offset) { _, height in
+                    Capsule()
+                        .fill(Color.white)
+                        .frame(width: Self.width, height: height)
+                        // A spring that overshoots to about 1.12 and settles, in the bar's own centre.
+                        .transition(reduceMotion || reduced ? .identity : .modifier(active: Stretch(y: 0.15, anchor: .center), identity: Stretch(y: 1, anchor: .center))
+                            .animation(.spring(response: 0.45, dampingFraction: 0.55)))
+                }
             }
+            .frame(width: box.size.width, height: box.size.height, alignment: .trailing)
         }
         .frame(height: 24)
+        .opacity(dim ? 0.8 : 1)
+        .animation(.easeInOut(duration: 0.6), value: dim)
     }
 }
 
@@ -356,7 +415,7 @@ extension CallStills {
     }
 
     private static let once = Once()
-    private static let log = Logger(subsystem: "ai.sidevoice.mobile.activity", category: "stills")
+    private static let log = CallLog.stills
 
     /// Why the still `file` cannot be drawn, or nil when it can: no App Group container (the widget extension is signed
     /// without the group), no such file (the app wrote it elsewhere, or not at all), or a file that does not decode.
@@ -367,10 +426,21 @@ extension CallStills {
         return UIImage(contentsOfFile: url.path) == nil ? "\(file) does not decode as an image" : nil
     }
 
-    /// The still `file` as an image; nil draws nothing. What stops it is logged once for each cause, so that a card with no
+    /// A slot that has no still to draw (the placeholder is drawn instead): said once, by cause, in the unified log, so that a
+    /// call whose creature never shows says whether the app named none (nothing kept, nothing in the report) or could not read
+    /// the one it named (`image` says why).
+    static func missing(_ creature: CallState.Creature?) {
+        guard creature?.file.isEmpty != false else { return }
+        if once.first("not named") { log.error("no still named in the call's state: the app has not kept one for it") }
+    }
+
+    /// The still `file` as an image; nil draws the placeholder. What stops it is logged once for each cause, so that a card with no
     /// creature says why in the device's log (the widget extension has no other voice).
     static func image(_ file: String) -> UIImage? {
-        if let url = url(file), let image = UIImage(contentsOfFile: url.path) { return image }
+        if let url = url(file), let image = UIImage(contentsOfFile: url.path) {
+            if once.first("drawn \(file)") { log.notice("still drawn: \(file, privacy: .public)") }
+            return image
+        }
         if let reason = problem(file) {
             if once.first(reason) { log.error("still not drawn: \(reason, privacy: .public)") }
         }

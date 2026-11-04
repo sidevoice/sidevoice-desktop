@@ -30,7 +30,8 @@ final class RenderTests: XCTestCase {
         state.micOff = micOff
         state.canSkip = phase == .speaking
         state.canCancelSend = phase == .listening || phase == .transcribing
-        state.workingSince = phase == .working ? Date().addingTimeInterval(-102) : nil
+        // Your words are not a state (D-LA-SAID-STATE): the header says the call is working, with its timer.
+        state.workingSince = phase == .working ? Date().addingTimeInterval(-102) : phase == .said ? Date().addingTimeInterval(-2) : nil
         state.creature = .init(file: "straw-hat.png", k: 1.3)
         state.others = [.init(file: "bunny-headphones.png", k: 1.35), .init(file: "wizard-hat.png", k: 1.4)]
         state.conversationCount = 3
@@ -39,19 +40,18 @@ final class RenderTests: XCTestCase {
         state.routeName = "AirPods Pro"
         switch phase {
         case .speaking:
-            state.text = "He movido el globo encima del bicho: ya no le tapa la cara. También he ajustado la cola para que "
-                + "apunte a quien habla, y en el móvil el globo baja un poco para no pisar la cabecera. He revisado el iPad "
-                + "en horizontal y ahí también encaja."
-            state.lit = (state.text! as NSString).length
+            // The first chunk of the reply (four measured lines), as the chunker cuts it.
+            state.text = Self.reply[0]
         case .said:
             state.text = "Sí, súbelo a TestFlight, y de paso mira si el globo sigue tapando la cabecera en el iPad en "
                 + "horizontal, que ayer me pareció que se montaba un poco encima."
         default:
             break
         }
+        if phase == .said { state.text = Self.said[0] }
         var words = CallState.Words()
         words.state = [
-            .idle: "En reposo", .listening: "Escuchándote", .transcribing: "Transcribiendo…", .said: "Transcribiendo…",
+            .idle: "En reposo", .listening: "Escuchándote", .transcribing: "Transcribiendo…", .said: "Trabajando",
             .working: "Trabajando", .speaking: "Hablando", .holding: "No puede recibir", .offline: "Desconectada",
         ][phase]!
         words.offline = "Desconectada"
@@ -67,6 +67,16 @@ final class RenderTests: XCTestCase {
         state.words = words
         return state
     }
+
+    static let replyText = "He movido el globo encima del bicho: ya no le tapa la cara. También he ajustado la cola para que "
+        + "apunte a quien habla, y en el móvil el globo baja un poco para no pisar la cabecera. He revisado el iPad "
+        + "en horizontal y ahí también encaja. ¿Lo subo a TestFlight y lo pruebas en el iPhone, o prefieres que antes "
+        + "repase el modo oscuro?"
+    static let saidText = "Sí, súbelo a TestFlight, y de paso mira si el globo sigue tapando la cabecera en el iPad en "
+        + "horizontal, que ayer me pareció que se montaba un poco encima."
+    /// The chunks the app would send for them, measured with DM Sans as on the device.
+    static let reply = TextChunker.dmSans().chunks(replyText).map(\.text)
+    static let said = TextChunker.dmSans().saidChunks(saidText).map(\.text)
 
     static let phases: [CallState.Phase] = [.idle, .listening, .transcribing, .said, .working, .speaking, .holding, .offline]
 
@@ -89,9 +99,24 @@ final class RenderTests: XCTestCase {
                 "always-on-lock-dark-\(phase.rawValue)")
         }
         try sheet(Self.sample(.working).stale, name: "stale")
-        var captions = Self.sample(.speaking)
-        captions.lit = (captions.text! as NSString).range(of: "ajustado").location
-        try sheet(captions, name: "speaking-captions-half-heard")
+        // The reply's other chunks, and your words' (D-LA-CHUNKS).
+        for (index, chunk) in Self.reply.enumerated().dropFirst() {
+            var next = Self.sample(.speaking)
+            next.text = chunk
+            try save(expanded(next), "expanded-speaking-chunk-\(index + 1)")
+        }
+        for (index, chunk) in Self.said.enumerated().dropFirst() {
+            var next = Self.sample(.said)
+            next.text = chunk
+            try save(expanded(next), "expanded-said-chunk-\(index + 1)")
+        }
+        // A still that has not arrived draws the Sidevoice mark, never an empty slot (D-LA-STILL-FALLBACK).
+        for phase in [CallState.Phase.working, .listening] {
+            var missing = Self.sample(phase)
+            missing.creature = nil
+            missing.others = [nil, nil]
+            try sheet(missing, name: "\(phase.rawValue)-no-still")
+        }
         var speaker = Self.sample(.idle)
         speaker.route = .speaker
         try sheet(speaker, name: "idle-on-speaker")
@@ -129,30 +154,17 @@ final class RenderTests: XCTestCase {
             .environment(\.colorScheme, dark ? .dark : .light)
     }
 
-    /// The expanded island: black, radius 44, the camera at the top; B's content from 40 pt down (42 while speaking, whose
-    /// creature sits beside the camera at x 28, y 10), 18 pt from the sides.
+    /// The expanded island: black, radius 44, the camera at the top; B's content is `ExpandedBody`, which carries its own
+    /// paddings (top 40, 42 while speaking, 18 at the sides, 18 or 14 below), as on the device.
     func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
-        let speaking = state.phase == .speaking
-        return ZStack(alignment: .topLeading) {
+        ZStack(alignment: .topLeading) {
             camera(x: (width - 125) / 2)
             ExpandedBody(state: state)
-                .frame(width: width - 36)
-                .padding(.leading, 18)
-                .padding(.top, speaking ? 42 : 40)
-                .padding(.bottom, Self.bottom(state.phase))
         }
         .frame(width: width, alignment: .topLeading)
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: 44, style: .continuous))
         .environment(\.colorScheme, .dark)
-    }
-
-    static func bottom(_ phase: CallState.Phase) -> CGFloat {
-        switch phase {
-        case .speaking: 14
-        case .listening, .transcribing, .said: 18
-        default: 10
-        }
     }
 
     /// The compact island: the face 6 pt from the pill's edge, the camera (125 pt), the trailing glyph 4 pt after it.
