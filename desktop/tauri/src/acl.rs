@@ -101,6 +101,7 @@ fn the_bridge_script_receives_the_hosts_media_support() {
         available,
         false,
         "Ctrl",
+        false,
         &Default::default(),
         &sidevoice_shared_tauri::messages::tables(&[]),
         &sidevoice_desktop_core::bridge::Parts {
@@ -133,6 +134,7 @@ fn the_rooms_script_is_made_of_the_real_parts_with_no_placeholder_left() {
         true,
         true,
         "⌘",
+        true,
         &crate::platform::host::microphone_help(),
         &sidevoice_shared_tauri::messages::tables(&[]),
         &parts,

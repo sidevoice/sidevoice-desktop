@@ -27,6 +27,7 @@ mod platform;
 #[cfg(feature = "probe")]
 mod probe;
 mod scripts;
+mod shortcuts;
 mod tray;
 mod updater;
 mod voice;
@@ -38,7 +39,8 @@ use crate::platform::shortcut_access;
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, AgentState, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
-use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings};
+use sidevoice_desktop_core::settings::Settings;
+use sidevoice_desktop_core::shortcuts::Action;
 use sidevoice_desktop_core::{media, settings};
 use sidevoice_shared::app::{AppHost, Hooks, HostConfig, NoCallActivity, NoDownloadActivity};
 use sidevoice_shared_tauri::platform::media_controls::{self, CallState, MediaCommand};
@@ -61,11 +63,6 @@ pub(crate) struct AppState {
     room_counter: AtomicU32,
     /// The language of the app's native texts (tray, …), the system's when there is a bundle for it (core `i18n`).
     pub(crate) language: &'static str,
-    /// The mute shortcut as the system took it, from startup and from every change.
-    shortcut: Mutex<MuteShortcut>,
-    /// Held across a change of the mute shortcut, from keeping it to registering it, so what is kept and what is
-    /// registered never differ. Only off the main thread: registering waits for it.
-    shortcut_change: Mutex<()>,
     resetting: std::sync::atomic::AtomicBool,
     reset_admission: Mutex<data::Admission>,
     reset_helper: Mutex<Option<platform::reset_handoff::Pending>>,
@@ -80,21 +77,11 @@ impl Default for AppState {
             room_label: Mutex::default(),
             room_counter: AtomicU32::default(),
             language: sidevoice_desktop_core::i18n::language(&preferred),
-            shortcut: Mutex::default(),
-            shortcut_change: Mutex::default(),
             resetting: std::sync::atomic::AtomicBool::new(false),
             reset_admission: Mutex::default(),
             reset_helper: Mutex::default(),
         }
     }
-}
-
-/// The shortcut's status now: VoiceOver can be turned on or off at any time.
-fn shortcut_status(state: &AppState) -> MuteShortcut {
-    let mut status = state.shortcut.lock().unwrap().clone();
-    let accelerator = status.accelerator.as_deref().unwrap_or_default();
-    status.voice_over = status.state == Registration::On && shortcut_access::reserved_chord_active(accelerator);
-    status
 }
 
 /// The one writer of settings.json: `change` applied to the stored settings, saved and kept under one lock, so the
@@ -103,7 +90,7 @@ pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings
     let dir = data::desktop_dir(app).map_err(|e| e.to_string())?;
     let state = app.state::<AppState>();
     let mut stored = state.settings.lock().unwrap();
-    let mut changed = stored.clone().unwrap_or_else(Settings::first_run);
+    let mut changed = stored.clone().unwrap_or_else(|| Settings::first_run(shortcut_access::default_mute()));
     change(&mut changed);
     settings::save(&dir, &changed).map_err(|e| e.to_string())?;
     *stored = Some(changed.clone());
@@ -123,41 +110,48 @@ pub(crate) fn stored_media_duck(
         .unwrap_or_default()
 }
 
-/// Changes the settings with `change`, registers the mute shortcut they then hold and tells the card: how the system
-/// took it.
-fn change_shortcut(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<MuteShortcut, String> {
-    let state = app.state::<AppState>();
-    let _one_at_a_time = state.shortcut_change.lock().unwrap();
-    let changed = change_settings(app, change)?;
-    apply_shortcut(app, &changed.mute_shortcut);
-    call_controls::update(app);
-    Ok(shortcut_status(&state))
-}
-
 /// A refusal as the room page reads it (docs/BRIDGE.md → "Refusals").
 pub(crate) fn refusal(key: &str, message: impl std::fmt::Display) -> Value {
     json!({ "key": key, "message": message.to_string() })
 }
 
-/// `host.muteShortcut`'s one command: `action` `get`, or `set` with `accelerator` (`null`: none). Refuses
-/// `shortcut_invalid` for an accelerator that is not a shortcut the system can read.
+/// `host.shortcuts`' one command (and `host.muteShortcut`'s, which is its mute shortcut): `action` `get`; `set` the
+/// shortcut named by `target` to `accelerator` (`null`: none); `request` the `permission` a single key needs; `headset`
+/// with what to change; or `record` the next key for `target`. Refuses `shortcut_invalid` for an accelerator that is not a
+/// shortcut the system can read, or that its action cannot be done with.
 #[tauri::command]
-async fn mute_shortcut(
+async fn global_shortcuts(
     app: AppHandle,
     webview: Webview,
     action: String,
+    target: Option<String>,
     accelerator: Option<String>,
-) -> Result<MuteShortcut, Value> {
+    permission: Option<String>,
+    headset: Option<Value>,
+) -> Result<Value, Value> {
     room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
+    let named = || {
+        target
+            .as_deref()
+            .and_then(Action::parse)
+            .ok_or_else(|| refusal("bad_request", format!("not a shortcut action: {target:?}")))
+    };
     match action.as_str() {
-        "get" => Ok(shortcut_status(&app.state::<AppState>())),
-        "set" => {
-            let text = accelerator.unwrap_or_default();
-            let accelerator = shortcut_access::checked(&text)
-                .ok_or_else(|| refusal("shortcut_invalid", format!("Not a shortcut: {text}")))?;
-            change_shortcut(&app, |s| s.mute_shortcut = accelerator).map_err(|e| refusal("internal", e))
+        "get" => Ok(json!(shortcuts::status(&app))),
+        "set" => shortcuts::set(&app, named()?, &accelerator.unwrap_or_default()).map(|shortcut| json!(shortcut)),
+        "request" => shortcuts::request(&app, permission.as_deref()).map(|status| json!(status)),
+        "headset" => {
+            let change = headset.unwrap_or(Value::Null);
+            shortcuts::set_headset(
+                &app,
+                change.get("press").and_then(Value::as_str),
+                change.get("doublePress"),
+                change.get("outsideCall").and_then(Value::as_str),
+            )
+            .map(|status| json!(status))
         }
-        _ => Err(refusal("bad_request", format!("not a mute shortcut action: {action}"))),
+        "record" => shortcuts::record(app.clone(), named()?).await.map(|accelerator| json!(accelerator)),
+        _ => Err(refusal("bad_request", format!("not a shortcuts action: {action}"))),
     }
 }
 
@@ -190,6 +184,7 @@ fn bridge_state(
     tray::update(&app, &snapshot);
     media_controls::update(&app, &media_state(&snapshot));
     media_duck::call(&app, snapshot.joined, snapshot.mic_enabled, snapshot.agent == AgentState::Speaking);
+    shortcuts::call_changed(&app, snapshot.joined);
     call_controls::update(&app);
     Ok(())
 }
@@ -297,6 +292,7 @@ fn reset_call_state(app: &AppHandle) {
     tray::update(app, &snapshot);
     media_controls::update(app, &media_state(&snapshot));
     media_duck::call(app, false, false, false);
+    shortcuts::call_changed(app, false);
     call_controls::update(app);
     voice::page_changed(app);
 }
@@ -344,6 +340,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             media_controls::available(),
             platform::uninstall::available(),
             host::shortcut_modifier(),
+            platform::key_capture::captures(),
             &host::microphone_help(),
             &sidevoice_shared_tauri::messages::tables(&[]),
             &bridge::Parts {
@@ -410,17 +407,6 @@ fn app_report(app: &AppHandle) -> String {
     format!("{} call_card={}", application::report(app), if call_card_disabled() { "off" } else { "on" })
 }
 
-/// Replace the shortcut, keep the actual outcome, and notify the room page.
-fn apply_shortcut(app: &AppHandle, accelerator: &str) {
-    let status = shortcut_access::replace(app, accelerator);
-    let app_state = app.state::<AppState>();
-    *app_state.shortcut.lock().unwrap() = status;
-    if let Some(window) = room_window(app) {
-        let status = json!(shortcut_status(&app_state));
-        let _ = window.eval(format!("window.__sidevoiceHost && window.__sidevoiceHost.muteShortcutEvent({status})"));
-    }
-}
-
 /// Every command, the voice call's included (`host.voice`, src/voice.rs).
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -442,7 +428,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         data::data_delete_all,
         data::data_uninstall,
         data::data_reset_report,
-        mute_shortcut,
+        global_shortcuts,
         media_duck::media_duck,
         call_controls::call_controls_settings,
         updater::updater,
@@ -490,14 +476,15 @@ pub fn run() {
             let handle = app.handle().clone();
             carried.log();
             application::prepare(&handle)?;
-            shortcut_access::configure(&handle);
+            shortcuts::setup(&handle);
             debug(&format!("launch {}", app_report(&handle)));
             tray::create(&handle)?;
             let media_app = handle.clone();
             media_controls::attach(
                 &handle,
                 Arc::new(move |command| match command {
-                    MediaCommand::ToggleMute => send(&media_app, Command::ToggleMute),
+                    // A headset's single press (and the AirPods gesture): what the person chose for it.
+                    MediaCommand::ToggleMute => shortcuts::headset_press(&media_app),
                 }),
             );
             // The model root is shared per OS user on this machine (docs/ENGINES.md).
@@ -522,11 +509,19 @@ pub fn run() {
             app.manage(sidevoice_shared_tauri::Pairings(Arc::new(data::Pairings(handle.clone()))));
             // This computer's own core, on every OS: found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
-            let stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
+            let mut stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
+            // A person still on the old mute default is moved to this system's, once (core `shortcuts::migrated_mute`).
+            if let Some(kept) = stored.as_mut() {
+                if kept.migrate_shortcuts(shortcut_access::default_mute()) {
+                    if let Some(dir) = data::desktop_dir(&handle).ok() {
+                        let _ = settings::save(&dir, kept);
+                    }
+                }
+            }
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
-            let current = stored.unwrap_or_else(Settings::first_run);
-            apply_shortcut(&handle, &current.mute_shortcut);
+            let current = stored.unwrap_or_else(|| Settings::first_run(shortcut_access::default_mute()));
+            shortcuts::apply(&handle);
             app.manage(media_duck::MediaDuck::start(
                 current.media_duck,
                 current.media_duck_level,
