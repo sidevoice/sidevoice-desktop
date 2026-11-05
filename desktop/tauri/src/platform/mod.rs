@@ -4,6 +4,7 @@ pub mod application;
 pub mod diagnostics;
 pub mod host;
 pub mod locale;
+pub mod media_duck;
 #[cfg(test)]
 pub mod pairing_storage;
 pub mod reveal;

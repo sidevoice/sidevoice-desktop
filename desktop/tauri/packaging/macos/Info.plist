@@ -6,6 +6,13 @@
        app the moment its voice call opens the microphone. -->
   <key>NSMicrophoneUsageDescription</key>
   <string>Sidevoice usa el micrófono para que hables con tus agentes durante una llamada.</string>
+  <!-- Lowering or pausing Music and Spotify during a call (docs/MEDIA_DUCK.md); the system asks once per app. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Sidevoice can lower or pause Music and Spotify while your microphone is open or the agent is speaking in a call, and restore them afterwards.</string>
+  <!-- System Audio Recording (macOS 14.4+): lowering any other app through Core Audio taps (docs/MEDIA_DUCK.md). Asked when
+       the person chooses Lower, never in a call. -->
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Sidevoice lowers music and videos playing in other apps while your microphone is open or the agent is speaking in a call, and restores them afterwards. The audio is not recorded or stored.</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.productivity</string>
 </dict>

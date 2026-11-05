@@ -274,6 +274,27 @@
     return { host: Object.freeze(host), changed: listeners.tell };
   }
 
+  /** What happens to other apps' media while the microphone is open or the agent speaks in a call: sidevoice-web's
+   *  `MediaDuckBridge`, onto the `media_duck` command (docs/MEDIA_DUCK.md). Its answer is `{mode, level, lower, pause,
+   *  access?, capture?}`. */
+  function mediaDuck() {
+    const invalid = () => ({ key: "bad_request", message: "set(mode) takes 'lower', 'pause' or 'off'." });
+    const unleveled = () => ({ key: "bad_request", message: "setLevel(level) takes 'half', 'quarter' or 'mute'." });
+    const unnamed = () => ({ key: "bad_request", message: "takes the permission: 'capture' or 'automation'." });
+    const named = (action, permission) => (typeof permission === "string" ? call("media_duck", { action, permission }) : Promise.reject(unnamed()));
+    return Object.freeze({
+      get: () => call("media_duck", { action: "get" }),
+      /** The person's own request, from the list of permissions, to let the app do what `permission` names (macOS:
+       *  `capture`, System Audio Recording; `automation`, controlling Music and Spotify): when the system may ask. */
+      allow: (permission) => named("allow", permission),
+      /** The system's page where the person turns `permission` back on (macOS); rejects `unsupported` elsewhere. */
+      openSettings: (permission) => named("settings", permission),
+      set: (mode) => (typeof mode === "string" ? call("media_duck", { action: "set", mode }) : Promise.reject(invalid())),
+      /** How far Lower takes other apps: `half`, `quarter` (the default) or `mute`; applied at once while lowered. */
+      setLevel: (level) => (typeof level === "string" ? call("media_duck", { action: "level", level }) : Promise.reject(unleveled())),
+    });
+  }
+
   /** The developer options (nightly and dev builds): sidevoice-web's hidden "Developer options" section, onto the
    *  `debug_options` command (docs/BRIDGE.md -> "The developer options"). Each switch reads live: what the app kept, then
    *  what the last `set` took. */
@@ -467,6 +488,7 @@
       /** The global mute shortcut, and whether the call controls card shows always in a call: the app's, set from
        *  the page's Settings. */
       muteShortcut: shortcut.host,
+      mediaDuck: mediaDuck(),
       callControls: callControls(),
       // Only in a nightly or a dev build: the developer options (docs/BRIDGE.md -> "The developer options").
       ...(debugOptions ? { debug: debugOptions } : {}),

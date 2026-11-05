@@ -1,0 +1,238 @@
+//! Other apps' media while the microphone is open in a call or the agent is speaking (docs/MEDIA_DUCK.md). One worker
+//! thread follows the call and the person's choice, because every system call it makes may block; it is the only place that remembers what was taken, and
+//! it writes that down so a crash does not leave other apps lowered or paused for good.
+
+use crate::platform::media_duck as platform;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use sidevoice_desktop_core::media_duck::{wanted, Access, Ducker, Hold, Level, Mode, Permission, Status, Touch};
+use std::path::PathBuf;
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Manager, Webview};
+use tauri_plugin_opener::OpenerExt;
+
+/// Where what is owed is kept, in the app's data folder.
+const OWED: &str = "media-duck.json";
+
+enum Msg {
+    Mode(Mode),
+    Level(Level),
+    Call {
+        joined: bool,
+        mic_enabled: bool,
+        agent_speaking: bool,
+    },
+    /// Give everything back now, and say so on the channel.
+    Release(mpsc::Sender<()>),
+}
+
+/// The worker's mailbox, kept as the app's state.
+pub struct MediaDuck(Mutex<mpsc::Sender<Msg>>);
+
+/// What is kept: what is owed, and on which start of the machine it was written.
+#[derive(Serialize, Deserialize)]
+struct Kept {
+    boot: u64,
+    owed: Vec<Touch>,
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The boot times of one start of the machine differ by a second or so between reads.
+fn same_boot(a: u64, b: u64) -> bool {
+    a.abs_diff(b) <= 5
+}
+
+/// What an earlier run left that is still worth giving back (core `Touch::after_restart`).
+fn read(file: &Option<PathBuf>) -> Vec<Touch> {
+    let kept: Option<Kept> =
+        file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok());
+    let Some(kept) = kept else { return Vec::new() };
+    let (same, now) = (same_boot(kept.boot, platform::boot_time()), now());
+    kept.owed.into_iter().filter_map(|t| t.after_restart(same, now)).collect()
+}
+
+/// Writes down what is owed, or forgets the file when nothing is: written whole beside it and renamed over it, so a crash
+/// in the middle leaves the old file, never half of one.
+fn write(file: &Option<PathBuf>, owed: &[Touch]) {
+    let Some(file) = file else { return };
+    if owed.is_empty() {
+        let _ = std::fs::remove_file(file);
+        return;
+    }
+    let kept = Kept { boot: platform::boot_time(), owed: owed.to_vec() };
+    let Ok(bytes) = serde_json::to_vec(&kept) else { return };
+    let temp = file.with_extension("json.tmp");
+    if std::fs::write(&temp, bytes).is_ok() && std::fs::rename(&temp, file).is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+}
+
+impl MediaDuck {
+    /// Starts the worker with the person's choice and level; what an earlier run took and did not give back is given back
+    /// first.
+    pub fn start(mode: Mode, level: Level, dir: Option<PathBuf>) -> Self {
+        let (tx, rx) = mpsc::channel::<Msg>();
+        let file = dir.map(|d| d.join(OWED));
+        std::thread::spawn(move || {
+            let (mut mode, mut joined, mut mic_enabled, mut agent_speaking) = (mode, false, false, false);
+            let mut level = level;
+            let mut ducker = Ducker::owing(read(&file));
+            ducker.level(level, platform::player, platform::act);
+            let mut hold = Hold::default();
+            let mut last_written = Vec::<Touch>::new();
+            let started = Instant::now();
+            let millis = || started.elapsed().as_millis() as u64;
+            // What a run that died left in the system goes first (macOS: its taps), then what it owed is given back, at
+            // once rather than at the first call.
+            platform::clean();
+            ducker.tick(now());
+            ducker.settle(platform::player, platform::act);
+            write(&file, ducker.owed());
+            let mut until: Option<u64> = None;
+            loop {
+                // Wait for news, or for a held give-back to fall due.
+                let first = match until {
+                    Some(at) => match rx.recv_timeout(Duration::from_millis(at.saturating_sub(millis()))) {
+                        Ok(msg) => Some(msg),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    },
+                    None => match rx.recv() {
+                        Ok(msg) => Some(msg),
+                        Err(_) => break,
+                    },
+                };
+                // What queued up while the last look was blocked is folded into one: only the latest state matters.
+                let mut acks = Vec::new();
+                for msg in first.into_iter().chain(rx.try_iter()) {
+                    match msg {
+                        Msg::Mode(m) => mode = m,
+                        Msg::Level(l) => level = l,
+                        Msg::Call { joined: j, mic_enabled: m, agent_speaking: s } => {
+                            (joined, mic_enabled, agent_speaking) = (j, m, s)
+                        }
+                        Msg::Release(ack) => {
+                            (joined, mic_enabled, agent_speaking) = (false, false, false);
+                            acks.push(ack);
+                        }
+                    }
+                }
+                // Only the gap between turns is held over: hanging up, quitting or choosing to do nothing gives back now.
+                if !joined || mode == Mode::Off {
+                    hold.drop_now();
+                }
+                let want;
+                (want, until) = hold.follow(wanted(mode, joined, mic_enabled, agent_speaking), millis());
+                // A look only when the call really asks something else of the media: every report of the page comes through
+                // here, and a debt that cannot be paid is tried again at a change, not at each of them.
+                ducker.tick(now());
+                // A new level while lowered moves what is lowered at once; one taken next goes straight to it.
+                ducker.level(level, platform::player, platform::act);
+                ducker.follow(want, platform::players, platform::player, platform::act);
+                if ducker.owed() != last_written.as_slice() {
+                    write(&file, ducker.owed());
+                    last_written = ducker.owed().to_vec();
+                }
+                for ack in acks {
+                    let _ = ack.send(());
+                }
+            }
+        });
+        MediaDuck(Mutex::new(tx))
+    }
+
+    fn send(&self, msg: Msg) {
+        let _ = self.0.lock().unwrap().send(msg);
+    }
+}
+
+/// The call changed: whether it is joined, whether the microphone is open in it, and whether the agent is speaking.
+pub fn call(app: &AppHandle, joined: bool, mic_enabled: bool, agent_speaking: bool) {
+    if let Some(duck) = app.try_state::<MediaDuck>() {
+        duck.send(Msg::Call { joined, mic_enabled, agent_speaking });
+    }
+}
+
+/// The app is going: what it took is given back before the process ends (a force quit cannot; the next start does it).
+pub fn release(app: &AppHandle) {
+    if let Some(duck) = app.try_state::<MediaDuck>() {
+        let (ack, done) = mpsc::channel();
+        duck.send(Msg::Release(ack));
+        let _ = done.recv_timeout(Duration::from_secs(3));
+    }
+}
+
+fn status((mode, level): (Mode, Level)) -> Status {
+    let (lower, pause) = platform::reach();
+    Status { mode, level, lower, pause, access: platform::access(), capture: platform::capture() }
+}
+
+/// Asks the system for `permission` if it has not been asked yet: the person pressed Allow in the list of permissions. The
+/// system may show its dialog; nothing else asks (not choosing a mode, not a call, not the start of the app).
+fn ask(permission: Permission) {
+    match permission {
+        Permission::Capture if platform::capture() == Some(Access::Undetermined) => platform::ask_capture(),
+        Permission::Automation if platform::access() == Some(Access::Undetermined) => platform::ask(),
+        _ => {}
+    }
+}
+
+/// `host.mediaDuck`'s one command: `action` `get`; `set` with `mode` (`lower`, `pause` or `off`); `level` with `level`
+/// (`half`, `quarter` or `mute`: how far Lower goes, applied at once while lowered); `allow` with
+/// `permission` (`capture` or `automation`), the person's own request to let the app do that, which is when the system may
+/// ask; or `settings` with `permission`, the system's page where the person turns it back on.
+#[tauri::command]
+pub async fn media_duck(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    mode: Option<String>,
+    level: Option<String>,
+    permission: Option<String>,
+) -> Result<Status, Value> {
+    let refuse = |key: &str, why: String| json!({ "key": key, "message": why });
+    let permission_of = |permission: Option<String>| -> Result<Permission, Value> {
+        serde_json::from_value(json!(permission))
+            .map_err(|_| refuse("bad_request", "permission is capture or automation".into()))
+    };
+    crate::room_page(&app, &webview).map_err(|why| refuse("bad_request", why))?;
+    match action.as_str() {
+        "get" => Ok(status(crate::stored_media_duck(&app))),
+        "set" => {
+            let mode: Mode = serde_json::from_value(json!(mode))
+                .map_err(|_| refuse("bad_request", "mode is lower, pause or off".into()))?;
+            let kept = crate::change_settings(&app, |s| s.media_duck = mode).map_err(|e| refuse("internal", e))?;
+            if let Some(duck) = app.try_state::<MediaDuck>() {
+                duck.send(Msg::Mode(mode));
+            }
+            Ok(status((kept.media_duck, kept.media_duck_level)))
+        }
+        "level" => {
+            let level: Level = serde_json::from_value(json!(level))
+                .map_err(|_| refuse("bad_request", "level is half, quarter or mute".into()))?;
+            let kept =
+                crate::change_settings(&app, |s| s.media_duck_level = level).map_err(|e| refuse("internal", e))?;
+            if let Some(duck) = app.try_state::<MediaDuck>() {
+                duck.send(Msg::Level(level));
+            }
+            Ok(status((kept.media_duck, kept.media_duck_level)))
+        }
+        "allow" => {
+            let permission = permission_of(permission)?;
+            let _ = tauri::async_runtime::spawn_blocking(move || ask(permission)).await;
+            // What is stored now: the person may have chosen again while the system was asking.
+            Ok(status(crate::stored_media_duck(&app)))
+        }
+        "settings" => {
+            let url = platform::settings_url(permission_of(permission)?)
+                .ok_or_else(|| refuse("unsupported", "no settings page here".into()))?;
+            app.opener().open_url(url, None::<&str>).map_err(|e| refuse("internal", e.to_string()))?;
+            Ok(status(crate::stored_media_duck(&app)))
+        }
+        _ => Err(refuse("bad_request", format!("not a media duck action: {action}"))),
+    }
+}

@@ -38,6 +38,7 @@ fn main() {
             "data_uninstall",
             "data_reset_report",
             "mute_shortcut",
+            "media_duck",
             "call_controls_settings",
             "updater",
             "debug_options",

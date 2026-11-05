@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-media-duck"
+description = "Enables the media_duck command without any pre-configured scope."
+commands.allow = ["media_duck"]
+
+[[permission]]
+identifier = "deny-media-duck"
+description = "Denies the media_duck command without any pre-configured scope."
+commands.deny = ["media_duck"]

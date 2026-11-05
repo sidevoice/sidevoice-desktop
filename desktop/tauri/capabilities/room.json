@@ -51,6 +51,7 @@
     "allow-data-uninstall",
     "allow-data-reset-report",
     "allow-mute-shortcut",
+    "allow-media-duck",
     "allow-call-controls-settings",
     "allow-updater",
     "allow-debug-options"
