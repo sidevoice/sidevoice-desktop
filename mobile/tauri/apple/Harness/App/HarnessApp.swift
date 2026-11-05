@@ -7,6 +7,7 @@
 // action name, and `harness.actions` says what they asked. The fixture mode is compiled in Debug only, and this app is
 // never part of the app that ships.
 import ActivityKit
+import AVFoundation
 import CallActivity
 import CallActivityApp
 import SwiftUI
@@ -45,6 +46,7 @@ final class Harness: ObservableObject {
         while UIApplication.shared.applicationState != .active {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
+        keepAlive()
         guard let details = Self.object(fixture) else {
             status = "failed: LA_FIXTURE is not a JSON object"
             return
@@ -73,6 +75,39 @@ final class Harness: ObservableObject {
             return
         }
         status = "started"
+    }
+
+    private let engine = AVAudioEngine()
+    private var background = UIBackgroundTaskIdentifier.invalid
+
+    /// Keeps the app running in the background, as the app is while in a call (its audio session active, the `audio`
+    /// background mode of mobile/tauri/Info.ios.plist): silence played on a loop. Suspended, the app would get the
+    /// buttons' intents only once launched again, a test later. A background task stands in if the runner has no audio.
+    private func keepAlive() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
+            try AVAudioSession.sharedInstance().setActive(true)
+            // No output device gives a format of no channels, which `connect` would raise on.
+            let format = engine.outputNode.inputFormat(forBus: 0)
+            guard format.channelCount > 0, format.sampleRate > 0,
+                let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(format.sampleRate))
+            else { throw CocoaError(.featureUnsupported) }
+            let player = AVAudioPlayerNode()
+            engine.attach(player)
+            engine.connect(player, to: engine.mainMixerNode, format: format)
+            silence.frameLength = silence.frameCapacity
+            try engine.start()
+            player.scheduleBuffer(silence, at: nil, options: .loops)
+            player.play()
+            NSLog("LA harness: kept alive by silence played on a loop")
+        } catch {
+            background = UIApplication.shared.beginBackgroundTask { [weak self] in
+                guard let self else { return }
+                UIApplication.shared.endBackgroundTask(background)
+                background = .invalid
+            }
+            NSLog("LA harness: no audio (%@); kept alive by a background task", "\(error)")
+        }
     }
 
     private static func object(_ json: String) -> [String: Any]? {

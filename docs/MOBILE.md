@@ -473,6 +473,16 @@ names none of it, so nothing of it is in the app that ships):
   the compact island (the app in the background) and the expanded island (a long press on it, with the frames in pt of
   what SpringBoard shows at the top of the screen, as JSON: the island's and its elements'). Not the minimal island: a
   second activity of the same app does not make the island show two minimal views.
+- **The call's stand-in** (`App/CallStandIn.swift`, Debug only): the host app is `SidevoiceCallSurfaceActions`, the class the
+  Rust side registers, so a button's tap runs its intent in the app (`apple/Intents`) and reaches the stand-in the way it
+  reaches the call on a phone. It answers as the call would: a mute sets `muted` (`toggle-mute`: the other of what the card
+  showed) and shows the details again, a hang-up ends the activity, another action shows the details the test gave for it
+  (`LA_ANSWERS`). What it was asked is on the app's screen (`harness.actions`) and in the log (`LA harness stand-in: …`).
+- **The buttons** (`UITests/LiveActivityButtons.swift`, light only): mute both ways, skip and hang up on the Lock Screen card;
+  mute both ways, hang up, skip and the × in the expanded island. Each asserts that the stand-in was asked, and what the
+  activity shows: the new mic state within 1 s and still 2 s later, no card after a hang-up, the next state after a skip
+  or a cancel. Not the audio switch: it is drawn only while headphones are connected, and the Simulator has none. A failed
+  tap leaves a shot and SpringBoard's tree (`buttons-failed-*`).
 
 It runs on the newest iPhone Pro simulator, in light and then in dark (every state; the variants in light only), into `dist/live-activity-sim/`
 (`<presentation>-<state>[-<variant>]-<light|dark>.png`, and `INDEX.md`, which names the design gallery's PNG each shot is

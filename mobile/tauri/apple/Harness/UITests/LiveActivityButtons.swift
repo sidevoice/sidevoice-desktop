@@ -5,7 +5,8 @@ import XCTest
 /// class the intent hands the action to, and answers as the app's call would. Each test asserts that the stand-in was asked
 /// for the action (`harness.actions`, read from the app afterwards) and that the activity shows the answer: the new mic
 /// state within 1 s of the tap (seen by a query begun within 1 s; each query of SpringBoard takes a while) and still 2 s
-/// later, the card gone after a hang-up, the next state after a skip or a cancel. Mute's rule (desktop#430): a tap does
+/// later; the card gone, and the next state after a skip or a cancel, within 5 s (a button's intent takes about a second
+/// to run, and its tap closes the island). Mute's rule (desktop#430): a tap does
 /// what the card showed, so Silenciar mutes and Activar micrófono unmutes. Light appearance only.
 ///
 /// Not tapped: the audio switch, which the activity draws only while headphones are connected, and the Simulator has none.
@@ -38,8 +39,8 @@ final class LiveActivityButtons: XCTestCase {
     func testLockScreenMute() {
         guard let app = call(Fixture.details("listening")) else { return }
         showLockScreen()
-        tap(es.mute, in: .lock, sees: control(es.unmute), stays: true)
-        tap(es.unmute, in: .lock, sees: control(es.mute), stays: true)
+        tap(es.mute, in: .lock, sees: control(es.unmute), mic: true)
+        tap(es.unmute, in: .lock, sees: control(es.mute), mic: true)
         XCUIDevice.shared.press(.home)
         settle(1)
         assertMutes(heard(app), [true, false])
@@ -68,8 +69,8 @@ final class LiveActivityButtons: XCTestCase {
     func testIslandMute() {
         guard let app = call(Fixture.details("working")) else { return }
         openIsland()
-        tap(es.mute, in: .island, sees: control(es.unmute), stays: true)
-        tap(es.unmute, in: .island, sees: control(es.mute), stays: true)
+        tap(es.mute, in: .island, sees: control(es.unmute), mic: true)
+        tap(es.unmute, in: .island, sees: control(es.mute), mic: true)
         assertMutes(heard(app), [true, false])
     }
 
@@ -119,12 +120,14 @@ final class LiveActivityButtons: XCTestCase {
         expandIsland()
     }
 
-    /// A button or switch of the activity, by its accessibility label.
+    /// A button or switch of the activity, by its accessibility label. On the Lock Screen a switch's label is its own and
+    /// its face's, comma-separated ("Silenciar, Silenciar").
     func control(_ label: String) -> XCUIElement {
-        let types = [XCUIElement.ElementType.button.rawValue, XCUIElement.ElementType.switch.rawValue]
-        return springboard.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ AND elementType IN %@", label, types as NSArray))
-            .firstMatch
+        let button = XCUIElement.ElementType.button.rawValue, toggle = XCUIElement.ElementType.switch.rawValue
+        let predicate = NSPredicate(
+            format: "(elementType == %lu AND label == %@) OR (elementType == %lu AND (label == %@ OR label BEGINSWITH %@))",
+            button, label, toggle, label, label + ",")
+        return springboard.descendants(matching: .any).matching(predicate).firstMatch
     }
 
     /// A text of the activity that starts with `prefix` (a state's name, before its timer).
@@ -132,9 +135,12 @@ final class LiveActivityButtons: XCTestCase {
         springboard.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
     }
 
-    /// Taps the control labelled `label` in `place`, then asserts what the activity shows: `sees` within 1 s (and, with
-    /// `stays`, still 2 s later: the activity's state, not only a toggle's own face), or, with `gone`, no card within 3 s.
-    func tap(_ label: String, in place: Place, sees: XCUIElement? = nil, stays: Bool = false, gone: Bool = false) {
+    /// Taps the control labelled `label` in `place`, then asserts what the activity shows:
+    /// - `mic`: `sees` within 1 s, and still 2 s later (the activity's state, not only the toggle's own face);
+    /// - otherwise `sees` within 5 s (a button's intent takes about a second to run), in the island opened again: a
+    ///   button's tap closes it;
+    /// - `gone`: no card within 5 s.
+    func tap(_ label: String, in place: Place, sees: XCUIElement? = nil, mic: Bool = false, gone: Bool = false) {
         let step = "\(name) \(place.rawValue) \(label)"
         var button = control(label)
         if !button.exists, place == .island {
@@ -148,26 +154,29 @@ final class LiveActivityButtons: XCTestCase {
         }
         button.tap()
         if gone {
-            let card = control(es.hangUp)
-            let over = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: card)
-            if XCTWaiter.wait(for: [over], timeout: 3) != .completed { fail(step, "the card is still there 3 s after") }
+            if !disappears(control(es.hangUp), within: 5) { fail(step, "the card is still there 5 s after") }
             return
         }
         guard let sees else { return }
-        guard let after = appears(sees, within: 1) else {
-            if place == .island {
-                expandIsland()
-                fail(step, sees.exists ? "shown only once the island was opened again" : "not shown")
-            } else {
+        if mic {
+            guard let after = appears(sees, within: 1) else {
                 fail(step, "not shown within 1 s")
+                return
             }
-            return
-        }
-        XCTContext.runActivity(named: "\(step): shown \(String(format: "%.2f", after)) s after the tap") { _ in }
-        if stays {
+            XCTContext.runActivity(named: "\(step): shown \(String(format: "%.2f", after)) s after the tap") { _ in }
             settle(2)
             if !sees.exists { fail(step, "shown, then gone 2 s later: the activity's state did not follow") }
+            return
         }
+        if place == .island {
+            settle(2)
+            expandIsland()
+        }
+        guard let after = appears(sees, within: 5) else {
+            fail(step, "not shown within 5 s")
+            return
+        }
+        XCTContext.runActivity(named: "\(step): shown \(String(format: "%.2f", after)) s after looking") { _ in }
     }
 
     /// The seconds after which `element` was found, by a query begun within `limit` s; nil if none found it.
@@ -178,6 +187,16 @@ final class LiveActivityButtons: XCTestCase {
             settle(0.1)
         }
         return nil
+    }
+
+    /// Whether `element` was gone by a query begun within `limit` s.
+    func disappears(_ element: XCUIElement, within limit: TimeInterval) -> Bool {
+        let tapped = Date()
+        while Date().timeIntervalSince(tapped) <= limit {
+            if !element.exists { return true }
+            settle(0.2)
+        }
+        return false
     }
 
     /// Fails `step`, with a shot of the screen and SpringBoard's tree beside the PNGs.
