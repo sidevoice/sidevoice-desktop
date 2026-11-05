@@ -128,7 +128,9 @@ public struct ExpandedBody: View {
 
     /// The island's geometry (R2-7, R2-8), made deterministic: the widget zeroes the system's margins at the sides and the
     /// bottom (`contentMargins`, iOS 17), so these paddings are all there is there: 18 at the sides, 14 below the voice
-    /// views and the reply, 10 below the closed states' row. The top is the system's: its `.bottom` region starts below the
+    /// views and the reply, 12 below the closed states' row. The bottom band (anything whose bottom lies within 36 pt of the
+    /// island's bottom: the controls, the capsule, Saltar) keeps 26 from the sides, clear of the device's rounder corners;
+    /// text keeps 18 (D-LA-CORNERS). The top is the system's: its `.bottom` region starts below the
     /// camera row (36.7 pt measured on a 17 Pro Max; `cameraRow` is the gallery's 36), and `top` takes it to 40 from the
     /// island's edge. The budget is 144 pt (D-LA-144), so each state's content fits in the 104 under that: the reply is
     /// three lines, and the gaps are what gives first, never a line of text or a button.
@@ -141,6 +143,9 @@ public struct ExpandedBody: View {
     }
 
     public static let side: CGFloat = 18
+    /// The bottom band's distance from the island's sides (D-LA-CORNERS): `side` and `bandInset`.
+    public static let corner: CGFloat = 26
+    static let bandInset: CGFloat = corner - side
     /// What the system leaves above the `.bottom` region (the camera's row), which the render tests reproduce.
     public static let cameraRow: CGFloat = 36
     /// The gap from the camera row to the first element: 40 pt from the island's edge in all.
@@ -149,7 +154,7 @@ public struct ExpandedBody: View {
     public static func bottom(_ phase: CallState.Phase) -> CGFloat {
         switch phase {
         case .speaking, .listening, .transcribing, .said: 14
-        default: 10
+        default: 12
         }
     }
 
@@ -162,6 +167,7 @@ public struct ExpandedBody: View {
             VStack(spacing: 8) {
                 VoiceHeader(state: state)
                 VoiceCapsule(state: state)
+                    .padding(.horizontal, Self.bandInset)
             }
         case .said:
             VStack(alignment: .leading, spacing: 8) {
@@ -196,6 +202,7 @@ public struct ExpandedBody: View {
                     .accessibilityLabel(state.words.hangUp)
                 }
                 .frame(height: 36)
+                .padding(.horizontal, Self.bandInset)
             }
         }
     }
@@ -251,7 +258,8 @@ struct VoiceHeader: View {
     }
 }
 
-/// Your bars in the person's balloon, 36 tall, with Cancelar envío as an × at its right end.
+/// Your bars in the person's balloon, 36 tall, with Cancelar envío as an × at its right end; 26 from the island's sides
+/// (D-LA-CORNERS), the bars right-anchored.
 @available(iOS 16.1, *)
 struct VoiceCapsule: View {
     var state: CallState
@@ -278,7 +286,8 @@ struct VoiceCapsule: View {
     }
 }
 
-/// Speaking: the reply's chunk, 15 on 18, three lines, all at full strength (no karaoke); Saltar 4 pt below it, right.
+/// Speaking: the reply's chunk, 15 on 18, three lines, all at full strength (no karaoke); Saltar 4 pt below it, right, 26
+/// from the island's side (D-LA-CORNERS).
 /// The creature beside the camera is `ExpandedLeading`'s.
 @available(iOS 16.1, *)
 struct Reply: View {
@@ -314,6 +323,7 @@ struct Reply: View {
                     }
                 }
                 .accessibilityLabel(state.words.skipName)
+                .padding(.trailing, ExpandedBody.bandInset)
             } else {
                 Color.clear.frame(height: 26)
             }
