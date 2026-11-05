@@ -40,6 +40,8 @@ targets:
         CFBundleDisplayName: LA Harness
         UILaunchScreen: {}
         NSSupportsLiveActivities: true
+        # Kept running in the background, as the app is in a call (its audio session active): see HarnessApp.keepAlive.
+        UIBackgroundModes: [audio]
     entitlements:
       path: Generated/App.entitlements
       properties:

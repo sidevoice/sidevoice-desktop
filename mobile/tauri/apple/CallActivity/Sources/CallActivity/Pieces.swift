@@ -81,7 +81,7 @@ struct CreatureTile: View {
     @Environment(\.isLuminanceReduced) private var reduced
 
     var body: some View {
-        let tone = Tone.of(state.tonePhase, dark: palette.dark)
+        let tone = Tone.of(state.phase, dark: palette.dark)
         let inner = size * 0.86
         ZStack {
             if !reduced {
@@ -107,14 +107,14 @@ struct CreatureTile: View {
             // The tile's box, and far around it for an accessory that stands out of it, less the badge's ring.
             ZStack(alignment: .bottomTrailing) {
                 Rectangle().padding(-size)
-                if state.micOff {
+                if state.mutedBadge {
                     Circle().frame(width: 26, height: 26).offset(x: 6, y: 6).blendMode(.destinationOut)
                 }
             }
             .compositingGroup()
         }
         .overlay(alignment: .bottomTrailing) {
-            if state.micOff {
+            if state.mutedBadge {
                 MicBadge(size: 22, glyph: 12).offset(x: 4, y: 4)
             }
         }
@@ -131,7 +131,7 @@ struct MicBadge: View {
     var ringWidth: CGFloat = 0
 
     var body: some View {
-        Circle().fill(Ink.hangUp)
+        Circle().fill(Ink.muted)
             .overlay(Image(systemName: "mic.slash.fill").font(.system(size: glyph * 0.85, weight: .semibold))
                 .foregroundStyle(.white))
             .frame(width: size, height: size)
@@ -152,7 +152,8 @@ struct RoundFace: View {
     }
 }
 
-/// The other conversations: up to three faces of 26 overlapping by 8, enlarged by their `k` (overflow), then the count.
+/// The other conversations: up to three faces of 26 overlapping by 8, enlarged by their `k` (overflow), then the count;
+/// nothing at all when the call has no other conversation.
 /// One link to the app's conversation list (D-LA-SIMPLE).
 @available(iOS 16.1, *)
 struct OthersStack: View {
@@ -160,6 +161,12 @@ struct OthersStack: View {
     var palette: Palette
 
     var body: some View {
+        if !state.others.isEmpty {
+            stack
+        }
+    }
+
+    private var stack: some View {
         Link(destination: CallLinks.conversations) {
             HStack(spacing: 0) {
                 HStack(spacing: -8) {
@@ -198,7 +205,7 @@ struct StateLine: View {
     var lineHeight: CGFloat
 
     var body: some View {
-        let tone = Tone.of(state.tonePhase, dark: dark)
+        let tone = Tone.of(state.phase, dark: dark)
         HStack(spacing: 6) {
             Circle().fill(tone.fill).frame(width: 8, height: 8)
             label(tone)
@@ -210,7 +217,7 @@ struct StateLine: View {
 
     private func label(_ tone: Tone) -> Text {
         let words = Text(state.words.state)
-        guard state.tonePhase == .working, let since = state.workingSince else { return words }
+        guard state.phase == .working, let since = state.workingSince else { return words }
         // Tabular digits, so "0:42" keeps its width as it counts.
         let time = (Text("· ") + Text(since, style: .timer)).monospacedDigit()
         // The gallery's 6-pt gap: an en space (7.5 pt at 15, 7 at 14), the closest a run of text has.
@@ -229,10 +236,14 @@ struct StateGlyph: View {
         let tone = Tone.of(phase, dark: true)
         Group {
             switch phase {
-            case .idle, .said:
+            case .idle:
                 EmptyView()
-            case .listening, .transcribing:
-                GlyphBars(phase: phase).frame(width: size, height: size)
+            case .listening:
+                // The mic (scheme E): you are talking.
+                symbol("mic.fill", effect: .pulse)
+            case .transcribing, .said:
+                // The bars, at full tone.
+                GlyphBars().frame(width: size, height: size)
             case .working:
                 symbol("ellipsis", effect: .bounce)
             case .speaking:
@@ -288,10 +299,9 @@ struct SymbolEntrance: View {
 
 /// Your voice's bars in the compact island (five; a stand-in for the app's): 2.4 wide at x 2.5 / 6.6 / 10.7 / 14.8 / 18.9 of
 /// a 24 box, 7 / 12 / 16 / 11 / 7 tall, centred; still, since a Live Activity cannot follow the voice. They grow from
-/// their bottom when listening starts; 45 % and greyed while transcribing.
+/// their bottom when they appear; always at full tone.
 @available(iOS 16.1, *)
 struct GlyphBars: View {
-    var phase: CallState.Phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isLuminanceReduced) private var reduced
     static let heights: [CGFloat] = [7, 12, 16, 11, 7]
@@ -313,9 +323,6 @@ struct GlyphBars: View {
                 }
             }
         }
-        .opacity(phase == .listening ? 1 : 0.45)
-        .saturation(phase == .listening ? 1 : 0.4)
-        .animation(.easeOut(duration: 1), value: phase)
     }
 }
 
@@ -327,48 +334,6 @@ struct Stretch: ViewModifier {
 
     func body(content: Content) -> some View {
         content.scaleEffect(x: 1, y: y, anchor: anchor)
-    }
-}
-
-/// Your voice's bars in the expanded island's capsule, as the app draws a voice note (its `VoiceWaveform`, the person's
-/// balloon): white, 3 wide every 6, fully rounded, in a 24-pt box, right-anchored (the newest next to the ×, as the app's
-/// waveform scrolls in from the right), 6 pt at least (never a dot). A capsule narrower than the 44 columns drops them
-/// from the left; nothing is squeezed. Transcribing: the same frame at 80 %, as the app's still fallback. Listening: they
-/// rise in place (vertical scale 0.15 -> 1.12 -> 1, about 0.7 s, once; no horizontal scale).
-@available(iOS 16.1, *)
-struct VoiceBars: View {
-    var dim: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.isLuminanceReduced) private var reduced
-    static let heights: [CGFloat] = [
-        6, 7, 9, 12, 10, 8, 6, 6, 9, 14, 18, 15, 11, 13, 17, 20, 16, 12, 9, 7, 6, 6, 8, 11, 15, 19, 22, 18, 14, 16, 19, 15, 11,
-        8, 7, 10, 13, 17, 14, 10, 8, 6, 7, 6,
-    ]
-    static let width: CGFloat = 3
-    static let gap: CGFloat = 3
-
-    /// How many of the columns a capsule `width` wide holds (the newest ones).
-    static func columns(in width: CGFloat) -> Int {
-        min(heights.count, max(0, Int(((width + gap) / (Self.width + gap)).rounded(.down))))
-    }
-
-    var body: some View {
-        GeometryReader { box in
-            HStack(spacing: Self.gap) {
-                ForEach(Array(Self.heights.suffix(Self.columns(in: box.size.width)).enumerated()), id: \.offset) { _, height in
-                    Capsule()
-                        .fill(Color.white)
-                        .frame(width: Self.width, height: height)
-                        // A spring that overshoots to about 1.12 and settles, in the bar's own centre.
-                        .transition(reduceMotion || reduced ? .identity : .modifier(active: Stretch(y: 0.15, anchor: .center), identity: Stretch(y: 1, anchor: .center))
-                            .animation(.spring(response: 0.45, dampingFraction: 0.55)))
-                }
-            }
-            .frame(width: box.size.width, height: box.size.height, alignment: .trailing)
-        }
-        .frame(height: 24)
-        .opacity(dim ? 0.8 : 1)
-        .animation(.easeInOut(duration: 0.6), value: dim)
     }
 }
 

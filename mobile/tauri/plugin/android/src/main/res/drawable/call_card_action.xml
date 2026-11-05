@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The action on the state line (skip, cancel send): a 28 dp pill in the neutral button's colour. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/call_card_button" />
+    <corners android:radius="14dp" />
+</shape>

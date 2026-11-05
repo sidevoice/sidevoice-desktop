@@ -7,6 +7,8 @@
     <string name="call_notification_hang_up">挂断</string>
     <string name="call_notification_mute">静音</string>
     <string name="call_notification_unmute">取消静音</string>
+    <string name="call_notification_skip">跳过</string>
+    <string name="call_notification_cancel_send">取消发送</string>
     <string name="call_route_speaker">扬声器</string>
     <string name="call_route_earpiece">听筒</string>
 </resources>

@@ -4,13 +4,13 @@ import SwiftUI
 
 // The activity's controls. The buttons themselves are App Intents, which are not here: the device's `linkd` finds no
 // metadata for intents of this package, linked statically into the app and the extension (TestFlight build 26: every tap
-// failed with "There is no metadata for SetMicOff"). They are declared in the app's and the extension's own code
+// failed with "There is no metadata for SetMicOff", the mute's intent then). They are declared in the app's and the extension's own code
 // (mobile/tauri/apple/Intents), which hands the views their buttons through `CallControls`; without them (the renders, the
 // tests) the views draw the same faces, display only.
 
 /// A button of the activity, by what it does.
 public enum CallControl {
-    case skip, cancelSend, hangUp, route
+    case mute, skip, cancelSend, hangUp, route
 }
 
 /// The buttons of the activity's views, set by the widget extension, whose code declares their intents. None: the faces
@@ -18,9 +18,6 @@ public enum CallControl {
 public enum CallControls {
     /// The face of `control` made its button.
     public static var button: ((CallControl, AnyView) -> AnyView)?
-    /// The mute switch: the face, drawn from the toggle's own `isOn` (the system flips it at once when the button is
-    /// tapped, and puts it right again from the activity's next state), made the toggle of the mic's state `micOff`.
-    public static var muteToggle: ((_ micOff: Bool, _ face: @escaping (Bool) -> AnyView) -> AnyView)?
 }
 
 /// The call's audio output while headphones are connected: the headphones, or the speaker by the app's override
@@ -87,32 +84,5 @@ struct ActionButton<Label: View>: View {
         } else {
             label()
         }
-    }
-}
-
-/// The mute switch where the extension gave one (iOS 17), the face of `micOff` only otherwise.
-struct MuteToggle<Face: View>: View {
-    var micOff: Bool
-    @ViewBuilder var face: (Bool) -> Face
-
-    var body: some View {
-        if let toggle = CallControls.muteToggle {
-            toggle(micOff) { AnyView(face($0)) }
-        } else {
-            face(micOff)
-        }
-    }
-}
-
-/// A toggle drawn as its face alone: the face draws both states.
-public struct FaceToggle: ToggleStyle {
-    var face: (Bool) -> AnyView
-
-    public init(face: @escaping (Bool) -> AnyView) {
-        self.face = face
-    }
-
-    public func makeBody(configuration: Configuration) -> some View {
-        face(configuration.isOn)
     }
 }

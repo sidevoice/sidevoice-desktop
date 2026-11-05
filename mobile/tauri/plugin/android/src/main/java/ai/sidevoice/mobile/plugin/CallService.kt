@@ -154,7 +154,7 @@ class CallService : Service() {
             ACTION_HANG_UP -> session?.takeIf { it.id == id }?.let { finish("hang-up") } ?: leaveIfIdle(startId)
             // Ask for the audio focus again (it was lost for good, or refused), for the session this instance serves.
             ACTION_REFOCUS -> session?.takeIf { it.id == id }?.let { refocus(it) } ?: leaveIfIdle(startId)
-            // Mute, unmute or skip, from the card's buttons, of this session alone: the person's action, run by the app.
+            // Mute, unmute, skip or cancel send, from the card's buttons, of this session alone: the person's action, run by the app.
             ACTION_SURFACE -> session?.takeIf { it.id == id }?.let { mine ->
                 intent.getStringExtra(EXTRA_ACTION)?.takeIf { it in SERVICE_ACTIONS }?.let { CallSession.action(mine, it) }
             } ?: leaveIfIdle(startId)
@@ -388,6 +388,7 @@ class CallService : Service() {
         return CallCardViews.Intents(
             mute = service(ACTION_SURFACE, CallSession.surfaceAddress(id, mute), mute),
             skip = service(ACTION_SURFACE, CallSession.surfaceAddress(id, "skip"), "skip"),
+            cancelSend = service(ACTION_SURFACE, CallSession.surfaceAddress(id, "cancel-send"), "cancel-send"),
             hangUp = service(ACTION_HANG_UP, CallSession.hangUpAddress(id)),
             route = service(ACTION_ROUTE, CallSession.surfaceAddress(id, "route")),
             conversations = conversations,
@@ -904,7 +905,7 @@ class CallService : Service() {
         /** On the app's activity: the person tapped the stack of conversations; the app opens its conversation list. */
         const val EXTRA_OPEN_CONVERSATIONS = "ai.sidevoice.mobile.plugin.OPEN_CONVERSATIONS"
         /** The card's buttons the app runs (Rust `SurfaceAction`); hang up is the service's own, the stack the activity's. */
-        private val SERVICE_ACTIONS = setOf("mute", "unmute", "skip")
+        private val SERVICE_ACTIONS = setOf("mute", "unmute", "skip", "cancel-send")
         /** The headphones the audio switch moves the call to: wired, USB, Bluetooth (HFP, LE Audio) and hearing aids. */
         private val HEADPHONES = setOf(
             AudioDeviceInfo.TYPE_WIRED_HEADSET,

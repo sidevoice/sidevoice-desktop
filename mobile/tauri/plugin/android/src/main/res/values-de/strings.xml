@@ -7,6 +7,8 @@
     <string name="call_notification_hang_up">Auflegen</string>
     <string name="call_notification_mute">Stummschalten</string>
     <string name="call_notification_unmute">Mikro an</string>
+    <string name="call_notification_skip">Überspringen</string>
+    <string name="call_notification_cancel_send">Senden abbrechen</string>
     <string name="call_route_speaker">Lautsprecher</string>
     <string name="call_route_earpiece">Telefon</string>
 </resources>

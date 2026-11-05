@@ -7,6 +7,8 @@
     <string name="call_notification_hang_up">Raccrocher</string>
     <string name="call_notification_mute">Couper le micro</string>
     <string name="call_notification_unmute">Activer le micro</string>
+    <string name="call_notification_skip">Passer</string>
+    <string name="call_notification_cancel_send">Annuler l’envoi</string>
     <string name="call_route_speaker">Haut-parleur</string>
     <string name="call_route_earpiece">Téléphone</string>
 </resources>

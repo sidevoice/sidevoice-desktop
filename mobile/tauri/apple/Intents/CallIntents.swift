@@ -42,22 +42,18 @@ enum CallActions {
     }
 }
 
-/// The mute button: a `Toggle` (the system flips its face at once). Its `value` should be the other of what the card drew
-/// when it was tapped, but on a locked phone (build 32) muting did nothing while unmuting worked: the value that reached
-/// the app was "unmute" both times (the card's `isOn` old, or the value not carried). So the value is only logged, and the
-/// app's call (`toggle-mute`) sets the other of the mute it last showed on the card, which is what the card drew, and
-/// draws the card again.
+/// The mute button: a plain button, its face the card's mic (the activity's `micOff`), and nothing to carry. Not a
+/// `Toggle` (`SetValueIntent`): the widget could not fill its value (its metadata lookup at run time, `linkd`, dropped),
+/// and the system's own face of the toggle went back ~2 s after a second tap although the card's state had followed
+/// (desktop#436's harness). The app's call (`toggle-mute`) sets the other of the mute it last showed on the card, which is
+/// what the card drew, and draws the card again at once.
 @available(iOS 17.0, *)
-struct SetMicOff: SetValueIntent, LiveActivityIntent {
-    static var title: LocalizedStringResource = "Mute the call"
+struct ToggleMic: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Mute or unmute the call"
     static var isDiscoverable = false
-    @Parameter(title: "Muted") var value: Bool
     init() {}
     func perform() async throws -> some IntentResult {
-        CallLog.intent.notice(
-            "intent SetMicOff: the toggle asks micOff=\(value, privacy: .public); the call sets the other of what the card showed (toggle-mute)"
-        )
-        CallActions.send("toggle-mute", from: "SetMicOff")
+        CallActions.send("toggle-mute", from: "ToggleMic")
         return .result()
     }
 }
@@ -117,14 +113,12 @@ enum CallIntentControls {
         guard #available(iOS 17.0, *) else { return }
         CallControls.button = { control, label in
             switch control {
+            case .mute: return AnyView(Button(intent: ToggleMic()) { label }.buttonStyle(.plain))
             case .skip: return AnyView(Button(intent: SkipReply()) { label }.buttonStyle(.plain))
             case .cancelSend: return AnyView(Button(intent: CancelSend()) { label }.buttonStyle(.plain))
             case .hangUp: return AnyView(Button(intent: HangUp()) { label }.buttonStyle(.plain))
             case .route: return AnyView(Button(intent: ToggleRoute()) { label }.buttonStyle(.plain))
             }
-        }
-        CallControls.muteToggle = { micOff, face in
-            AnyView(Toggle(isOn: micOff, intent: SetMicOff()) { EmptyView() }.toggleStyle(FaceToggle(face: face)))
         }
     }
 }

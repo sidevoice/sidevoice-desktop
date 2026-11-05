@@ -335,12 +335,12 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   `RunEvent::Opened`). Each call action has one native owner, the one the page's own button ends in too, and the app
   calls it itself (`Room::act`, `mobile/tauri/src/call.rs`): with the phone locked the WebView may not run script, so
   nothing waits for the page. **Mute** (the Live Activity's mute button asks `toggle-mute`: the app sets the other of the mute it last
-  showed on the card, so a tap does what the card showed, as Android's buttons do; never the value the card's toggle sends, which a
-  locked phone has sent wrong; a tap that changes nothing still draws the card again, so its toggle does not stay flipped; the
-  `intent` log category has the toggle's value, what the card showed and the app's mute, for every tap) is the voice host's mute of the room's call, the lane the microphone is routed to
+  showed on the card, so a tap does what the card showed, as Android's buttons do; the button carries no value (a
+  toggle's, which a locked phone sent wrong and whose system face went back, is gone); a tap that changes nothing still draws the card again; the
+  `intent` log category has what the card showed and the app's mute, for every tap) is the voice host's mute of the room's call, the lane the microphone is routed to
   (`AppHost::mute_microphone`, the same `VoiceState` mute as the page's `voice_mute`), and the call's surfaces show it at
   once, past the update interval, while the page's reports from before it (one that disagrees) are not taken, for up to
-  3 s from the page's first report after it (a page still reporting the other mute then did not run it) (the toggle's value and the system's call agree); **cancel send** is its cancel of the unreported turn
+  3 s from the page's first report after it (a page still reporting the other mute then did not run it) (the card and the system's call agree); **cancel send** is its cancel of the unreported turn
   (`AppHost::cancel_microphone_input`, as `voice_cancel_input`); **skip** its cancel of what is said
   (`AppHost::skip_playing`, as `voice_cancel_say`); **hang up** drops what is said, stops every call of the page and
   routes the microphone nowhere (`AppHost::stop_calls`; the audio session is given back once the last call's audio has
@@ -405,27 +405,21 @@ its buttons need iOS 17 (before that it only shows the call).
   follows its state (`ActivityLifecycle`, `activityStateUpdates`), drops it when it is over and requests a new one with the
   next state (at once if the app is in front, else when it next is); at launch and whenever it comes to the front it ends
   the app's activities that are not the call's (what a crash left). The buttons log each step to the unified log, subsystem `ai.sidevoice`, category `intent`.
-- **The expanded island's geometry** is deterministic: the widget zeroes the system's margins at the sides and the bottom
-  (`contentMargins`, iOS 17), and `ExpandedBody` carries 18 pt at the sides, 14 below every state (the device clips the
-  content about 13.3 pt above the island's bottom edge), 4 below the camera's row (the `.bottom` region starts 36.7 pt
-  down on a 17 Pro Max, so about 40 from the island's edge). The bottom band (the controls, the capsule; Saltar 30) keeps
-  26 from the sides, clear of the device's rounder bottom corners; text keeps 18 (D-LA-CORNERS). The budget is 144 pt
-  (D-LA-144): the reply is three lines and Saltar, listening a 46 header (tile 44), an 8 gap and the capsule, your words
-  the same header and two lines of 15 on 18, the closed states a 48 tile row, a 6 gap and the 36 controls (no model and
-  machine line in the island: they stay on the card). Slack, if a device measures any, comes out of the gaps, never of a line or a button. Speaking's creature (30 pt) sits beside the camera in the `.leading` region
-  (`ExpandedLeading`; empty in every other state): the device clips `.bottom`'s content at that region's top.
 - **Updates.** Every change goes out at once. **The words** (the expanded island only: never on the Lock Screen, in the
   compact or minimal) are chunked by the app, where the updates are made (`TextChunker`, `TextPager` in the package; the
-  port of research/live-activity-design-2026-11-02/src/text-chunks.js): the page's `page.text` is cut into chunks that fit
-  three lines (your words: two lines, 2.5 s each, at most three, the last ending in "…"), measured with DM Sans 550 at 15 pt
-  at 330 pt, whole sentences first, then a clause break, then a word; no karaoke. One update per chunk: a chunk stays at
+  port of research/live-activity-design-2026-11-02/src/text-chunks.js): the page's `page.text` (the whole reply, one page:
+  sidevoice-web#485) is cut into chunks of three lines (your words: five, all of them, 2.5 s each), measured with DM Sans
+  550 at 15 pt at 314 pt (the 17 Pro's 322-pt column, 26 from the island's sides), each chunk but the last filling its
+  lines: as many words as fit, ended after a sentence, else a clause break, when that still fills them; the rest, a
+  sentence's tail included, starts the next chunk and goes on filling it; no karaoke, no ellipsis. One update per chunk,
+  drawn with no transition (no cross-fade): a chunk stays at
   least 2.5 s and the next shows only once the voice (`page.lit`) has reached its first word, jumping to the chunk the voice
   is in, never ahead of it; the controller wakes itself when the next is due. If a device ever has to cut a chunk it logs its length, never its words (category `text`).
-  Your words outlast the page's 3 s (three chunks take up to 7.5 s): while the call is idle, working or can't receive, the app
+  Your words outlast the page's 3 s: while the call is idle, working or can't receive, the app
   keeps them, by conversation, until their last chunk has had its time; listening, speaking, offline or another conversation
-  takes over at once. During your words the header says working with its timer only when the page says so (its state line and
-  `workingSince`, which need the web release that sends them, sidevoice-web#474, pinned in `web.pin.json`); before that pin it
-  wears the page's own line (idle, grey, no timer). Each update moves the activity's
+  takes over at once. While your words show they are all the island shows, and the Lock Screen card has no state line:
+  nothing of what the call does under them (D-LA-SAID-PRECEDENCE; the page sends no state line then, sidevoice-web#485).
+  Each update moves the activity's
 
   `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing
   changed, so only an activity the app stopped updating goes stale; a stale one draws the offline state with the page's
@@ -440,7 +434,7 @@ its buttons need iOS 17 (before that it only shows the call).
   tap fails with "There is no metadata for SetMicOff"; TestFlight build 26), and `cargo xtask mobile check-ios` and the
   archive's check refuse an intent of the package or a package the metadata includes. The extension hands the package's
   views their buttons (`CallControls`); without them (the renders) the views draw the same faces. Mute (a
-  toggle with the value), skip, cancel send and hang up ask the Rust side for the page's action through the class it
+  button whose face is the card's mic, carrying no value), skip, cancel send and hang up ask the Rust side for the page's action through the class it
   defines, `SidevoiceCallSurfaceActions` (`act:`), which reports `CallEvent::Action`. The audio switch, shown only while
   headphones are connected (D-LA-ROUTE), is the system's: it overrides the output to the speaker, or back
   (`AVAudioSession`), and the activity follows the route as it changes; headphones without a microphone keep the switch
@@ -467,7 +461,7 @@ its buttons need iOS 17 (before that it only shows the call).
 - **Evidence.** `cargo xtask mobile renders ios` runs the package's tests on an iPhone Pro Max simulator: every state's
   views drawn to PNG at 3× (`ImageRenderer`) into dist/live-activity/, one sheet per state laid out as the gallery's
   `pieces-<state>.png`, plus the mic off, Always-On, stale, the reply's and your words' chunks, missing stills, the audio on the speaker, no headphones,
-  long texts and a Pro Max; it also fails a card taller than 160 pt or an expanded island taller than 144 pt (D-LA-144), its `.bottom` content clipped at the region's top as on the device. CI uploads them as
+  long texts and a Pro Max; it also fails a card or an expanded island taller than 160 pt. CI uploads them as
   `Sidevoice-ios-live-activity-renders`.
 
 ### The Live Activity on the Simulator
@@ -487,6 +481,17 @@ names none of it, so nothing of it is in the app that ships):
   the compact island (the app in the background) and the expanded island (a long press on it, with the frames in pt of
   what SpringBoard shows at the top of the screen, as JSON: the island's and its elements'). Not the minimal island: a
   second activity of the same app does not make the island show two minimal views.
+- **The call's stand-in** (`App/CallStandIn.swift`, Debug only): the host app is `SidevoiceCallSurfaceActions`, the class the
+  Rust side registers, so a button's tap runs its intent in the app (`apple/Intents`) and reaches the stand-in the way it
+  reaches the call on a phone. It answers as the call would: a mute sets `muted` (`toggle-mute`: the other of what the card
+  showed) and shows the details again, a hang-up ends the activity, another action shows the details the test gave for it
+  (`LA_ANSWERS`). What it was asked is on the app's screen (`harness.actions`) and in the log (`LA harness stand-in: …`).
+- **The buttons** (`UITests/LiveActivityButtons.swift`, light only): mute both ways, skip and hang up on the Lock Screen card;
+  mute both ways, hang up, skip and the × in the expanded island. Each asserts that the stand-in was asked, and what the
+  activity shows: the new mic state within 10 s of the tap (the app's update, as the system draws it) and still 3 s after it is shown, the old one gone; no card within 10 s of a hang-up (its end drawn as late), and the next state after a
+  skip or a cancel, within 5 s. The host app plays silence on a loop to stay running in the background, as the app does
+  in a call (its audio session active): suspended, it got some intents only once launched again. Not the audio switch: it is drawn only while headphones are connected, and the Simulator has none. A failed
+  tap leaves a shot and SpringBoard's tree (`buttons-failed-*`). The island's × is tapped once more when nothing follows (its intent now and then never arrives), and the retry is logged (`LA buttons: retry`).
 
 It runs on the newest iPhone Pro simulator, in light and then in dark (every state; the variants in light only), into `dist/live-activity-sim/`
 (`<presentation>-<state>[-<variant>]-<light|dark>.png`, and `INDEX.md`, which names the design gallery's PNG each shot is

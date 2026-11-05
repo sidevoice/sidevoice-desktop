@@ -3,7 +3,8 @@ import XCTest
 @testable import CallActivity
 
 /// The words in chunks (D-LA-CHUNKS): where a chunk ends, and when it changes. The text is measured with a fake font, 8 pt a
-/// character, so a 330-pt line holds 41 characters and the cases are exact; the real font is the render tests'.
+/// character, so a 314-pt line holds 39 characters (four words of eight) and the cases are exact; the real font is the
+/// render tests'.
 final class TextChunksTests: XCTestCase {
     let chunker = TextChunker { CGFloat($0.count) * 8 }
 
@@ -64,20 +65,36 @@ final class TextChunksTests: XCTestCase {
         XCTAssertTrue(chunker.fitsText(chunks[0].text, 3))
     }
 
-    func testYourWordsAreTwoLineChunksAtMostThreeTheLastEndingInAnEllipsis() {
-        let text = (0..<5).map { sentence(String(UnicodeScalar(97 + $0)!), words: 8) }.joined(separator: " ")
-        let chunks = chunker.saidChunks(text)
+    func testASentencesTailStartsTheNextChunkAndItGoesOnFillingItsLines() {
+        // a: 14 words (4 lines), b: 12 words (3 lines). The tail of a (2 words) does not stand alone as a one-line chunk:
+        // the chunk goes on with b until its 3 lines are full, and b's rest starts the next.
+        let text = sentence("a", words: 14) + " " + sentence("b", words: 12)
+        let chunks = chunker.chunks(text)
         XCTAssertEqual(chunks.count, 3)
-        XCTAssertEqual(chunks[0].text, sentence("a", words: 8))
-        XCTAssertTrue(chunks[2].text.hasSuffix("…"))
-        XCTAssertTrue(chunker.fitsText(chunks[2].text, 2))
+        XCTAssertTrue(chunks[1].text.hasPrefix("aaaaaaaa aaaaaaaa."))
+        for chunk in chunks.dropLast() {
+            XCTAssertEqual(chunker.lineCount(TextChunker.words(chunk.text)[...], limit: 3), 3, "\(chunk.text) does not fill 3 lines")
+        }
+        XCTAssertEqual(chunks.map(\.text).joined(separator: " "), text)
     }
 
-    func testYourWordsWithinThreeChunksAreWhole() {
-        let text = sentence("a", words: 8) + " " + sentence("b", words: 8)
-        let chunks = chunker.saidChunks(text)
+    func testEveryChunkButTheLastFillsItsLines() {
+        let text = (0..<12).map { sentence(String(UnicodeScalar(97 + $0)!), words: 3 + $0 % 7) }.joined(separator: " ")
+        for lines in [3, 5] {
+            let chunks = chunker.chunks(text, lines: lines)
+            for chunk in chunks.dropLast() {
+                XCTAssertEqual(chunker.lineCount(TextChunker.words(chunk.text)[...], limit: lines), lines, chunk.text)
+            }
+        }
+    }
+
+    func testYourWordsAreFiveLineChunksWholeWithNoEllipsis() {
+        let text = (0..<5).map { sentence(String(UnicodeScalar(97 + $0)!), words: 8) }.joined(separator: " ")
+        let chunks = chunker.chunks(text, lines: TextChunker.saidLines)
         XCTAssertEqual(chunks.count, 2)
         XCTAssertFalse(chunks.contains { $0.text.hasSuffix("…") })
+        XCTAssertEqual(chunks.map(\.text).joined(separator: " "), text)
+        XCTAssertEqual(chunker.chunks(sentence("a", words: 8), lines: TextChunker.saidLines).count, 1)
     }
 
     func testBlankTextHasNoChunks() {
@@ -172,31 +189,32 @@ final class TextPagerTests: XCTestCase {
         XCTAssertNil(gone.text)
     }
 
-    func testYourWordsAreTwoAndAHalfSecondsAChunkAtMostThree() {
+    func testYourWordsAreTwoAndAHalfSecondsAChunkAllOfThem() {
         var pager = TextPager(chunker: chunker)
-        let said = (0..<4).map { sentence(String(UnicodeScalar(97 + $0)!), words: 8) }.joined(separator: " ")
+        // Four sentences of five lines each: four chunks, none cut.
+        let said = (0..<4).map { sentence(String(UnicodeScalar(97 + $0)!), words: 20) }.joined(separator: " ")
         let first = pager.page(kind: .said, text: said, heard: 0, now: t0)
-        XCTAssertEqual(first.text, sentence("a", words: 8))
+        XCTAssertEqual(first.text, sentence("a", words: 20))
         XCTAssertEqual(first.wake, t0 + 2.5)
         let second = pager.page(kind: .said, text: said, heard: 0, now: t0 + 2.6)
-        XCTAssertEqual(second.text, sentence("b", words: 8))
+        XCTAssertEqual(second.text, sentence("b", words: 20))
         XCTAssertEqual(second.wake, t0 + 5)
-        let third = pager.page(kind: .said, text: said, heard: 0, now: t0 + 5.1)
-        XCTAssertTrue(third.text?.hasPrefix("cccccccc") == true)
-        XCTAssertTrue(third.text?.hasSuffix("…") == true, "more was said than the three chunks hold")
-        XCTAssertNil(third.wake)
+        let last = pager.page(kind: .said, text: said, heard: 0, now: t0 + 7.6)
+        XCTAssertEqual(last.text, sentence("d", words: 20))
+        XCTAssertNil(last.wake)
         let still = pager.page(kind: .said, text: said, heard: 0, now: t0 + 100)
-        XCTAssertEqual(still.text, third.text)
+        XCTAssertEqual(still.text, last.text)
     }
 }
 
-/// Your words outlast the page's own 3 s (the page clears them then; three chunks take 7.5 s).
+/// Your words outlast the page's own 3 s (the page clears them then; their chunks take 2.5 s each).
 final class SaidHoldTests: XCTestCase {
     let chunker = TextChunker { CGFloat($0.count) * 8 }
     let t0 = Date(timeIntervalSince1970: 1_000_000)
 
+    /// Five lines: one chunk of your words.
     func sentence(_ letter: String) -> String {
-        (0..<8).map { _ in String(repeating: letter, count: 8) }.joined(separator: " ") + "."
+        (0..<20).map { _ in String(repeating: letter, count: 8) }.joined(separator: " ") + "."
     }
 
     var said: String { ["a", "b", "c"].map(sentence).joined(separator: " ") }
@@ -254,70 +272,8 @@ final class SaidHoldTests: XCTestCase {
     func testAReplyThatStartsWhileYourWordsAreHeldWins() {
         var pager = TextPager(chunker: chunker)
         _ = pager.page(kind: .said, text: said, heard: 0, now: t0)
-        let reply = pager.page(kind: .reply, text: sentence("x"), heard: 0, holdable: false, now: t0 + 3)
-        XCTAssertEqual(reply.text, sentence("x"))
+        let reply = pager.page(kind: .reply, text: "Hecho.", heard: 0, holdable: false, now: t0 + 3)
+        XCTAssertEqual(reply.text, "Hecho.")
         XCTAssertFalse(reply.held)
-    }
-}
-
-/// What the header wears while your words are up (D-LA-SAID-STATE).
-final class TonePhaseTests: XCTestCase {
-    func testWorkingWhenThePageSaysWorkingWithItsStart() {
-        var state = CallState()
-        state.phase = .said
-        state.workingSince = Date()
-        XCTAssertEqual(state.tonePhase, .working)
-    }
-
-    func testAPageThatSaysIdleWithNoTimerIsDrawnIdleNotGreen() {
-        var state = CallState()
-        state.phase = .said
-        XCTAssertEqual(state.tonePhase, .idle)
-    }
-
-    func testHeldWordsWearTheStateTheCallIsReallyIn() {
-        var state = CallState()
-        state.phase = .said
-        state.heldPhase = .holding
-        XCTAssertEqual(state.tonePhase, .holding)
-        state.heldPhase = .working
-        XCTAssertEqual(state.tonePhase, .working)
-    }
-
-    func testOtherPhasesAreThemselves() {
-        var state = CallState()
-        state.phase = .speaking
-        state.workingSince = Date()
-        XCTAssertEqual(state.tonePhase, .speaking)
-    }
-}
-
-/// Your voice's bars: 44 columns of 6 pt at least, dropped from the left in a narrow capsule.
-@available(iOS 16.1, *)
-final class VoiceBarsTests: XCTestCase {
-    func testTheColumnsAreTheDesignsAndNeverADot() {
-        XCTAssertEqual(VoiceBars.heights.count, 44)
-        XCTAssertEqual(VoiceBars.heights.min(), 6)
-        XCTAssertEqual(VoiceBars.heights.last, 6)
-    }
-
-    func testANarrowCapsuleDropsColumnsFromTheLeft() {
-        XCTAssertEqual(VoiceBars.columns(in: 290), 44)
-        XCTAssertEqual(VoiceBars.columns(in: 264), 44)
-        XCTAssertEqual(VoiceBars.columns(in: 100), 17)
-        XCTAssertEqual(VoiceBars.columns(in: 2), 0)
-    }
-}
-
-/// The carry gap: the page's line says working (its start is there) while the stage's mood is still idle.
-final class TonePhaseGapTests: XCTestCase {
-    func testHeldIdleWordsWithAWorkingStartWearWorking() {
-        var state = CallState()
-        state.phase = .said
-        state.heldPhase = .idle
-        state.workingSince = Date()
-        XCTAssertEqual(state.tonePhase, .working)
-        state.workingSince = nil
-        XCTAssertEqual(state.tonePhase, .idle)
     }
 }

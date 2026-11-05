@@ -14,6 +14,8 @@ internal data class CallCard(
     val muted: Boolean = false,
     val phase: Phase = Phase.IDLE,
     val canSkip: Boolean = false,
+    /** Whether the person's turn can still be withdrawn (Cancelar envío). */
+    val canCancelSend: Boolean = false,
     val model: String = "",
     val machine: String = "",
     /** When the working phase began (ms since the epoch); null when the page does not know it: no time is drawn then. */
@@ -31,15 +33,17 @@ internal data class CallCard(
         SPEAKING("speaking"), HOLDING("holding"), OFFLINE("offline");
 
         /**
-         * The phase's tone (HANDOVER §2, D-LA-VOICE-LILA): the voice's states share the lila, working is green, can't
-         * receive amber, idle and offline grey.
+         * The phase's tone, scheme E (the operator's, 2026-11-05): listening, transcribing and your words green, speaking
+         * blue, working violet, can't receive amber, idle and offline greys.
          */
         val tone: Tone
             get() = when (this) {
-                LISTENING, TRANSCRIBING, SAID, SPEAKING -> Tone.LILA
-                WORKING -> Tone.GREEN
+                LISTENING, TRANSCRIBING, SAID -> Tone.LISTEN
+                SPEAKING -> Tone.SPEAK
+                WORKING -> Tone.WORK
                 HOLDING -> Tone.WARN
-                IDLE, OFFLINE -> Tone.GREY
+                IDLE -> Tone.IDLE
+                OFFLINE -> Tone.OFFLINE
             }
 
         companion object {
@@ -47,7 +51,7 @@ internal data class CallCard(
         }
     }
 
-    enum class Tone { LILA, GREEN, WARN, GREY }
+    enum class Tone { LISTEN, SPEAK, WORK, WARN, IDLE, OFFLINE }
 
     /** A creature's still: its PNG, [file] in the stills folder, and how much of it the body takes ([k], 1 by default). */
     data class Still(val file: String, val k: Double = 1.0)
@@ -57,7 +61,10 @@ internal data class CallCard(
         val state: String = "",
         val mute: String = "",
         val unmute: String = "",
+        /** Skip's short label and its accessible name; cancel send's label (its accessible name too). */
+        val skip: String = "",
         val skipName: String = "",
+        val cancelSend: String = "",
         val hangUp: String = "",
         /** The audio switch's accessible name, `{route}` in it for the output's name. */
         val route: String = "",
@@ -73,6 +80,17 @@ internal data class CallCard(
     /** Whether the working time shows: only while working, and only when the page knows since when. */
     val timed: Boolean get() = phase == Phase.WORKING && workingSince != null
 
+    /** The action on the state line, by the state (the operator's option B, 2026-11-05): skip while the agent speaks,
+     *  cancel send during the person's turn, none otherwise. */
+    enum class Action { SKIP, CANCEL_SEND }
+
+    val action: Action?
+        get() = when {
+            phase == Phase.SPEAKING && canSkip -> Action.SKIP
+            (phase == Phase.LISTENING || phase == Phase.TRANSCRIBING) && canCancelSend -> Action.CANCEL_SEND
+            else -> null
+        }
+
     /** The count the stack shows: the page's, or at least this conversation and the others it drew. */
     val count: Int get() = maxOf(conversationCount, others.size + 1)
 
@@ -87,6 +105,7 @@ internal data class CallCard(
                 muted = muted,
                 phase = Phase.of(json.optString("phase", "")),
                 canSkip = json.optBoolean("canSkip", false),
+                canCancelSend = json.optBoolean("canCancelSend", false),
                 model = json.optString("model", ""),
                 machine = json.optString("machine", ""),
                 workingSince = if (json.isNull("workingSince")) null else json.optDouble("workingSince").takeIf { !it.isNaN() }?.toLong(),
@@ -97,7 +116,9 @@ internal data class CallCard(
                     state = words.optString("state", ""),
                     mute = words.optString("mute", ""),
                     unmute = words.optString("unmute", ""),
+                    skip = words.optString("skip", ""),
                     skipName = words.optString("skipName", ""),
+                    cancelSend = words.optString("cancelSend", ""),
                     hangUp = words.optString("hangUp", ""),
                     route = words.optString("route", ""),
                     speaker = words.optString("speaker", ""),
