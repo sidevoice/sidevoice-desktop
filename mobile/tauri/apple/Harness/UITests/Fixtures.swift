@@ -154,7 +154,7 @@ extension Fixture {
         return ["title": long ? texts.long.title : texts.title, "muted": micOff, "surface": surface]
     }
 
-    /// Every fixture the harness shoots (`dark`: in dark appearance too): each state; mic off; English; long texts in both
+    /// Every fixture the harness shoots (`dark`: in dark appearance too): each state; mic off; English for the states with words; long texts in both
     /// languages; stills missing; 6 and 9 conversations.
     static var all: [Fixture] {
         var all: [Fixture] = []
@@ -164,7 +164,8 @@ extension Fixture {
         for phase in ["idle", "listening", "working", "speaking"] {
             all.append(Fixture(name: "\(phase)-mic-off", details: details(phase, micOff: true), dark: phase == "working"))
         }
-        for phase in phases {
+        // English where the layout carries the call's words, not only the state's.
+        for phase in ["listening", "said", "working", "speaking"] {
             all.append(Fixture(name: "\(phase)-en", details: details(phase, language: .en)))
         }
         for phase in ["working", "said", "speaking"] {

@@ -58,7 +58,7 @@ jobs:
   simulator:
     name: Live Activity on the iOS Simulator
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

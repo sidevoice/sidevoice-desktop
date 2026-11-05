@@ -455,7 +455,7 @@ names none of it, so nothing of it is in the app that ships):
   `call-stills/`, under the Rust side's file names), then calls the app's own bridge, `CallActivityBridge.start`: the
   controller, the text pager and ActivityKit are the app's.
 - **The widget extension**, built from the shipping extension's own sources (`apple/Widget`, `apple/Intents`).
-- **XCUITest** (`UITests/`): the fixtures (`Fixtures.swift`: every state, mic off, English, long texts in both languages,
+- **XCUITest** (`UITests/`): the fixtures (`Fixtures.swift`: every state, mic off, English for the states with words, long texts in both languages,
   stills missing, 6 and 9 conversations, the gallery's texts) and, per fixture, the Lock Screen card (locked, then woken),
   the compact island (the app in the background) and the expanded island (a long press on it, with the frames in pt of
   what SpringBoard shows at the top of the screen, as JSON: the island's and its elements'). Not the minimal island: a

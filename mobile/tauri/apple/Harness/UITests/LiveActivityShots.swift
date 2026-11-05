@@ -94,9 +94,9 @@ final class LiveActivityShots: XCTestCase {
     /// Answers the system's questions over the app's card on the Lock Screen: whether it may show Live Activities
     /// (first "Allow", later "Always Allow"), until none is left.
     func allowLiveActivities() {
-        for _ in 0..<3 {
-            guard let button = ["Always Allow", "Allow"].lazy.map({ self.springboard.buttons[$0] }).first(where: \.exists)
-            else { return }
+        // One query for both: each query of SpringBoard costs seconds.
+        let button = springboard.buttons.matching(NSPredicate(format: "label IN {'Allow', 'Always Allow'}")).firstMatch
+        for _ in 0..<3 where button.exists {
             button.tap()
             settle(2)
         }
