@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "main",
-  "description": "The app's window shows only the interface bundled in the app (its own pages). It may use the app's model engine and run the voice call the app runs itself (host.engine, host.voice), read and request the app's microphone permission or open its page of the system's settings (host.microphone), and read and write the pairings the app keeps for it (host.pairings), all through the shared plugin sidevoice-shared-tauri (its ACL.md), and report the call to the app with its page's number, the creatures' stills the call's surfaces show (call_page, call_state, call_still, call_forget), turn the developer options of a nightly or a dev build on or off (developer_options), and ask for the camera and scan a QR code with the barcode scanner plugin (host.codeScanner: scan, cancel, the camera permission and the app's page of the system's settings; not its vibration). Not the call's levels (bridge-level, bridge-playback): they feed the desktop's call controls card, which this app has none of. Nothing else.",
+  "description": "The app's window shows only the interface bundled in the app (its own pages). It may use the app's model engine and run the voice call the app runs itself (host.engine, host.voice), read and request the app's microphone permission or open its page of the system's settings (host.microphone), and read and write the pairings the app keeps for it (host.pairings), all through the shared plugin sidevoice-shared-tauri (its ACL.md), and report the call to the app with its page's number, the creatures' stills the call's surfaces show (call_page, call_state, call_still, call_forget), turn the developer options of a nightly or a dev build on or off (developer_options), write its console warnings and errors, uncaught errors and unhandled rejections to the app's log (log:allow-log; shared/tauri/js/webview-log.js), and ask for the camera and scan a QR code with the barcode scanner plugin (host.codeScanner: scan, cancel, the camera permission and the app's page of the system's settings; not its vibration). Not the call's levels (bridge-level, bridge-playback): they feed the desktop's call controls card, which this app has none of. Nothing else.",
   "windows": ["main"],
   "permissions": [
     "allow-call-forget",
@@ -14,6 +14,7 @@
     "barcode-scanner:allow-open-app-settings",
     "barcode-scanner:allow-request-permissions",
     "barcode-scanner:allow-scan",
+    "log:allow-log",
     "sidevoice-shared-tauri:allow-engine-cancel",
     "sidevoice-shared-tauri:allow-engine-capabilities",
     "sidevoice-shared-tauri:allow-engine-catalogs",

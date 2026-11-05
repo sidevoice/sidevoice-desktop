@@ -239,12 +239,17 @@ async fn call_still(
         "call_still: {id} ({} base64 bytes, {px} px) from page {page}",
         png.len()
     );
+    // Every refusal is said, in the stills' public category: an id and a size, never a conversation's words.
+    let refused = |why: &str| {
+        log::warn!(target: "stills", "call_still: {id} refused: {why}");
+        format!("call_still: {why}")
+    };
     if png.len() > sidevoice_mobile_plugin::STILL_LIMIT / 3 * 4 + 4 {
-        return Err("call_still: larger than a still".into());
+        return Err(refused("larger than a still"));
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(png.as_bytes())
-        .map_err(|_| "call_still: not base64".to_owned())?;
+        .map_err(|_| refused("not base64"))?;
     tauri::async_runtime::spawn_blocking(move || {
         let room = app.state::<call::RoomCall>();
         room.save_still(page, id, bytes, px)
@@ -384,6 +389,9 @@ fn run_app() {
             call::watch_interruptions(&handle, phone);
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
+                // The page's console warnings and errors, uncaught errors and unhandled rejections, into the app's log (as
+                // the desktop's room): a creature still the page cannot draw says why there (`log_category`).
+                .initialization_script(sidevoice_shared_tauri::js::WEBVIEW_LOG)
                 .initialization_script(bridge::script(
                     APP_ORIGIN,
                     sidevoice_shared_tauri::platform::microphone::settings_available(),
@@ -469,29 +477,83 @@ fn run_app() {
 }
 
 /// The unified log as one of the app's log targets (iOS: through the Swift side's `SidevoiceLog`; nothing elsewhere, whose
-/// log already is the system's). Lines logged with the target `stills` (the creatures' stills: ids, sizes, paths, never a
-/// conversation's words) go in public, category `stills`; every other line is the app's own and may carry what the person
-/// said, so it goes in category `app`, private.
+/// log already is the system's), in the category [`log_category`] gives the line.
 fn unified_log() -> tauri_plugin_log::Target {
     use tauri_plugin_log::{fern, Target, TargetKind};
     Target::new(TargetKind::Dispatch(fern::Dispatch::new().chain(
         fern::Output::call(|record| {
-            let category = if record.target() == "stills" {
-                "stills"
-            } else {
-                "app"
-            };
+            let message = record.args().to_string();
             sidevoice_mobile_plugin::os_log(
-                category,
-                &format!("[{}] {}", record.level(), record.args()),
+                log_category(record.target(), &message),
+                &format!("[{}] {message}", record.level()),
             );
         }),
     )))
 }
 
+/// What the page says when a creature's still fails, in the only two forms that go public: sidevoice-web's
+/// `call-surface-still.ts` (`no still for`) and the bridge's `call_still` in js/mobile-bridge.js, each a conversation's
+/// id, a size and an error, never its words. Any other `[sidevoice] call surface:` warning stays private.
+const PAGE_STILLS: [&str; 2] = [
+    "console.warn: [sidevoice] call surface: no still for ",
+    "console.warn: [sidevoice] call surface: call_still ",
+];
+
+/// The unified log's category for a line `message` of the app's log with `target`: the lines about the creatures' stills
+/// (target `stills`, and the page's own about a still it could not draw or hand over, which reach the log through
+/// shared/tauri/js/webview-log.js as target `webview`) go in public, category `stills`, so a device's log shows each step
+/// of a still; every other line is the app's own or the page's and may carry what the person said, so it goes in category
+/// `app`, private.
+fn log_category(target: &str, message: &str) -> &'static str {
+    let page_still = target == tauri_plugin_log::WEBVIEW_TARGET
+        && PAGE_STILLS.iter().any(|form| message.starts_with(form));
+    if target == "stills" || page_still {
+        "stills"
+    } else {
+        "app"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stills_lines_and_the_page_s_about_a_still_are_public_and_nothing_else() {
+        let page = |line: &str| log_category("webview", line);
+        assert_eq!(log_category("stills", "call stills: kept x"), "stills");
+        assert_eq!(
+            page("console.warn: [sidevoice] call surface: no still for n|t#240 at 240px: Error: the SVG did not load"),
+            "stills"
+        );
+        assert_eq!(
+            page("console.warn: [sidevoice] call surface: call_still n|t#240 failed: the still is too big"),
+            "stills"
+        );
+        assert_eq!(
+            page("console.warn: [sidevoice] call surface: report refused what the person said"),
+            "app",
+            "only the two forms about a still"
+        );
+        assert_eq!(page("console.warn: something the person said"), "app");
+        assert_eq!(
+            page("console.warn: words [sidevoice] call surface: x"),
+            "app"
+        );
+        assert_eq!(page("console.error: [sidevoice] call surface: x"), "app");
+        assert_eq!(
+            log_category(
+                "sidevoice_mobile",
+                "console.warn: [sidevoice] call surface: x"
+            ),
+            "app",
+            "only the page's line, by its target"
+        );
+        assert_eq!(
+            log_category("sidevoice_mobile", "call_state: joined"),
+            "app"
+        );
+    }
 
     fn allowed(url: &str, app_origin: &str) -> bool {
         navigation_allowed(&Url::parse(url).unwrap(), app_origin)

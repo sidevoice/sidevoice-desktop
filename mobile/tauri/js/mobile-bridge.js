@@ -65,13 +65,17 @@
   };
   /** What goes to the app about the call (its reports, the stills, the forgetting), one after the other, on the page's
    *  number: a still is answered once its file is kept (`call_still`), and nothing after it goes before that, so a report
-   *  never names a still the app does not have yet. A refusal holds nothing up. */
+   *  never names a still the app does not have yet. A refusal holds nothing up, and a still's is said in the console, which
+   *  the app's log takes (shared/tauri/js/webview-log.js; public in iOS's unified log, category `stills`: an id, never
+   *  words). */
   let line = Promise.resolve();
   const inOrder = (command, args, answered = false) => {
     line = line
       .then(() => numbered())
       .then((number) => (answered ? transport.own.call : transport.own.send)(command, { page: number, ...args }))
-      .catch(() => {});
+      .catch((error) => {
+        if (answered && win.console) win.console.warn(`[sidevoice] call surface: ${command} ${args.id} failed:`, error);
+      });
   };
   const reporting = members.room({
     version: 2,

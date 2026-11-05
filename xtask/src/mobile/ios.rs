@@ -13,7 +13,8 @@
 //!
 //! `check_ipa` is the same check on the archive `mobile testflight` is about to upload, and what only an archive can
 //! show: that it is signed, that it is the app and the build number it was asked to be, and that it carries the symbols
-//! App Store Connect symbolicates TestFlight's crash reports with.
+//! App Store Connect symbolicates TestFlight's crash reports with. It also prints the entitlements the app and its Live
+//! Activity's extension were signed with, and warns when either lacks the App Group the creatures' stills cross in.
 //!
 //! The calls are found in the executable's strings. A C function the app imports is a symbol (`_stat`); a Foundation
 //! API a Swift or Objective-C file uses leaves its name in a symbol or a selector (`…FileAttributeKeyV12creationDate…`,
@@ -364,6 +365,30 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
         names.iter().any(|name| name.starts_with("Symbols/") && name.ends_with(".symbols")),
         format!("{}: no Symbols/*.symbols: TestFlight's crash reports would not be symbolicated", ipa.display()),
     )?;
+    // What the app and its extension were signed with, as the system will grant it: automatic provisioning decides it, not
+    // the entitlements files.
+    let appex_executable = match appex_info.get("CFBundleExecutable").and_then(plist::Value::as_string) {
+        Some(name) => {
+            let path = format!("{root}{EXTENSION}/{name}");
+            let mut bytes = Vec::new();
+            if let Ok(mut entry) = archive.by_name(&path) {
+                entry.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+            }
+            bytes
+        }
+        None => Vec::new(),
+    };
+    for (what, executable) in [("the app", &bundle.executable), (EXTENSION, &appex_executable)] {
+        let entitlements = signed_entitlements(executable);
+        if let Some(entitlements) = &entitlements {
+            let mut xml = Vec::new();
+            plist::Value::Dictionary(entitlements.clone()).to_writer_xml(&mut xml).map_err(|e| e.to_string())?;
+            println!("{what}'s signed entitlements:\n{}", String::from_utf8_lossy(&xml));
+        }
+        if let Some(warning) = app_group_missing(what, entitlements.as_ref(), identifier) {
+            eprintln!("::warning::{warning}");
+        }
+    }
     check_bundle(&bundle)?;
     check_intent_metadata(|name| {
         let path = format!("{root}{name}");
@@ -377,9 +402,78 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
     Ok(())
 }
 
+/// The entitlements a signed Mach-O executable is granted: the XML blob of its code signature (`CSMAGIC_EMBEDDED_ENTITLEMENTS`,
+/// `0xfade7171` then the blob's length with its 8-byte header, both big-endian, then the property list), the last one in the
+/// file (the signature is at its end). None in an executable signed without entitlements, or not signed.
+fn signed_entitlements(executable: &[u8]) -> Option<plist::Dictionary> {
+    const MAGIC: [u8; 4] = [0xfa, 0xde, 0x71, 0x71];
+    let at: Vec<usize> =
+        executable.windows(4).enumerate().filter(|(_, bytes)| *bytes == MAGIC).map(|(at, _)| at).collect();
+    at.into_iter().rev().find_map(|at| {
+        let length = u32::from_be_bytes(executable.get(at + 4..at + 8)?.try_into().ok()?) as usize;
+        let blob = executable.get(at + 8..at.checked_add(length)?)?;
+        blob.starts_with(b"<?xml").then(|| dictionary(blob, "entitlements").ok()).flatten()
+    })
+}
+
+/// The warning for `what` (the app or its extension) when it was signed without the App Group `group.<identifier>`
+/// (mobile/tauri/ios-project.yml), which both need: the app keeps the creatures' stills in its container and the extension
+/// draws them from there, so without it every creature on the Live Activity is the placeholder mark. A warning and not a
+/// refusal: the rest of the build still reaches the testers.
+fn app_group_missing(what: &str, entitlements: Option<&plist::Dictionary>, identifier: &str) -> Option<String> {
+    let group = format!("group.{identifier}");
+    let Some(entitlements) = entitlements else {
+        return Some(format!(
+            "{what} is signed with no entitlements: no App Group {group}, so the Live Activity draws no creature"
+        ));
+    };
+    let groups = entitlements.get("com.apple.security.application-groups").and_then(plist::Value::as_array);
+    let groups: Vec<&str> = groups.into_iter().flatten().filter_map(plist::Value::as_string).collect();
+    (!groups.contains(&group.as_str())).then(|| {
+        format!("{what} is signed without the App Group {group} (it has {groups:?}), so the Live Activity draws no creature")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An executable whose code signature carries `entitlements` (a property list's body), after other bytes.
+    fn signed(entitlements: &str) -> Vec<u8> {
+        let xml = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\">{entitlements}</plist>");
+        let mut bytes = b"\xcf\xfa\xed\xfecode\xfa\xde\x71\x71 not a blob".to_vec();
+        bytes.extend([0xfa, 0xde, 0x71, 0x71]);
+        bytes.extend((xml.len() as u32 + 8).to_be_bytes());
+        bytes.extend(xml.as_bytes());
+        bytes.extend(b"\xfa\xde\x0c\x02more of the signature");
+        bytes
+    }
+
+    #[test]
+    fn the_signed_entitlements_are_read_from_the_code_signature() {
+        let group = "<dict><key>com.apple.security.application-groups</key><array><string>group.ai.sidevoice.mobile</string></array></dict>";
+        let entitlements = signed_entitlements(&signed(group)).unwrap();
+        assert_eq!(app_group_missing("the app", Some(&entitlements), "ai.sidevoice.mobile"), None);
+        assert_eq!(signed_entitlements(b"\xcf\xfa\xed\xfe unsigned"), None);
+    }
+
+    #[test]
+    fn an_app_or_extension_signed_without_the_app_group_is_warned_of() {
+        let other = signed_entitlements(&signed(
+            "<dict><key>com.apple.security.application-groups</key><array><string>group.other</string></array></dict>",
+        ));
+        let warning =
+            app_group_missing("PlugIns/SidevoiceActivity.appex", other.as_ref(), "ai.sidevoice.mobile").unwrap();
+        assert!(
+            warning.contains("without the App Group group.ai.sidevoice.mobile") && warning.contains("group.other"),
+            "{warning}"
+        );
+        let none = signed_entitlements(&signed("<dict><key>get-task-allow</key><false/></dict>"));
+        assert!(app_group_missing("the app", none.as_ref(), "ai.sidevoice.mobile")
+            .unwrap()
+            .contains("without the App Group"));
+        assert!(app_group_missing("the app", None, "ai.sidevoice.mobile").unwrap().contains("no entitlements"));
+    }
 
     fn executable(strings: &[&str]) -> Vec<u8> {
         strings.iter().flat_map(|s| s.bytes().chain([0])).collect()

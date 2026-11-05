@@ -12,6 +12,11 @@ pub const MEMBERS: &str = include_str!("../js/members.js");
 /// invoked under the plugin's name, [`crate::PLUGIN`]; the app's own are not.
 pub const TRANSPORT: &str = include_str!("../js/transport.js");
 
+/// The page's problems in the app's log (`js/webview-log.js`): its `console.warn` and `console.error`, uncaught errors and
+/// unhandled rejections, through tauri-plugin-log's `log` command (target `webview`), narrowed and masked. An app that
+/// injects it registers that plugin and grants its window `log:allow-log`.
+pub const WEBVIEW_LOG: &str = include_str!("../js/webview-log.js");
+
 #[cfg(test)]
 mod tests {
     use super::*;

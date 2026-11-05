@@ -433,10 +433,23 @@ its buttons need iOS 17 (before that it only shows the call).
   while the call is on the speaker, until they go.
 - **The words** are the page's (`words` in the call surface), so the activity has no catalogue of its own; the output's
   name in the audio switch's accessible name is the system's.
-- **Diagnostics.** The app's log (the Rust side's `log::`) is a file, which `log show` does not read; on iOS every line also goes
-  to the unified log (`SidevoiceLog`, subsystem `ai.sidevoice`, public strings, category `stills` for the creatures' stills,
-  `intent`, `text`, `app`). A still the activity cannot draw is a placeholder, the Sidevoice mark (white, 56 % of its slot, on
-  the slot's ground), never an empty slot, and the cause is logged once.
+- **Diagnostics.** The app's log (the Rust side's `log::`, and the page's console warnings and errors, uncaught errors and
+  unhandled rejections through shared/tauri/js/webview-log.js, as on the desktop) is a file, which `log show` does not read; on
+  iOS every line also goes to the unified log (`SidevoiceLog`, subsystem `ai.sidevoice`, public strings, category `stills` for
+  the creatures' stills, `intent`, `text`, `app`; `app` is private). A still the activity cannot draw is a placeholder, the
+  Sidevoice mark (white, 56 % of its slot, on the slot's ground), never an empty slot, and the cause is logged once. A still's
+  way is one public `stills` line per step, which `log show --predicate 'subsystem == "ai.sidevoice" AND category == "stills"'`
+  reads from a sysdiagnose or `log collect`:
+  - the page could not draw it (`console.warn: [sidevoice] call surface: no still for <id> at <px>px: <error>`, sidevoice-web),
+    or the app did not answer its `call_still` (`… call surface: call_still <id> failed: <error>`, js/mobile-bridge.js);
+  - the app received it (`call_still: <id> (<n> base64 bytes, <px> px) from page <n>`), refused it (`call_still: <id> refused:
+    …`, `call stills: refused …`, `call_still: not kept: …`) or kept it (`call stills: kept <path> (<n> bytes, <px> px)`), in
+    the folder said once (`call stills: folder <path> (shared container: true|false)`);
+  - the activity's state names it (`activity state names stills: <file> (there|<why not>), …`, the app's Swift);
+  - the extension drew it (`still drawn: <file>`) or not (`still not drawn: <why>`, `no still named in the call's state`).
+
+  `mobile testflight` prints the entitlements the app and the extension were signed with, and warns when either lacks the
+  App Group (`cargo xtask mobile testflight`, `ios::check_ipa`).
 - **Evidence.** `cargo xtask mobile renders ios` runs the package's tests on an iPhone Pro Max simulator: every state's
   views drawn to PNG at 3× (`ImageRenderer`) into dist/live-activity/, one sheet per state laid out as the gallery's
   `pieces-<state>.png`, plus the mic off, Always-On, stale, the reply's and your words' chunks, missing stills, the audio on the speaker, no headphones,
