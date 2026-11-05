@@ -83,7 +83,7 @@ jobs:
         run: command -v xcodegen || brew install xcodegen
       - name: The Live Activity on an iPhone Pro simulator, every fixture in light and dark (cargo xtask mobile live-activity ios)
         env:
-          LA_ONLY: ${{ inputs.only || 'working' }}
+          LA_ONLY: ${{ inputs.only }}
         run: cargo xtask mobile live-activity ios
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}

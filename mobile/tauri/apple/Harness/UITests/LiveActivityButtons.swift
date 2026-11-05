@@ -139,7 +139,7 @@ final class LiveActivityButtons: XCTestCase {
     /// - `mic`: `sees` within 1 s, and still 2 s later (the activity's state, not only the toggle's own face);
     /// - otherwise `sees` within 5 s (a button's intent takes about a second to run), in the island opened again: a
     ///   button's tap closes it;
-    /// - `gone`: no card within 5 s.
+    /// - `gone`: no card within 5 s (the island closed and opened again first).
     func tap(_ label: String, in place: Place, sees: XCUIElement? = nil, mic: Bool = false, gone: Bool = false) {
         let step = "\(name) \(place.rawValue) \(label)"
         var button = control(label)
@@ -154,6 +154,13 @@ final class LiveActivityButtons: XCTestCase {
         }
         button.tap()
         if gone {
+            if place == .island {
+                // An expanded island goes on drawing an activity ended under it: closed, then opened again.
+                settle(2)
+                XCUIDevice.shared.press(.home)
+                settle(1)
+                expandIsland()
+            }
             if !disappears(control(es.hangUp), within: 5) { fail(step, "the card is still there 5 s after") }
             return
         }
