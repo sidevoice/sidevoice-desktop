@@ -31,13 +31,18 @@ final class LiveActivityShots: XCTestCase {
             only.isEmpty ? appearance == "light" || $0.dark : only.contains($0.name)
         }
         XCTAssertFalse(fixtures.isEmpty, "no fixture named in LA_ONLY")
+        // A first fixture whose shots are not kept: the first Lock Screen after the simulator boots shows no card, and
+        // it is where the system first asks to allow the app's Live Activities.
+        if let first = Fixture.all.first {
+            XCTContext.runActivity(named: "warm-up") { _ in shoot(first, keep: false) }
+        }
         for fixture in fixtures {
             XCTContext.runActivity(named: fixture.name) { _ in shoot(fixture) }
         }
     }
 
     /// Starts `fixture`'s activity in the harness app, then takes its shots.
-    func shoot(_ fixture: Fixture) {
+    func shoot(_ fixture: Fixture, keep: Bool = true) {
         let app = XCUIApplication()
         app.launchEnvironment["LA_FIXTURE"] = fixture.json
         // Launched once more if it did not start: a launch now and then reaches the app without its environment.
@@ -60,13 +65,8 @@ final class LiveActivityShots: XCTestCase {
             settle(1)
             XCUIDevice.shared.press(.home)
             settle(1.5)
-            // The system asks once whether the app may show Live Activities, over its first card on the Lock Screen.
-            let allow = springboard.buttons["Allow"]
-            if allow.exists {
-                allow.tap()
-                settle(1)
-            }
-            save(name(.lock, fixture))
+            allowLiveActivities()
+            if keep { save(name(.lock, fixture)) }
             XCUIDevice.shared.press(.home)
             settle(1)
         }
@@ -74,9 +74,9 @@ final class LiveActivityShots: XCTestCase {
         // The app in the background: the island shows the activity, compact.
         XCUIDevice.shared.press(.home)
         settle(1.5)
-        if fixture.presentations.contains(.compact) { save(name(.compact, fixture)) }
+        if keep, fixture.presentations.contains(.compact) { save(name(.compact, fixture)) }
 
-        if fixture.presentations.contains(.expanded) {
+        if keep, fixture.presentations.contains(.expanded) {
             // A long press on the island expands it.
             let screen = springboard.frame
             springboard.coordinate(withNormalizedOffset: .zero)
@@ -88,6 +88,17 @@ final class LiveActivityShots: XCTestCase {
             frames(shot)
             XCUIDevice.shared.press(.home)
             settle(0.8)
+        }
+    }
+
+    /// Answers the system's questions over the app's card on the Lock Screen: whether it may show Live Activities
+    /// (first "Allow", later "Always Allow"), until none is left.
+    func allowLiveActivities() {
+        for _ in 0..<3 {
+            guard let button = ["Always Allow", "Allow"].lazy.map({ self.springboard.buttons[$0] }).first(where: \.exists)
+            else { return }
+            button.tap()
+            settle(2)
         }
     }
 
