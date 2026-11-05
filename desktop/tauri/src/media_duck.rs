@@ -5,7 +5,9 @@
 use crate::platform::media_duck as platform;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sidevoice_desktop_core::media_duck::{wanted, Access, Ducker, Hold, Level, Mode, Permission, Status, Touch};
+use sidevoice_desktop_core::media_duck::{
+    may_restart, wanted, Access, Ducker, Hold, Level, Mode, Permission, Status, Touch,
+};
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -184,7 +186,8 @@ fn ask(permission: Permission) {
 /// `host.mediaDuck`'s one command: `action` `get`; `set` with `mode` (`lower`, `pause` or `off`); `level` with `level`
 /// (`half`, `quarter` or `mute`: how far Lower goes, applied at once while lowered); `allow` with
 /// `permission` (`capture` or `automation`), the person's own request to let the app do that, which is when the system may
-/// ask; or `settings` with `permission`, the system's page where the person turns it back on.
+/// ask; `settings` with `permission`, the system's page where the person turns it back on; or `restart`, which quits and
+/// reopens the app once System Audio Recording is allowed but only a new process sees it (`capture` is `restart`).
 #[tauri::command]
 pub async fn media_duck(
     app: AppHandle,
@@ -225,6 +228,26 @@ pub async fn media_duck(
             let permission = permission_of(permission)?;
             let _ = tauri::async_runtime::spawn_blocking(move || ask(permission)).await;
             // What is stored now: the person may have chosen again while the system was asking.
+            Ok(status(crate::stored_media_duck(&app)))
+        }
+        "restart" => {
+            // The permission was allowed, and only a new process sees it. Refused unless the page was told so, and while a
+            // call is joined: it would drop it.
+            if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(refuse("reset.busy", "a reset is under way".into()));
+            }
+            let joined = app.state::<crate::AppState>().call.lock().unwrap().joined;
+            let capture = tauri::async_runtime::spawn_blocking(platform::capture).await.ok().flatten();
+            may_restart(capture, joined).map_err(|key| refuse(key, "not restarting now".into()))?;
+            // From a thread of its own, after the answer is on its way: what was lowered is given back first (quitting does
+            // it too), then the app starts again and quits (as an update's restart does).
+            let restarting = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                release(&restarting);
+                crate::local_host::shutdown(&restarting);
+                restarting.restart()
+            });
             Ok(status(crate::stored_media_duck(&app)))
         }
         "settings" => {

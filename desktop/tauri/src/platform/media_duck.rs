@@ -137,3 +137,10 @@ pub fn act(step: &Step) -> bool {
         Step::Play { key } => Native::play(key),
     }
 }
+
+/// What the check that runs in a fresh process prints (`--sidevoice-capture-check`): this process's own answer about
+/// System Audio Recording, `unknown` where the system has none. Never asks the person, and never reads the fresh answer
+/// of another process (this one is that process).
+pub fn capture_check() -> Access {
+    Native::capture().unwrap_or(Access::Unknown)
+}
