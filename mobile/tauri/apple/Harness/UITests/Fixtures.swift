@@ -14,6 +14,9 @@ struct Fixture {
     var presentations: [Presentation] = [.lock, .compact, .expanded]
     /// A second activity beside it, for the minimal presentation.
     var second = false
+    /// Shot in dark appearance too: every state, and the variants the gallery draws dark. The others are shot in light
+    /// only, which keeps the run within the CI's time.
+    var dark = false
 
     var json: String {
         let data = try! JSONSerialization.data(withJSONObject: details, options: [.sortedKeys])
@@ -153,15 +156,15 @@ extension Fixture {
         return ["title": long ? texts.long.title : texts.title, "muted": micOff, "surface": surface]
     }
 
-    /// Every fixture the harness shoots: each state; mic off; English; long texts in both languages; stills missing; 6
+    /// Every fixture the harness shoots (`dark`: in dark appearance too): each state; mic off; English; long texts in both languages; stills missing; 6
     /// and 9 conversations; and the minimal island beside a second activity.
     static var all: [Fixture] {
         var all: [Fixture] = []
         for phase in phases {
-            all.append(Fixture(name: phase, details: details(phase)))
+            all.append(Fixture(name: phase, details: details(phase), dark: true))
         }
         for phase in ["idle", "listening", "working", "speaking"] {
-            all.append(Fixture(name: "\(phase)-mic-off", details: details(phase, micOff: true)))
+            all.append(Fixture(name: "\(phase)-mic-off", details: details(phase, micOff: true), dark: phase == "working"))
         }
         for phase in phases {
             all.append(Fixture(name: "\(phase)-en", details: details(phase, language: .en)))
@@ -171,7 +174,7 @@ extension Fixture {
             all.append(Fixture(name: "\(phase)-long-en", details: details(phase, language: .en, long: true)))
         }
         for phase in ["working", "listening"] {
-            all.append(Fixture(name: "\(phase)-no-still", details: details(phase, stills: false)))
+            all.append(Fixture(name: "\(phase)-no-still", details: details(phase, stills: false), dark: true))
         }
         for count in [6, 9] {
             all.append(Fixture(name: "working-conversations-\(count)", details: details("working", conversations: count)))
@@ -179,7 +182,9 @@ extension Fixture {
         for (name, phase, micOff) in [("working", "working", false), ("listening", "listening", false),
                                       ("working-mic-off", "working", true)] {
             all.append(
-                Fixture(name: name, details: details(phase, micOff: micOff), presentations: [.minimal], second: true))
+                Fixture(
+                    name: name, details: details(phase, micOff: micOff), presentations: [.minimal], second: true,
+                    dark: name == "working"))
         }
         return all
     }
