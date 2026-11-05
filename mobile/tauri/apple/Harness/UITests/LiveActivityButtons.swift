@@ -5,8 +5,8 @@ import XCTest
 /// class the intent hands the action to, and answers as the app's call would. Each test asserts that the stand-in was asked
 /// for the action (`harness.actions`, read from the app afterwards) and that the activity shows the answer: the new mic
 /// state within 10 s of the tap (the face is the activity's: the system draws the app's update 1.5 to over 8 s after the tap on the Simulator) and still 3 s
-/// after it, the old one gone; the card gone, and the next state after a skip or a cancel, within 5 s (a button's intent takes about a second
-/// to run, and its tap closes the island). Mute's rule (desktop#430): a tap does
+/// after it, the old one gone; the card gone within 10 s (the system draws its end as late as a mute's face); the next state
+/// after a skip or a cancel within 5 s (a button's intent takes about a second to run, and its tap closes the island). Mute's rule (desktop#430): a tap does
 /// what the card showed, so Silenciar mutes and Activar micrófono unmutes. Light appearance only.
 ///
 /// Not tapped: the audio switch, which the activity draws only while headphones are connected, and the Simulator has none.
@@ -134,7 +134,7 @@ final class LiveActivityButtons: XCTestCase {
     /// - `mic`: `sees` within 10 s (the button has no face of its own: the app's update, as the system draws it), and still 3 s after it is shown, with no control labelled `label` left (the face holds);
     /// - otherwise `sees` within 5 s (a button's intent takes about a second to run), in the island opened again: a
     ///   button's tap closes it;
-    /// - `gone`: no card within 5 s (the island closed and opened again first).
+    /// - `gone`: no card within 10 s, drawn as late as a mute's face (the island closed and opened again first).
     ///
     /// `retry`: when `sees` is not shown, tapped once more before failing, and the retry logged (the island's ×: now and
     /// then its intent never arrives on the Simulator).
@@ -162,7 +162,7 @@ final class LiveActivityButtons: XCTestCase {
                 settle(1)
                 expandIsland()
             }
-            if !disappears(control(es.hangUp), within: 5) { fail(step, "the card is still there 5 s after") }
+            if !disappears(control(es.hangUp), within: 10) { fail(step, "the card is still there 10 s after") }
             return
         }
         guard let sees else { return }
