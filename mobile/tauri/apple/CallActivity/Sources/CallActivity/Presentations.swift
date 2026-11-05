@@ -129,8 +129,8 @@ public struct ExpandedBody: View {
     /// The island's geometry (R2-7, R2-8), made deterministic: the widget zeroes the system's margins at the sides and the
     /// bottom (`contentMargins`, iOS 17), so these paddings are all there is there: 18 at the sides, 14 below the voice
     /// views and the reply, 12 below the closed states' row. The bottom band (anything whose bottom lies within 36 pt of the
-    /// island's bottom: the controls, the capsule, Saltar) keeps 26 from the sides, clear of the device's rounder corners;
-    /// text keeps 18 (D-LA-CORNERS). The top is the system's: its `.bottom` region starts below the
+    /// island's bottom: the controls, the capsule, Saltar) keeps 26 from the sides, Saltar 30, clear of the device's
+    /// rounder corners; text keeps 18 (D-LA-CORNERS). The top is the system's: its `.bottom` region starts below the
     /// camera row (36.7 pt measured on a 17 Pro Max; `cameraRow` is the gallery's 36), and `top` takes it to 40 from the
     /// island's edge. The budget is 144 pt (D-LA-144), so each state's content fits in the 104 under that: the reply is
     /// three lines, and the gaps are what gives first, never a line of text or a button.
@@ -146,6 +146,8 @@ public struct ExpandedBody: View {
     /// The bottom band's distance from the island's sides (D-LA-CORNERS): `side` and `bandInset`.
     public static let corner: CGFloat = 26
     static let bandInset: CGFloat = corner - side
+    /// Saltar's: at 26 the Simulator still cut its bottom-right end (D-LA-CORNERS allows 28 or 30; 28 measured marginal).
+    static let skipInset: CGFloat = 30 - side
     /// What the system leaves above the `.bottom` region (the camera's row), which the render tests reproduce.
     public static let cameraRow: CGFloat = 36
     /// The gap from the camera row to the first element: 40 pt from the island's edge in all.
@@ -286,7 +288,7 @@ struct VoiceCapsule: View {
     }
 }
 
-/// Speaking: the reply's chunk, 15 on 18, three lines, all at full strength (no karaoke); Saltar 4 pt below it, right, 26
+/// Speaking: the reply's chunk, 15 on 18, three lines, all at full strength (no karaoke); Saltar 4 pt below it, right, 30
 /// from the island's side (D-LA-CORNERS).
 /// The creature beside the camera is `ExpandedLeading`'s.
 @available(iOS 16.1, *)
@@ -323,7 +325,7 @@ struct Reply: View {
                     }
                 }
                 .accessibilityLabel(state.words.skipName)
-                .padding(.trailing, ExpandedBody.bandInset)
+                .padding(.trailing, ExpandedBody.skipInset)
             } else {
                 Color.clear.frame(height: 26)
             }

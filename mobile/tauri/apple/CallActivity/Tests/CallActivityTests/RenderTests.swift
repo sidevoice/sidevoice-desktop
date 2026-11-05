@@ -164,7 +164,7 @@ final class RenderTests: XCTestCase {
     }
 
     /// The expanded island: black, radius 44, the camera at the top; B's content is `ExpandedBody`, which carries its own
-    /// paddings (18 at the sides, 26 for the bottom band, 14 or 12 below, 4 below the camera's row: D-LA-CORNERS), as on
+    /// paddings (18 at the sides, 26 for the bottom band (Saltar 30), 14 or 12 below, 4 below the camera's row: D-LA-CORNERS), as on
     /// the device; speaking's creature is `ExpandedLeading`, beside the camera.
     func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
         ZStack(alignment: .topLeading) {
