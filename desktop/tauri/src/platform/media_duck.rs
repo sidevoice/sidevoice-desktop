@@ -35,6 +35,11 @@ trait Os {
         None
     }
 
+    /// This process's own answer to `capture`, with no fresh process started: what `--sidevoice-capture-check` prints.
+    fn capture_own() -> Option<Access> {
+        None
+    }
+
     /// Asks the person for that permission, if there is one; the system may show a dialog. Returns once answered, or after
     /// a while.
     fn ask_capture() {}
@@ -142,5 +147,5 @@ pub fn act(step: &Step) -> bool {
 /// System Audio Recording, `unknown` where the system has none. Never asks the person, and never reads the fresh answer
 /// of another process (this one is that process).
 pub fn capture_check() -> Access {
-    Native::capture().unwrap_or(Access::Unknown)
+    Native::capture_own().unwrap_or(Access::Unknown)
 }

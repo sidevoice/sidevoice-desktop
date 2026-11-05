@@ -129,6 +129,23 @@ pub fn with_fresh(own: Access, fresh: Option<Access>) -> Access {
     }
 }
 
+/// Who is asking for System Audio Recording's answer. Only a report to the page may start a fresh process; the check that
+/// runs in that process (`--sidevoice-capture-check`) is a child, and a child never starts one: it reads its own answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader {
+    Report,
+    Check,
+}
+
+/// The answer for `reader` where this process says `own`. `probe` (a fresh process) is only ever called for a report, and
+/// only where `own` is a no or not yet: the check path cannot reach it.
+pub fn capture_for(reader: Reader, own: Access, probe: impl FnOnce() -> Option<Access>) -> Access {
+    match (reader, own) {
+        (Reader::Report, Access::Undetermined | Access::Denied) => with_fresh(own, probe()),
+        _ => own,
+    }
+}
+
 /// Whether a restart for a permission may go ahead: only when the page was told one is needed (`capture` is `Restart`), and
 /// not while a call is joined (it would drop it): the refusal's key otherwise.
 pub fn may_restart(capture: Option<Access>, joined: bool) -> Result<(), &'static str> {
@@ -520,6 +537,18 @@ mod tests {
         assert_eq!(with_fresh(Unknown, Some(Granted)), Unknown);
         // A refusal the fresh process sees where this one never saw a question is shown as a refusal.
         assert_eq!(with_fresh(Undetermined, Some(Denied)), Denied);
+    }
+
+    #[test]
+    fn the_check_never_probes_and_a_report_probes_only_where_it_can_matter() {
+        use Access::*;
+        for own in [Granted, Denied, Undetermined, Unknown, Restart] {
+            assert_eq!(capture_for(Reader::Check, own, || panic!("the check started a process")), own);
+        }
+        assert_eq!(capture_for(Reader::Report, Denied, || Some(Granted)), Restart);
+        assert_eq!(capture_for(Reader::Report, Undetermined, || Some(Denied)), Denied);
+        assert_eq!(capture_for(Reader::Report, Granted, || panic!("nothing to ask")), Granted);
+        assert_eq!(capture_for(Reader::Report, Unknown, || panic!("nothing to ask")), Unknown);
     }
 
     #[test]
