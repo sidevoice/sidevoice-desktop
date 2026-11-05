@@ -21,14 +21,13 @@ public struct TextChunker {
         }
     }
 
-    /// The width a text's width is measured in a line of; the island's narrowest column is 344 pt (17 Pro: 380 - 2 x 18),
-    /// 4 % spare for the difference between this greedy wrap and SwiftUI's line breaking.
-    public static let width: CGFloat = 330
+    /// The width a text's width is measured in a line of; the island's narrowest text column is 322 pt (17 Pro: 374 - 2 x 26,
+    /// the bottom band's insets: D-LA-CORNERS), 2.5 % spare for the difference between this greedy wrap and the view's.
+    public static let width: CGFloat = 314
     /// The reply: three lines, with Saltar below (the island's budget is 144 pt: R2-8, D-LA-144).
     public static let replyLines = 3
-    /// Your words: two lines under the header, at most three chunks.
-    public static let saidLines = 2
-    public static let saidChunks = 3
+    /// Your words: all there is below the camera, five lines (the 90 pt under it).
+    public static let saidLines = 5
 
     /// The width of a one-line string, in points.
     public typealias Measure = (String) -> CGFloat
@@ -129,67 +128,40 @@ public struct TextChunker {
         Chunk(text: words.map(\.text).joined(separator: " "), start: words.first?.start ?? 0)
     }
 
-    /// `text` as chunks of at most `lines` lines:
-    ///  1. whole sentences, as many as fit together;
-    ///  2. a sentence that does not fit alone is cut at its last clause break that fits, if that keeps at least half of
-    ///     what fits, otherwise after the last word that fits;
-    ///  3. the rest starts the next chunk. No ellipsis inside a reply: the next chunk follows.
+    /// `text` as chunks of at most `lines` lines, each but the last filling its lines (a chunk is never one line while more
+    /// follows):
+    ///  1. as many words as fit;
+    ///  2. ended after the last sentence among them, else the last clause break, when the chunk then still takes as many
+    ///     lines and keeps at least half of its words; otherwise after the last word that fits;
+    ///  3. the rest, a sentence's tail included, starts the next chunk, which goes on filling with what follows. No ellipsis
+    ///     inside a reply: the next chunk follows.
     public func chunks(_ text: String, lines: Int = TextChunker.replyLines) -> [Chunk] {
         let words = Self.words(text)
-        guard !words.isEmpty else { return [] }
-        var sentences: [Range<Int>] = []
-        var first = 0
-        for (index, word) in words.enumerated() where word.endsSentence || index == words.count - 1 {
-            sentences.append(first..<(index + 1))
-            first = index + 1
-        }
         var out: [Chunk] = []
-        var current = 0..<0
-        for sentence in sentences {
-            let joined = (current.isEmpty ? sentence.lowerBound : current.lowerBound)..<sentence.upperBound
-            if fits(words[joined], lines) {
-                current = joined
-                continue
-            }
-            if !current.isEmpty { out.append(chunk(words[current])) }
-            var from = sentence.lowerBound
-            while !fits(words[from..<sentence.upperBound], lines) {
-                var cut = from
-                var clause = from
-                for index in from..<sentence.upperBound {
-                    guard fits(words[from...index], lines) else { break }
-                    cut = index + 1
-                    if words[index].endsClause { clause = index + 1 }
-                }
-                let kept = cut - from
-                let atClause = clause - from
-                let count = max(1, atClause > 0 && atClause * 2 >= kept ? atClause : kept)
-                out.append(chunk(words[from..<(from + count)]))
-                from += count
-            }
-            current = from..<sentence.upperBound
+        var from = 0
+        while from < words.count {
+            // One word at least: a word wider than the lines is broken by characters.
+            var cut = from + 1
+            while cut < words.count, fits(words[from...cut], lines) { cut += 1 }
+            if cut < words.count { cut = end(words, from: from, cut: cut, lines: lines) }
+            out.append(chunk(words[from..<cut]))
+            from = cut
         }
-        if !current.isEmpty { out.append(chunk(words[current])) }
         return out
     }
 
-    /// Your words: the same chunks at two lines, at most three of them; the last ends in "…" when more was said.
-    public func saidChunks(_ text: String) -> [Chunk] {
-        var all = chunks(text, lines: Self.saidLines)
-        guard all.count > Self.saidChunks else { return all }
-        all = Array(all.prefix(Self.saidChunks))
-        var last = all[Self.saidChunks - 1]
-        var words = last.text.split(separator: " ").map(String.init)
-        func fitsWithEllipsis(_ words: [String]) -> Bool {
-            let probe = Self.words(words.joined(separator: " ") + "…")
-            return fits(probe[...], Self.saidLines)
+    /// Where the chunk `words[from..<cut]` (as many words as fit, more following) ends: after its last sentence, else its last
+    /// clause break, if the chunk then takes as many lines and keeps at least half its words; otherwise at `cut`.
+    private func end(_ words: [Word], from: Int, cut: Int, lines: Int) -> Int {
+        let full = lineCount(words[from..<cut], limit: lines)
+        for ends in [\Word.endsSentence, \Word.endsClause] {
+            for index in stride(from: cut - 1, through: from, by: -1) where words[index][keyPath: ends] {
+                // The last one decides: an earlier one keeps fewer words and no more lines.
+                guard (index + 1 - from) * 2 >= cut - from, lineCount(words[from...index], limit: lines) == full else { break }
+                return index + 1
+            }
         }
-        while words.count > 1, !fitsWithEllipsis(words) { words.removeLast() }
-        var text = words.joined(separator: " ")
-        if let end = text.last, ",;:.".contains(end) { text.removeLast() }
-        last.text = text + "…"
-        all[Self.saidChunks - 1] = last
-        return all
+        return cut
     }
 }
 
@@ -208,7 +180,7 @@ public struct TextPager {
         public var text: String?
         public var wake: Date?
         /// Your words are still being shown although the call's phase has moved on (the page clears them after 3 s, the
-        /// chunks take up to 7.5 s): the caller draws them as your words.
+        /// chunks take 2.5 s each): the caller draws them as your words.
         public var held = false
     }
 
@@ -258,7 +230,7 @@ public struct TextPager {
         if source?.kind != kind || source?.text != text || source?.scope != scope {
             // A new text: the chunk the voice is in (a reply that starts mid-way), or the first of your words, at once.
             source = (kind, text, scope)
-            chunks = kind == .reply ? chunker.chunks(text) : chunker.saidChunks(text)
+            chunks = chunker.chunks(text, lines: kind == .reply ? TextChunker.replyLines : TextChunker.saidLines)
             begun = now
             shown = kind == .reply ? target(heard) : 0
             since = now

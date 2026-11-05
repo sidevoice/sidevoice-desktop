@@ -374,9 +374,8 @@ final class Controller {
         let page = pager.page(
             kind: kind, text: state.text, heard: report.heard, holdable: TextPager.holds(state.phase), scope: scope, now: Date())
         state.text = page.text
-        // Your words outlast the page's 3 s: they go on as your words, under the header of the state the call is really in.
+        // Your words outlast the page's 3 s: they go on as your words, whatever the call is doing under them.
         if page.held {
-            state.heldPhase = state.phase
             state.phase = .said
         }
         due = page.wake

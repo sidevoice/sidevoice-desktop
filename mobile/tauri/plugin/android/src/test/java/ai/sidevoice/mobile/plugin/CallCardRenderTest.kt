@@ -66,6 +66,16 @@ class CallCardRenderTest {
                 "long-speaking-$appearance",
                 headphones = true,
             )
+            // The state line's action in English, muted.
+            for (phase in listOf(CallCard.Phase.SPEAKING, CallCard.Phase.LISTENING)) {
+                val card = card(phase, true)
+                val state = if (phase == CallCard.Phase.SPEAKING) "Speaking" else "Listening"
+                render(
+                    card.copy(words = card.words.copy(state = state, mute = "Mute", unmute = "Unmute", skip = "Skip", cancelSend = "Cancel sending")),
+                    "${phase.wire}-en-mic-off-$appearance",
+                    headphones = true,
+                )
+            }
             // No headphones: no audio switch.
             render(card(CallCard.Phase.IDLE, false), "idle-no-headphones-$appearance", headphones = false)
             save(publicVersion(), "public-$appearance", collapsed = true)
@@ -76,7 +86,7 @@ class CallCardRenderTest {
     private fun render(card: CallCard, name: String, headphones: Boolean) {
         val context: Context = ApplicationProvider.getApplicationContext()
         val route = if (headphones) CallCardViews.Route(CallCardViews.Output.HEADPHONES, name = "AirPods Pro") else null
-        val intents = CallCardViews.Intents(null, null, null, null, null)
+        val intents = CallCardViews.Intents(null, null, null, null, null, null)
         val views = CallCardViews(context, card, route, intents) { still -> stills[still.file] }
         val notification = NotificationCompat.Builder(context, "call-card")
             .setSmallIcon(R.drawable.ic_call_notification)
@@ -126,6 +136,7 @@ class CallCardRenderTest {
         muted = muted,
         phase = phase,
         canSkip = phase == CallCard.Phase.SPEAKING,
+        canCancelSend = phase == CallCard.Phase.LISTENING || phase == CallCard.Phase.TRANSCRIBING,
         model = "Opus 5.5",
         machine = "mac-studio",
         workingSince = if (phase == CallCard.Phase.WORKING) System.currentTimeMillis() - 102_000 else null,
@@ -136,7 +147,9 @@ class CallCardRenderTest {
             state = STATES.getValue(phase),
             mute = "Silenciar",
             unmute = "Activar micrófono",
+            skip = "Saltar",
             skipName = "Saltar lo que está sonando",
+            cancelSend = "Cancelar envío",
             hangUp = "Colgar",
             route = "Salida de audio: {route}",
             speaker = "Altavoz",

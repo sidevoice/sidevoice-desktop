@@ -13,7 +13,8 @@ public struct CallActivityAttributes: ActivityAttributes {
 /// What the activity draws, as the app last told it (HANDOVER §6). Built by the app from the call's surface
 /// (`CallActivityApp`); every word in it is the page's, in its language.
 public struct CallState: Codable, Hashable {
-    /// The app's own states (HANDOVER §0), plus "said", the few seconds after the person's turn is sent.
+    /// The app's own states (HANDOVER §0), plus "said", the few seconds after the person's turn is sent: their words, and
+    /// nothing of the state under them (D-LA-SAID-PRECEDENCE), in the person's lila.
     public enum Phase: String, Codable, Hashable {
         case idle, listening, transcribing, said, working, speaking, holding, offline
     }
@@ -54,9 +55,6 @@ public struct CallState: Codable, Hashable {
     }
 
     public var phase: Phase = .idle
-    /// While your words are held past the page's own 3 s (`TextPager`), `phase` is `.said` (the layout) and this is the
-    /// phase the call really is in.
-    public var heldPhase: Phase?
     public var title = ""
     /// "Opus 5.5", the page's wording of the model.
     public var model = ""
@@ -82,17 +80,6 @@ public struct CallState: Codable, Hashable {
     public var language = ""
 
     public init() {}
-
-    /// The phase whose tone, glyph and timer the activity wears. Your words (`.said`) are not a state (D-LA-SAID-STATE): the
-    /// call is working on them, and the header says so, with its timer, when the page says so (the working start is there);
-    /// a page that does not (it says idle, no timer) is drawn as it says, never green "Resting".
-    public var tonePhase: Phase {
-        guard phase == .said else { return phase }
-        // A phase that is a condition of its own (can't receive, offline) is what the words wear; idle or working is
-        // decided by the page's working start, whichever of them the held phase was.
-        if let heldPhase, heldPhase != .working, heldPhase != .idle { return heldPhase }
-        return workingSince != nil || heldPhase == .working ? .working : .idle
-    }
 
     /// The locale the system's own words on the activity follow: the page's language, else the device's.
     public var locale: Locale {

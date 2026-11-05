@@ -45,6 +45,7 @@ internal class CallCardViews(
     data class Intents(
         val mute: PendingIntent?,
         val skip: PendingIntent?,
+        val cancelSend: PendingIntent?,
         val hangUp: PendingIntent?,
         val route: PendingIntent?,
         val conversations: PendingIntent?,
@@ -52,7 +53,8 @@ internal class CallCardViews(
 
     private val art = CallCardArt(context)
 
-    /** The expanded card: tile, three lines, the audio switch; mute, skip, the stack and hang up. */
+    /** The expanded card: tile, three lines (the state's with its action: skip or cancel send), the audio switch; mute, the
+     *  stack and hang up. */
     fun expanded(): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.call_card)
         val tone = tone()
@@ -109,11 +111,25 @@ internal class CallCardViews(
             mute(views, R.id.call_card_mute_round, R.id.call_card_mute_round_icon)
         }
 
-        // Skip is live only while the agent speaks; otherwise drawn at 32 % and inert.
-        views.setFloat(R.id.call_card_skip, "setAlpha", if (card.canSkip) 1f else DISABLED_ALPHA)
-        views.setBoolean(R.id.call_card_skip, "setEnabled", card.canSkip)
-        views.setContentDescription(R.id.call_card_skip, card.words.skipName)
-        intents.skip?.let { views.setOnClickPendingIntent(R.id.call_card_skip, it) }
+        // The action the state offers, on the state line: Saltar while the agent speaks, Cancelar envío during the person's
+        // turn, none otherwise.
+        val action = card.action
+        views.setViewVisibility(R.id.call_card_action, if (action != null) View.VISIBLE else View.GONE)
+        when (action) {
+            CallCard.Action.SKIP -> {
+                views.setImageViewResource(R.id.call_card_action_icon, R.drawable.ic_card_skip)
+                views.setTextViewText(R.id.call_card_action_label, card.words.skip.ifEmpty { context.getString(R.string.call_notification_skip) })
+                views.setContentDescription(R.id.call_card_action, card.words.skipName.ifEmpty { card.words.skip })
+                intents.skip?.let { views.setOnClickPendingIntent(R.id.call_card_action, it) }
+            }
+            CallCard.Action.CANCEL_SEND -> {
+                views.setImageViewResource(R.id.call_card_action_icon, R.drawable.ic_card_cancel)
+                views.setTextViewText(R.id.call_card_action_label, card.words.cancelSend.ifEmpty { context.getString(R.string.call_notification_cancel_send) })
+                views.setContentDescription(R.id.call_card_action, null)
+                intents.cancelSend?.let { views.setOnClickPendingIntent(R.id.call_card_action, it) }
+            }
+            null -> {}
+        }
 
         if (faces.isEmpty()) {
             views.setViewVisibility(R.id.call_card_others, View.GONE)
@@ -155,7 +171,7 @@ internal class CallCardViews(
 
     /**
      * Whether the mute pill's label fits whole in the actions row, measured with the pill's font against the row's real
-     * width ([rowWidth]), with skip, the stack of [faces] faces and its count, and hang up beside it (call_card.xml).
+     * width ([rowWidth]), with the stack of [faces] faces and its count, and hang up beside it (call_card.xml).
      */
     private fun labelFits(faces: Int): Boolean {
         val metrics = context.resources.displayMetrics
@@ -164,7 +180,7 @@ internal class CallCardViews(
             typeface = ResourcesCompat.getFont(context, font)
             textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sp, metrics)
         }
-        // The pill: 13 + glyph 17 + 6 + label + 16; skip 8 + 40; the room's 8; hang up 56.
+        // The pill: 13 + glyph 17 + 6 + label + 16; the room's 8; hang up 56.
         val pill = dp(PILL_CHROME) + paint(R.font.dm_sans_650, 14f).measureText(muteLabel())
         val stack = if (faces == 0) 0f else {
             dp((CallCardArt.FACE + (faces - 1) * (CallCardArt.FACE - CallCardArt.FACE_OVERLAP) + STACK_GAPS).toFloat()) +
@@ -210,10 +226,9 @@ internal class CallCardViews(
     private fun withAlpha(color: Int, alpha: Float): Int = ((alpha * 255).roundToInt() shl 24) or (color and 0xFFFFFF)
 
     private companion object {
-        const val DISABLED_ALPHA = 0.32f
         const val PILL_CHROME = 13f + 17f + 6f + 16f
-        /** Skip and its gap (8 + 40), the gap after them (8), hang up (56). */
-        const val ROW_FIXED = 8f + 40f + 8f + 56f
+        /** The gap after the mute (8), hang up (56). */
+        const val ROW_FIXED = 8f + 56f
         /** The count's gap (3) and the stack's gap before hang up (8). */
         const val STACK_GAPS = 3 + 8
         const val SHADE_MARGIN = 16

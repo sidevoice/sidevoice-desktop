@@ -4,8 +4,9 @@ import SwiftUI
 // Island's expanded (variant B: everything below the camera), compact and minimal views. Never text or transcripts on the
 // Lock Screen (D-LA-NO-TEXT-LOCKED); texts end in an ellipsis everywhere.
 
-/// The Lock Screen card: the tile, the conversation, its model and machine, the state; the audio switch while headphones
-/// are connected; mute, skip, the other conversations and hang up. 14 pt in from the card's edge, about 152 pt tall.
+/// The Lock Screen card: the tile, the conversation, its model and machine, the state with the action it offers (skip while
+/// the agent speaks, cancel send during the person's turn: the operator's option B); the audio switch while headphones are
+/// connected; mute, the other conversations and hang up, the same row in every state. 14 pt in from the card's edge.
 @available(iOS 16.1, *)
 public struct LockCard: View {
     public var state: CallState
@@ -22,28 +23,42 @@ public struct LockCard: View {
             HStack(alignment: .top, spacing: 12) {
                 CreatureTile(state: state, size: 64, palette: palette)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(state.title)
-                        .font(DMSans.font(17, 700)).tracking(-0.17)
-                        .foregroundStyle(palette.text)
-                        .line(24.98)
-                        .padding(.top, 1)
-                    Text(subtitle)
-                        .font(DMSans.font(13, 400))
-                        .foregroundStyle(palette.text2)
-                        .line(19.11)
-                    StateLine(state: state, dark: palette.dark, size: 15, lineHeight: 22.05)
-                        .padding(.top, 5)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if state.route != nil {
-                    ActionButton(action: .route) {
-                        RoundButtonFace(symbol: routeSymbol, size: 30, glyph: 16, fill: palette.button, ink: palette.text2)
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(state.title)
+                                .font(DMSans.font(17, 700)).tracking(-0.17)
+                                .foregroundStyle(palette.text)
+                                .line(24.98)
+                                .padding(.top, 1)
+                            Text(subtitle)
+                                .font(DMSans.font(13, 400))
+                                .foregroundStyle(palette.text2)
+                                .line(19.11)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if state.route != nil {
+                            ActionButton(action: .route) {
+                                RoundButtonFace(symbol: routeSymbol, size: 30, glyph: 16, fill: palette.button, ink: palette.text2)
+                            }
+                            .accessibilityLabel(state.routeLabel)
+                            .padding(.top, -2)
+                        }
                     }
-                    .accessibilityLabel(state.routeLabel)
-                    .padding(.top, -2)
+                    // The state, and at its end the action it offers; 28 pt in every state, so the card keeps its height.
+                    // The state gives way (an ellipsis), never the action. Your words have no state line: nothing of what
+                    // the call does under them shows (D-LA-SAID-PRECEDENCE), and they are never on the Lock Screen
+                    // (D-LA-NO-TEXT-LOCKED).
+                    HStack(spacing: 8) {
+                        if state.phase != .said {
+                            StateLine(state: state, dark: palette.dark, size: 15, lineHeight: 22.05)
+                        }
+                        Spacer(minLength: 0)
+                        StateAction(state: state, fill: palette.button, ink: palette.text, reduced: reduced)
+                    }
+                    .frame(height: 28)
                 }
             }
-            .frame(height: 72.14, alignment: .top)
+            .frame(height: 73.09, alignment: .top)
             HStack(spacing: 8) {
                 // A button never ends in an ellipsis: its label whole, or its glyph alone (same colours, same name).
                 ViewThatFits(in: .horizontal) {
@@ -59,17 +74,15 @@ public struct LockCard: View {
                     }
                     .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
                 }
-                ActionButton(action: .skip, enabled: state.canSkip) {
-                    RoundButtonFace(symbol: SkipGlyph.symbol, size: 40, glyph: 17, fill: palette.button, ink: palette.text)
-                }
-                .opacity(state.canSkip ? 1 : Ink.disabled)
-                .accessibilityLabel(state.words.skipName)
                 Spacer(minLength: 0)
                 OthersStack(state: state, palette: palette)
+                // Hang up never gives way.
                 ActionButton(action: .hangUp) {
                     RoundButtonFace(symbol: "phone.down.fill", size: 40, glyph: 20, fill: Ink.hangUp, ink: .white)
                 }
                 .accessibilityLabel(state.words.hangUp)
+                .fixedSize()
+                .layoutPriority(1)
             }
             .frame(height: 40)
         }
@@ -83,6 +96,58 @@ public struct LockCard: View {
 
     private var routeSymbol: String {
         state.route == .speaker ? "speaker.wave.2.fill" : "airpods"
+    }
+}
+
+/// The action the state offers, as a 28-pt pill (the Lock Screen's state line; Saltar under the island's reply): "Saltar"
+/// while the agent speaks, "Cancelar envío" during the person's turn, nothing otherwise. Its label is the page's, whole.
+@available(iOS 16.1, *)
+struct StateAction: View {
+    var state: CallState
+    var fill: Color
+    var ink: Color
+    var reduced = false
+
+    var body: some View {
+        if state.phase == .speaking, state.canSkip {
+            ActionPill(action: .skip, label: state.words.skip, fill: fill, ink: ink, reduced: reduced) { SkipGlyph(size: 13) }
+                .accessibilityLabel(state.words.skipName)
+        } else if state.phase == .listening || state.phase == .transcribing, state.canCancelSend {
+            ActionPill(action: .cancelSend, label: state.words.cancelSend, fill: fill, ink: ink, reduced: reduced) {
+                Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
+            }
+            .accessibilityLabel(state.words.cancelSend)
+        }
+    }
+}
+
+/// A 28-pt pill: a 13-pt glyph and its label (13 pt, 650), 9 and 11 in from its ends, never squeezed.
+@available(iOS 16.1, *)
+struct ActionPill<Glyph: View>: View {
+    var action: CallControl
+    var label: String
+    var fill: Color
+    var ink: Color
+    var reduced = false
+    @ViewBuilder var glyph: () -> Glyph
+
+    var body: some View {
+        ActionButton(action: action) {
+            HStack(spacing: 5) {
+                glyph().frame(width: 13, height: 13)
+                Text(label)
+                    .font(DMSans.font(13, 650))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .foregroundStyle(ink)
+            .padding(.leading, 9)
+            .padding(.trailing, 11)
+            .frame(height: 28)
+            .background(Capsule().fill(reduced ? Color.clear : fill))
+        }
+        .fixedSize()
+        .layoutPriority(1)
     }
 }
 
@@ -115,9 +180,9 @@ struct MutePill: View {
     }
 }
 
-/// The expanded island's content below the camera (variant B, D-LA-EXPANDED-B): the header, then the controls, your
-/// bars, your words or the reply. 344 pt wide in a 380-pt island; the island adds its edges. Speaking's creature is the
-/// `.leading` region's (`ExpandedLeading`).
+/// The expanded island's content below the camera (variant B, D-LA-EXPANDED-B): the header and the controls; the header
+/// and your voice's pill; the pill alone while transcribing; your words alone; or the reply. The island adds its edges.
+/// Speaking's creature is the `.leading` region's (`ExpandedLeading`).
 @available(iOS 16.1, *)
 public struct ExpandedBody: View {
     public var state: CallState
@@ -128,12 +193,13 @@ public struct ExpandedBody: View {
 
     /// The island's geometry (R2-7, R2-8), made deterministic: the widget zeroes the system's margins at the sides and the
     /// bottom (`contentMargins`, iOS 17), so these paddings are all there is there: 18 at the sides, 14 below. The device
-    /// clips the content about 13.3 pt above the island's bottom edge, so nothing ends lower than 14. The bottom band (anything whose bottom lies within 36 pt of the
-    /// island's bottom: the controls, the capsule, Saltar) keeps 26 from the sides, Saltar 30, clear of the device's
-    /// rounder corners; text keeps 18 (D-LA-CORNERS). The top is the system's: its `.bottom` region starts below the
-    /// camera row (36.7 pt measured on a 17 Pro Max; `cameraRow` is the gallery's 36), and `top` takes it to 40 from the
-    /// island's edge. The budget is 144 pt (D-LA-144), so each state's content fits in the 104 under that: the reply is
-    /// three lines, and the gaps are what gives first, never a line of text or a button.
+    /// clips the content about 13.3 pt above the island's bottom edge, so nothing ends lower than 14. The bottom band
+    /// (anything whose bottom lies within 36 pt of the island's bottom: the controls, the pill, Saltar, and the text lines
+    /// there) keeps 26 from the sides, Saltar 30, clear of the device's rounder corners (D-LA-CORNERS). The top is the
+    /// system's: its `.bottom` region starts below the camera row (36.7 pt measured on a 17 Pro Max; `cameraRow` is the
+    /// gallery's 36), and `top` takes it to 40 from the island's edge. The budget is 144 pt (D-LA-144), so each state's
+    /// content fits in the 90 under that (`room`): the reply is three lines, your words five, and the gaps are what gives
+    /// first, never a line of text or a button.
     public var body: some View {
         Group { content }
             .environment(\.locale, state.locale)
@@ -155,25 +221,30 @@ public struct ExpandedBody: View {
 
     /// Below every state, the closed states' row too (D-LA-CORNERS).
     public static let bottom: CGFloat = 14
+    /// What is under the camera row, within the budget: 144 - 36 - 4 - 14.
+    static let room: CGFloat = 90
 
     @ViewBuilder
     private var content: some View {
         switch state.phase {
         case .speaking:
             Reply(state: state)
-        case .listening, .transcribing:
-            VStack(spacing: 8) {
+        case .listening:
+            // 7.91 under the header's 46.09, so the pill's 36 end the 90 under the camera row.
+            VStack(spacing: 7.91) {
                 VoiceHeader(state: state)
-                VoiceCapsule(state: state)
-                    .padding(.horizontal, Self.bandInset)
+                VoicePill(state: state)
             }
+        case .transcribing:
+            // Only the pill, in the middle of what is under the camera row.
+            VoicePill(state: state)
+                .frame(maxWidth: .infinity, maxHeight: Self.room)
         case .said:
-            VStack(alignment: .leading, spacing: 8) {
-                VoiceHeader(state: state)
-                Lines(
-                    text: state.text ?? "", size: 15, weight: 550, lineHeight: 18, lines: TextChunker.saidLines,
-                    ink: Palette.island.text)
-            }
+            // Only your words, whole: five lines fill the room under the camera row, 26 from the sides (D-LA-CORNERS).
+            Lines(
+                text: state.text ?? "", size: 15, weight: 550, lineHeight: 18, lines: TextChunker.saidLines,
+                ink: Palette.island.text)
+                .padding(.horizontal, Self.bandInset)
         case .idle, .working, .holding, .offline:
             // 6 between the header and the row, so the row's 14 below still fits 144 (D-LA-CORNERS).
             VStack(spacing: 6) {
@@ -232,7 +303,7 @@ struct ClosedHeader: View {
     }
 }
 
-/// Listening, transcribing, your words: tile 44, the conversation and the state ("Escuchándote" / "Transcribiendo…"), the
+/// Listening: tile 44, the conversation and the state ("Escuchándote"), the
 /// stack. 46.09 tall: the title and state lines (23.52, 1.99, 20.58), the tile centred on them.
 @available(iOS 16.1, *)
 struct VoiceHeader: View {
@@ -257,36 +328,64 @@ struct VoiceHeader: View {
     }
 }
 
-/// Your bars in the person's balloon, 36 tall, with Cancelar envío as an × at its right end; 26 from the island's sides
-/// (D-LA-CORNERS), the bars right-anchored.
+/// Your voice's pill (the creature redesign's `.vcap.card.pill`, reference 2026-11-04): 36 tall, fully rounded, #212125 with
+/// a 1-pt #4b4756 border, 16 in at its start and 6 at its end; a white 16-pt mic, then five white bars while listening or
+/// the state ("Transcribiendo…", 14 pt, 550) while transcribing; Cancelar envío as a 26-pt × on a white 14 % disc, 12 after.
 @available(iOS 16.1, *)
-struct VoiceCapsule: View {
+struct VoicePill: View {
     var state: CallState
 
     var body: some View {
-        HStack(spacing: 10) {
-            VoiceBars(dim: state.phase == .transcribing)
-                .frame(maxWidth: .infinity)
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "mic")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 16, height: 16)
+                if state.phase == .transcribing {
+                    Text(state.words.state)
+                        .font(DMSans.font(14, 550)).tracking(0.14)
+                        .lineLimit(1)
+                        .fixedSize()
+                } else {
+                    PillBars()
+                }
+            }
             ActionButton(action: .cancelSend, enabled: state.canCancelSend) {
-                // The × of the app's balloon: 28 pt on the person's wash, a white 12-pt xmark in the regular weight.
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 26, height: 26)
                     .background(Circle().fill(Color.white.opacity(0.14)))
             }
             .accessibilityLabel(state.words.cancelSend)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
+        .foregroundStyle(Color.white)
+        .padding(.leading, 16)
+        .padding(.trailing, 6)
         .frame(height: 36)
-        // The person's balloon (`--sv-chat-person-bg`, dark).
-        .background(Capsule().fill(Color(hex: 0x46366a)))
+        .background(Capsule().fill(Color(hex: 0x212125)))
+        .overlay(Capsule().strokeBorder(Color(hex: 0x4b4756), lineWidth: 1))
+        .fixedSize()
     }
 }
 
-/// Speaking: the reply's chunk, 15 on 18, three lines, all at full strength (no karaoke); Saltar 4 pt below it, right, 30
-/// from the island's side (D-LA-CORNERS).
+/// The pill's bars: five, white, 3 wide with 2.5 between them, 6 / 13 / 9 / 15 / 6 tall, centred in 16; still, since a
+/// Live Activity cannot follow the voice.
+@available(iOS 16.1, *)
+struct PillBars: View {
+    static let heights: [CGFloat] = [6, 13, 9, 15, 6]
+
+    var body: some View {
+        HStack(spacing: 2.5) {
+            ForEach(Array(Self.heights.enumerated()), id: \.offset) { _, height in
+                RoundedRectangle(cornerRadius: 1.5).frame(width: 3, height: height)
+            }
+        }
+        .frame(height: 16)
+    }
+}
+
+/// Speaking: the reply's chunk, 15 on 18, three lines, all at full strength (no karaoke), 26 from the island's sides; Saltar
+/// 4 pt below it, right, 30 from the island's side (D-LA-CORNERS), the Lock Screen's pill.
 /// The creature beside the camera is `ExpandedLeading`'s.
 @available(iOS 16.1, *)
 struct Reply: View {
@@ -297,38 +396,15 @@ struct Reply: View {
             Lines(
                 text: state.text ?? "", size: 15, weight: 550, tracking: -0.075, lineHeight: 18, lines: TextChunker.replyLines,
                 ink: Palette.island.text)
+                .padding(.horizontal, ExpandedBody.bandInset)
             if state.canSkip {
-                // Never an ellipsis on a button: the label whole, or the glyph alone.
-                ViewThatFits(in: .horizontal) {
-                    ActionButton(action: .skip) {
-                        HStack(spacing: 4) {
-                            SkipGlyph(size: 14)
-                            Text(state.words.skip)
-                                .font(DMSans.font(12, 650))
-                                .lineLimit(1)
-                                .fixedSize()
-                                .frame(height: 17.64)
-                        }
-                        .foregroundStyle(Palette.island.text)
-                        .padding(.leading, 8)
-                        .padding(.trailing, 10)
-                        .frame(height: 26)
-                        .background(Capsule().fill(Palette.island.button))
-                    }
-                    ActionButton(action: .skip) {
-                        RoundButtonFace(
-                            symbol: SkipGlyph.symbol, size: 26, glyph: 14, fill: Palette.island.button,
-                            ink: Palette.island.text)
-                    }
-                }
-                .accessibilityLabel(state.words.skipName)
-                .padding(.trailing, ExpandedBody.skipInset)
+                StateAction(state: state, fill: Palette.island.button, ink: Palette.island.text)
+                    .padding(.trailing, ExpandedBody.skipInset)
             } else {
-                Color.clear.frame(height: 26)
+                Color.clear.frame(height: 28)
             }
         }
     }
-
 }
 
 /// Expanded, leading: speaking's creature, a 30-pt circle beside the camera, 28 pt from the island's edge (B's 18 and
@@ -379,7 +455,7 @@ public struct CompactTrailing: View {
     }
 
     public var body: some View {
-        if state.tonePhase == .idle && !state.micOff {
+        if (state.phase == .idle || state.phase == .said) && !state.micOff {
             EmptyView()
         } else {
             HStack(spacing: 6) {
@@ -389,7 +465,7 @@ public struct CompactTrailing: View {
                         .foregroundStyle(Ink.micOffGlyph)
                         .frame(width: 18, height: 18)
                 }
-                StateGlyph(phase: state.tonePhase)
+                StateGlyph(phase: state.phase)
             }
             .modifier(StillOnAlwaysOn(reduced: reduced))
             .environment(\.locale, state.locale)
@@ -407,7 +483,7 @@ public struct MinimalFace: View {
     }
 
     public var body: some View {
-        let tone = Tone.of(state.tonePhase, dark: true)
+        let tone = Tone.of(state.phase, dark: true)
         ZStack {
             Circle().strokeBorder(tone.fill, lineWidth: 2).frame(width: 34, height: 34)
             RoundFace(state: state, size: 24)

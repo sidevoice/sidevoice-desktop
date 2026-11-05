@@ -42,8 +42,8 @@ struct Texts {
             return Texts(
                 states: [
                     "idle": "En reposo", "listening": "Escuchándote", "transcribing": "Transcribiendo…",
-                    // Your words are not a state: the header says the call is working (D-LA-SAID-STATE).
-                    "said": "Trabajando", "working": "Trabajando", "speaking": "Hablando", "holding": "No puede recibir",
+                    // Your words have no state line (D-LA-SAID-PRECEDENCE): the page sends none.
+                    "said": "", "working": "Trabajando", "speaking": "Hablando", "holding": "No puede recibir",
                     "offline": "Desconectada",
                 ],
                 mute: "Silenciar", unmute: "Activar micrófono", skip: "Saltar", skipName: "Saltar lo que está sonando",
@@ -67,7 +67,7 @@ struct Texts {
             return Texts(
                 states: [
                     "idle": "Resting", "listening": "Listening to you", "transcribing": "Transcribing…",
-                    "said": "Working", "working": "Working", "speaking": "Speaking", "holding": "Can't receive",
+                    "said": "", "working": "Working", "speaking": "Speaking", "holding": "Can't receive",
                     "offline": "Offline",
                 ],
                 mute: "Mute", unmute: "Unmute", skip: "Skip", skipName: "Skip what is playing",
@@ -110,7 +110,7 @@ extension Fixture {
 
     /// The details for `phase`, as the Rust side would send them for the gallery's call.
     static func details(
-        _ phase: String, language: Language = .es, micOff: Bool = false, long: Bool = false, stills: Bool = true,
+        _ phase: String, language: Language = .es, micOff: Bool = false, long: Bool = false, stills: Bool = true, lit: Int = 0,
         conversations: Int = 3
     ) -> [String: Any] {
         let texts = Texts.of(language)
@@ -144,13 +144,10 @@ extension Fixture {
                 "conversations": texts.conversations(conversations),
             ],
         ]
-        // Working for 1:42 (the gallery's), your words sent 2 s ago.
+        // Working for 1:42 (the gallery's).
         if phase == "working" { surface["workingSince"] = now - 102_000 }
-        if phase == "said" {
-            surface["workingSince"] = now - 2_000
-            surface["said"] = long ? texts.youSaidLong : texts.youSaid
-        }
-        if phase == "speaking" { surface["page"] = ["text": long ? texts.agentTooLong : texts.agentSays, "lit": 0] }
+        if phase == "said" { surface["said"] = long ? texts.youSaidLong : texts.youSaid }
+        if phase == "speaking" { surface["page"] = ["text": long ? texts.agentTooLong : texts.agentSays, "lit": lit] }
         return ["title": long ? texts.long.title : texts.title, "muted": micOff, "surface": surface]
     }
 
@@ -165,12 +162,17 @@ extension Fixture {
             all.append(Fixture(name: "\(phase)-mic-off", details: details(phase, micOff: true), dark: phase == "working"))
         }
         // English where the layout carries the call's words, not only the state's.
-        for phase in ["listening", "said", "working", "speaking"] {
+        for phase in ["listening", "transcribing", "said", "working", "speaking"] {
             all.append(Fixture(name: "\(phase)-en", details: details(phase, language: .en)))
         }
         for phase in ["working", "said", "speaking"] {
             all.append(Fixture(name: "\(phase)-long", details: details(phase, long: true)))
             all.append(Fixture(name: "\(phase)-long-en", details: details(phase, language: .en, long: true)))
+        }
+        // The voice past the first chunk: the next, three full lines (the whole reply is one page).
+        for language in [Language.es, .en] {
+            let later = details("speaking", language: language, long: true, lit: 200)
+            all.append(Fixture(name: "speaking-long-later-\(language.rawValue)", details: later))
         }
         for phase in ["working", "listening"] {
             all.append(Fixture(name: "\(phase)-no-still", details: details(phase, stills: false), dark: true))

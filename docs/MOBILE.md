@@ -406,16 +406,19 @@ its buttons need iOS 17 (before that it only shows the call).
   the app's activities that are not the call's (what a crash left). The buttons log each step to the unified log, subsystem `ai.sidevoice`, category `intent`.
 - **Updates.** Every change goes out at once. **The words** (the expanded island only: never on the Lock Screen, in the
   compact or minimal) are chunked by the app, where the updates are made (`TextChunker`, `TextPager` in the package; the
-  port of research/live-activity-design-2026-11-02/src/text-chunks.js): the page's `page.text` is cut into chunks that fit
-  four lines (your words: two lines, 2.5 s each, at most three, the last ending in "…"), measured with DM Sans 550 at 15 pt
-  at 330 pt, whole sentences first, then a clause break, then a word; no karaoke. One update per chunk: a chunk stays at
+  port of research/live-activity-design-2026-11-02/src/text-chunks.js): the page's `page.text` (the whole reply, one page:
+  sidevoice-web#485) is cut into chunks of three lines (your words: five, all of them, 2.5 s each), measured with DM Sans
+  550 at 15 pt at 314 pt (the 17 Pro's 322-pt column, 26 from the island's sides), each chunk but the last filling its
+  lines: as many words as fit, ended after a sentence, else a clause break, when that still fills them; the rest, a
+  sentence's tail included, starts the next chunk and goes on filling it; no karaoke, no ellipsis. One update per chunk,
+  drawn with no transition (no cross-fade): a chunk stays at
   least 2.5 s and the next shows only once the voice (`page.lit`) has reached its first word, jumping to the chunk the voice
   is in, never ahead of it; the controller wakes itself when the next is due. If a device ever has to cut a chunk it logs its length, never its words (category `text`).
-  Your words outlast the page's 3 s (three chunks take up to 7.5 s): while the call is idle, working or can't receive, the app
+  Your words outlast the page's 3 s: while the call is idle, working or can't receive, the app
   keeps them, by conversation, until their last chunk has had its time; listening, speaking, offline or another conversation
-  takes over at once. During your words the header says working with its timer only when the page says so (its state line and
-  `workingSince`, which need the web release that sends them, sidevoice-web#474, pinned in `web.pin.json`); before that pin it
-  wears the page's own line (idle, grey, no timer). Each update moves the activity's
+  takes over at once. While your words show they are all the island shows, and the Lock Screen card has no state line:
+  nothing of what the call does under them (D-LA-SAID-PRECEDENCE; the page sends no state line then, sidevoice-web#485).
+  Each update moves the activity's
 
   `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing
   changed, so only an activity the app stopped updating goes stale; a stale one draws the offline state with the page's

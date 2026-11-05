@@ -31,7 +31,7 @@ public struct CallActivityWidget: Widget {
             } minimal: {
                 MinimalFace(state: state)
             }
-            .keylineTint(Tone.of(state.tonePhase, dark: true).fill)
+            .keylineTint(Tone.of(state.phase, dark: true).fill)
             .widgetURL(CallLinks.call)
             // The system's own margins sat inside ours (R2-7: the content started 18 pt too far in and 36.7 too far down,
             // and the controls were cut off by the island's end): at the sides and the bottom the paddings are ours alone.

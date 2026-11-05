@@ -2,7 +2,8 @@
 <!-- The call's notification, expanded: Sidevoice's own card (DecoratedCustomViewStyle: the system draws the header, this
      the rest). The Lock Screen card of the Live Activity design, in dp (HANDOVER §4 "Android", spec/GEOMETRY.md
      "androidExpanded"): the creature's tile, the conversation, model · machine and the state; the audio switch while
-     headphones are connected; then mute, skip, the other conversations and hang up. Filled by CallCardViews. -->
+     headphones are connected; the action the state offers on the state line (skip or cancel send); then mute, the other
+     conversations and hang up. Filled by CallCardViews. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
@@ -63,60 +64,103 @@
                 android:textColor="@color/call_card_text_secondary"
                 android:textSize="13sp" />
 
-            <LinearLayout
+            <!-- The state line, 28 dp in every state so the card keeps its height: the state, and at its end the action
+                 the state offers (Saltar while the agent speaks, Cancelar envío during the person's turn, none
+                 otherwise), a 28 dp pill. The state gives way to it (an ellipsis), never the pill. -->
+            <RelativeLayout
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:layout_height="28dp"
+                android:layout_marginTop="1dp">
 
-                <ImageView
-                    android:id="@+id/call_card_dot"
-                    android:layout_width="8dp"
-                    android:layout_height="8dp"
-                    android:layout_marginEnd="6dp"
-                    android:importantForAccessibility="no"
-                    android:src="@drawable/call_card_dot" />
+                <LinearLayout
+                    android:id="@+id/call_card_action"
+                    android:layout_width="wrap_content"
+                    android:layout_height="28dp"
+                    android:layout_alignParentEnd="true"
+                    android:layout_centerVertical="true"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/call_card_action"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="9dp"
+                    android:paddingEnd="11dp"
+                    android:visibility="gone">
 
-                <TextView
-                    android:id="@+id/call_card_state"
+                    <ImageView
+                        android:id="@+id/call_card_action_icon"
+                        android:layout_width="13dp"
+                        android:layout_height="13dp"
+                        android:layout_marginEnd="5dp"
+                        android:importantForAccessibility="no" />
+
+                    <TextView
+                        android:id="@+id/call_card_action_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/dm_sans_650"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:textColor="@color/call_card_text"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:ellipsize="end"
-                    android:fontFamily="@font/dm_sans_650"
-                    android:includeFontPadding="false"
-                    android:lineHeight="20.5sp"
-                    android:maxLines="1"
-                    android:textSize="14sp" />
+                    android:layout_alignParentStart="true"
+                    android:layout_centerVertical="true"
+                    android:layout_toStartOf="@id/call_card_action"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-                <!-- While working: the time since the working phase began, " · 1:42" (no other state shows a time). The
-                     separator is a view of its own: a Chronometer's format applies only once it is on screen. -->
-                <TextView
-                    android:id="@+id/call_card_since_dot"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="4dp"
-                    android:fontFamily="@font/dm_sans_600"
-                    android:includeFontPadding="false"
-                    android:lineHeight="20.5sp"
-                    android:maxLines="1"
-                    android:text="·"
-                    android:textSize="14sp"
-                    android:visibility="gone"
-                    tools:ignore="HardcodedText" />
+                    <ImageView
+                        android:id="@+id/call_card_dot"
+                        android:layout_width="8dp"
+                        android:layout_height="8dp"
+                        android:layout_marginEnd="6dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/call_card_dot" />
 
-                <Chronometer
-                    android:id="@+id/call_card_since"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="4dp"
-                    android:fontFamily="@font/dm_sans_600"
-                    android:includeFontPadding="false"
-                    android:lineHeight="20.5sp"
-                    android:maxLines="1"
-                    android:textSize="14sp"
-                    android:visibility="gone" />
-            </LinearLayout>
+                    <TextView
+                        android:id="@+id/call_card_state"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:fontFamily="@font/dm_sans_650"
+                        android:includeFontPadding="false"
+                        android:lineHeight="20.5sp"
+                        android:maxLines="1"
+                        android:textSize="14sp" />
+
+                    <!-- While working: the time since the working phase began, " · 1:42" (no other state shows a time). The
+                         separator is a view of its own: a Chronometer's format applies only once it is on screen. -->
+                    <TextView
+                        android:id="@+id/call_card_since_dot"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="@font/dm_sans_600"
+                        android:includeFontPadding="false"
+                        android:lineHeight="20.5sp"
+                        android:maxLines="1"
+                        android:text="·"
+                        android:textSize="14sp"
+                        android:visibility="gone"
+                        tools:ignore="HardcodedText" />
+
+                    <Chronometer
+                        android:id="@+id/call_card_since"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="@font/dm_sans_600"
+                        android:includeFontPadding="false"
+                        android:lineHeight="20.5sp"
+                        android:maxLines="1"
+                        android:textSize="14sp"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </RelativeLayout>
         </LinearLayout>
 
         <!-- The audio switch: only while headphones are connected. A whole 30 dp circle at the top of the row (the row's
@@ -147,7 +191,7 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <!-- Mute and skip, then the room the stack and hang up leave. Mute is the pill with its label when the label fits
+        <!-- Mute, then the room the stack and hang up leave. Mute is the pill with its label when the label fits
              whole in the row, and otherwise the round glyph button (CallCardViews measures it before building the views):
              a button never ends in an ellipsis. -->
         <FrameLayout
@@ -201,21 +245,6 @@
                         android:layout_height="17dp"
                         android:layout_gravity="center"
                         android:importantForAccessibility="no" />
-                </FrameLayout>
-
-                <FrameLayout
-                    android:id="@+id/call_card_skip"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_marginStart="8dp"
-                    android:background="@drawable/call_card_button">
-
-                    <ImageView
-                        android:layout_width="17dp"
-                        android:layout_height="17dp"
-                        android:layout_gravity="center"
-                        android:importantForAccessibility="no"
-                        android:src="@drawable/ic_card_skip" />
                 </FrameLayout>
             </LinearLayout>
         </FrameLayout>

@@ -5,7 +5,7 @@ import XCTest
 
 /// Every state of the Live Activity drawn to PNG at 3×, as the gallery draws it (research/live-activity-design-2026-11-02,
 /// its png/ and spec/GEOMETRY.md): the Lock Screen card in light and dark, and the island's expanded, compact and minimal
-/// views, each in the frame the system gives it on an iPhone 17 Pro (380 pt; the island always black). One sheet per
+/// views, each in the frame the system gives it on an iPhone 17 Pro (374 pt; the island always black). One sheet per
 /// state puts them side by side, as the gallery's `pieces-<state>.png`; the mic off, Always-On, a stale activity, the
 /// captions half heard and a 17 Pro Max are drawn too. The PNGs go to `$CALL_ACTIVITY_RENDERS` (`cargo xtask mobile renders
 /// ios` sets it), or the temporary directory.
@@ -30,8 +30,7 @@ final class RenderTests: XCTestCase {
         state.micOff = micOff
         state.canSkip = phase == .speaking
         state.canCancelSend = phase == .listening || phase == .transcribing
-        // Your words are not a state (D-LA-SAID-STATE): the header says the call is working, with its timer.
-        state.workingSince = phase == .working ? Date().addingTimeInterval(-102) : phase == .said ? Date().addingTimeInterval(-2) : nil
+        state.workingSince = phase == .working ? Date().addingTimeInterval(-102) : nil
         state.creature = .init(file: "straw-hat.png", k: 1.3)
         state.others = [.init(file: "bunny-headphones.png", k: 1.35), .init(file: "wizard-hat.png", k: 1.4)]
         state.conversationCount = 3
@@ -43,15 +42,15 @@ final class RenderTests: XCTestCase {
             // The first chunk of the reply (three measured lines at most), as the chunker cuts it.
             state.text = Self.reply[0]
         case .said:
-            state.text = "Sí, súbelo a TestFlight, y de paso mira si el globo sigue tapando la cabecera en el iPad en "
-                + "horizontal, que ayer me pareció que se montaba un poco encima."
+            // Your words, whole (five lines at most).
+            state.text = Self.saidText
         default:
             break
         }
-        if phase == .said { state.text = Self.said[0] }
         var words = CallState.Words()
         words.state = [
-            .idle: "En reposo", .listening: "Escuchándote", .transcribing: "Transcribiendo…", .said: "Trabajando",
+            // Your words have no state line (D-LA-SAID-PRECEDENCE): the page sends none.
+            .idle: "En reposo", .listening: "Escuchándote", .transcribing: "Transcribiendo…", .said: "",
             .working: "Trabajando", .speaking: "Hablando", .holding: "No puede recibir", .offline: "Desconectada",
         ][phase]!
         words.offline = "Desconectada"
@@ -76,7 +75,6 @@ final class RenderTests: XCTestCase {
         + "horizontal, que ayer me pareció que se montaba un poco encima."
     /// The chunks the app would send for them, measured with DM Sans as on the device.
     static let reply = TextChunker.dmSans().chunks(replyText).map(\.text)
-    static let said = TextChunker.dmSans().saidChunks(saidText).map(\.text)
 
     static let phases: [CallState.Phase] = [.idle, .listening, .transcribing, .said, .working, .speaking, .holding, .offline]
 
@@ -99,26 +97,12 @@ final class RenderTests: XCTestCase {
                 "always-on-lock-dark-\(phase.rawValue)")
         }
         try sheet(Self.sample(.working).stale, name: "stale")
-        // The reply's other chunks, and your words' (D-LA-CHUNKS).
+        // The reply's other chunks (D-LA-CHUNKS): every one but the last fills its three lines.
         for (index, chunk) in Self.reply.enumerated().dropFirst() {
             var next = Self.sample(.speaking)
             next.text = chunk
             try save(expanded(next), "expanded-speaking-chunk-\(index + 1)")
         }
-        for (index, chunk) in Self.said.enumerated().dropFirst() {
-            var next = Self.sample(.said)
-            next.text = chunk
-            try save(expanded(next), "expanded-said-chunk-\(index + 1)")
-        }
-        // Your words before the room knows when the work began: the real header, with no timer (never a made-up time).
-        var noTimer = Self.sample(.said)
-        noTimer.workingSince = nil
-        try sheet(noTimer, name: "said-no-timer")
-        // Before the web pin that says working: your words with the page's own idle line and no timer, never green.
-        var prePin = Self.sample(.said)
-        prePin.workingSince = nil
-        prePin.words.state = "En reposo"
-        try sheet(prePin, name: "said-pre-pin")
         // A still that has not arrived draws the Sidevoice mark, never an empty slot (D-LA-STILL-FALLBACK).
         for phase in [CallState.Phase.working, .listening] {
             var missing = Self.sample(phase)
@@ -151,9 +135,57 @@ final class RenderTests: XCTestCase {
         try save(expanded(Self.sample(.speaking), width: 418), "promax-expanded-speaking")
     }
 
+    /// The Lock Screen card and the expanded island on the 17 Pro (374) and the Pro Max (418), in Spanish and English: the
+    /// state line's action (skip, cancel send) whole beside the state, the card one height in every state, the island
+    /// within its budget.
+    func testBothPhonesInBothLanguages() throws {
+        for (phone, width) in [("17pro", CGFloat(374)), ("promax", CGFloat(418))] {
+            for english in [false, true] {
+                let language = english ? "en" : "es"
+                var heights: Set<CGFloat> = []
+                for phase in [CallState.Phase.speaking, .listening, .transcribing, .working, .said, .idle] {
+                    var state = Self.sample(phase)
+                    if english { state = Self.english(state) }
+                    heights.insert(try save(lock(state, dark: true, width: width), "lock-\(phone)-\(language)-\(phase.rawValue)"))
+                    try save(expanded(state, width: width), "expanded-\(phone)-\(language)-\(phase.rawValue)")
+                }
+                XCTAssertEqual(heights.count, 1, "\(phone) \(language): the card changes height between states: \(heights)")
+            }
+        }
+    }
+
+    /// `state` in the page's English words.
+    static func english(_ state: CallState) -> CallState {
+        var state = state
+        state.title = "Stage balloon"
+        state.language = "en"
+        state.words.state = [
+            .idle: "Resting", .listening: "Listening to you", .transcribing: "Transcribing…", .said: "", .working: "Working",
+            .speaking: "Speaking", .holding: "Can't receive", .offline: "Offline",
+        ][state.phase]!
+        state.words.offline = "Offline"
+        state.words.mute = "Mute"
+        state.words.unmute = "Unmute"
+        state.words.skip = "Skip"
+        state.words.skipName = "Skip what is playing"
+        state.words.cancelSend = "Cancel sending"
+        state.words.hangUp = "Hang up"
+        state.words.conversations = "Conversations (3)"
+        if state.phase == .speaking {
+            state.text = TextChunker.dmSans().chunks(
+                "I moved the balloon above the creature, so it no longer covers its face. I also turned its tail toward "
+                    + "whoever is speaking, and on the phone the balloon sits a little lower so it clears the header.")[0].text
+        }
+        if state.phase == .said {
+            state.text = "Yes, push it to TestFlight, and while you are at it check whether the balloon still covers the "
+                + "header on the iPad in landscape, it looked a bit off yesterday."
+        }
+        return state
+    }
+
     // MARK: The presentations, in the frames the system gives them
 
-    func lock(_ state: CallState, dark: Bool, width: CGFloat = 380) -> some View {
+    func lock(_ state: CallState, dark: Bool, width: CGFloat = 374) -> some View {
         LockCard(state: state)
             .frame(width: width)
             // The gallery's panel (the system's material on a device).
@@ -166,7 +198,7 @@ final class RenderTests: XCTestCase {
     /// The expanded island: black, radius 44, the camera at the top; B's content is `ExpandedBody`, which carries its own
     /// paddings (18 at the sides, 26 for the bottom band (Saltar 30), 14 below, 4 below the camera's row: D-LA-CORNERS), as on
     /// the device; speaking's creature is `ExpandedLeading`, beside the camera.
-    func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
+    func expanded(_ state: CallState, width: CGFloat = 374) -> some View {
         ZStack(alignment: .topLeading) {
             camera(x: (width - 125) / 2)
             // The `.leading` region, beside the camera: its content centred on the camera's row.
@@ -242,7 +274,8 @@ final class RenderTests: XCTestCase {
         }
     }
 
-    func save(_ view: some View, _ name: String) throws {
+    @discardableResult
+    func save(_ view: some View, _ name: String) throws -> CGFloat {
         let renderer = ImageRenderer(content: view.fixedSize())
         renderer.scale = 3
         let image = try XCTUnwrap(renderer.uiImage, name)
@@ -261,6 +294,7 @@ final class RenderTests: XCTestCase {
             XCTAssertEqual(image.size.height, 144, accuracy: 0.5, "\(name): \(image.size.height) pt tall")
         }
         print("render \(name): \(image.size.width) × \(image.size.height) pt")
+        return image.size.height
     }
 }
 

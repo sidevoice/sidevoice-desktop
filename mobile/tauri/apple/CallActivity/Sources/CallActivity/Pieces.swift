@@ -81,7 +81,7 @@ struct CreatureTile: View {
     @Environment(\.isLuminanceReduced) private var reduced
 
     var body: some View {
-        let tone = Tone.of(state.tonePhase, dark: palette.dark)
+        let tone = Tone.of(state.phase, dark: palette.dark)
         let inner = size * 0.86
         ZStack {
             if !reduced {
@@ -198,7 +198,7 @@ struct StateLine: View {
     var lineHeight: CGFloat
 
     var body: some View {
-        let tone = Tone.of(state.tonePhase, dark: dark)
+        let tone = Tone.of(state.phase, dark: dark)
         HStack(spacing: 6) {
             Circle().fill(tone.fill).frame(width: 8, height: 8)
             label(tone)
@@ -210,7 +210,7 @@ struct StateLine: View {
 
     private func label(_ tone: Tone) -> Text {
         let words = Text(state.words.state)
-        guard state.tonePhase == .working, let since = state.workingSince else { return words }
+        guard state.phase == .working, let since = state.workingSince else { return words }
         // Tabular digits, so "0:42" keeps its width as it counts.
         let time = (Text("· ") + Text(since, style: .timer)).monospacedDigit()
         // The gallery's 6-pt gap: an en space (7.5 pt at 15, 7 at 14), the closest a run of text has.
@@ -327,48 +327,6 @@ struct Stretch: ViewModifier {
 
     func body(content: Content) -> some View {
         content.scaleEffect(x: 1, y: y, anchor: anchor)
-    }
-}
-
-/// Your voice's bars in the expanded island's capsule, as the app draws a voice note (its `VoiceWaveform`, the person's
-/// balloon): white, 3 wide every 6, fully rounded, in a 24-pt box, right-anchored (the newest next to the ×, as the app's
-/// waveform scrolls in from the right), 6 pt at least (never a dot). A capsule narrower than the 44 columns drops them
-/// from the left; nothing is squeezed. Transcribing: the same frame at 80 %, as the app's still fallback. Listening: they
-/// rise in place (vertical scale 0.15 -> 1.12 -> 1, about 0.7 s, once; no horizontal scale).
-@available(iOS 16.1, *)
-struct VoiceBars: View {
-    var dim: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.isLuminanceReduced) private var reduced
-    static let heights: [CGFloat] = [
-        6, 7, 9, 12, 10, 8, 6, 6, 9, 14, 18, 15, 11, 13, 17, 20, 16, 12, 9, 7, 6, 6, 8, 11, 15, 19, 22, 18, 14, 16, 19, 15, 11,
-        8, 7, 10, 13, 17, 14, 10, 8, 6, 7, 6,
-    ]
-    static let width: CGFloat = 3
-    static let gap: CGFloat = 3
-
-    /// How many of the columns a capsule `width` wide holds (the newest ones).
-    static func columns(in width: CGFloat) -> Int {
-        min(heights.count, max(0, Int(((width + gap) / (Self.width + gap)).rounded(.down))))
-    }
-
-    var body: some View {
-        GeometryReader { box in
-            HStack(spacing: Self.gap) {
-                ForEach(Array(Self.heights.suffix(Self.columns(in: box.size.width)).enumerated()), id: \.offset) { _, height in
-                    Capsule()
-                        .fill(Color.white)
-                        .frame(width: Self.width, height: height)
-                        // A spring that overshoots to about 1.12 and settles, in the bar's own centre.
-                        .transition(reduceMotion || reduced ? .identity : .modifier(active: Stretch(y: 0.15, anchor: .center), identity: Stretch(y: 1, anchor: .center))
-                            .animation(.spring(response: 0.45, dampingFraction: 0.55)))
-                }
-            }
-            .frame(width: box.size.width, height: box.size.height, alignment: .trailing)
-        }
-        .frame(height: 24)
-        .opacity(dim ? 0.8 : 1)
-        .animation(.easeInOut(duration: 0.6), value: dim)
     }
 }
 

@@ -24,11 +24,17 @@ struct Lines: View {
                 ForEach(Array(broken.enumerated()), id: \.offset) { _, line in
                     draw(line)
                         .font(DMSans.font(size, weight)).tracking(tracking)
+                        .contentTransition(.identity)
                         .lineLimit(1)
                         .fixedSize()
                         .frame(height: lineHeight, alignment: .leading)
                 }
             }
+            // A new chunk replaces the last at once: no cross-fade, no line of one under the other (the system animates a
+            // Live Activity's update with transitions, which these turn off).
+            .id(text)
+            .transition(.identity)
+            .transaction { $0.animation = nil }
         }
         .frame(height: lineHeight * CGFloat(lines), alignment: .topLeading)
     }
