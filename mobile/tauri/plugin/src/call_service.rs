@@ -17,7 +17,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tauri::{AppHandle, Runtime};
 
-use crate::call_surface::{end_surface, show_surface, start_surface};
+use crate::call_surface::{end_surface, refresh_surface, show_surface, start_surface};
 use crate::platform::call_service as platform;
 use crate::{CallSurface, SurfaceAction};
 
@@ -147,6 +147,17 @@ pub fn update_call_service<R: Runtime>(
     details: &CallDetails,
 ) -> Result<(), CallServiceError> {
     show_surface(details);
+    platform::update(app, details)
+}
+
+/// Shows the running call as `details` now, as [`update_call_service`] does, and has its surface drawn again even where it
+/// shows that already (iOS: a Live Activity toggle the system flipped when it was tapped is drawn from `details` again).
+/// After a tap on a surface.
+pub fn refresh_call_service<R: Runtime>(
+    app: &AppHandle<R>,
+    details: &CallDetails,
+) -> Result<(), CallServiceError> {
+    refresh_surface(details);
     platform::update(app, details)
 }
 
