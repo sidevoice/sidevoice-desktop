@@ -53,7 +53,7 @@ final class CallStandIn: NSObject {
             heard(action)
         }
         self.details = details
-        // `refresh`: drawn again even if the activity has this state (the toggle flipped its own face); ignored where the
+        // `refresh`: drawn again even if the activity has this state (as the app draws a tap that changed nothing); ignored where the
         // bridge does not read it.
         details["refresh"] = true
         guard let data = try? JSONSerialization.data(withJSONObject: details) else { return }
