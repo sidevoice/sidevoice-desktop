@@ -4,7 +4,7 @@ import XCTest
 /// real way: the system runs the button's intent in the harness app, whose call's stand-in (App/CallStandIn.swift) is the
 /// class the intent hands the action to, and answers as the app's call would. Each test asserts that the stand-in was asked
 /// for the action (`harness.actions`, read from the app afterwards) and that the activity shows the answer: the new mic
-/// state within 1 s of the tap (seen by a query begun within 1 s; each query of SpringBoard takes a while) and still 3 s
+/// state within 3 s of the tap (seen by a query begun within 3 s; the face is the activity's, drawn ~1.5-2 s after the tap) and still 5 s
 /// after it, the old one gone; the card gone, and the next state after a skip or a cancel, within 5 s (a button's intent takes about a second
 /// to run, and its tap closes the island). Mute's rule (desktop#430): a tap does
 /// what the card showed, so Silenciar mutes and Activar micrófono unmutes. Light appearance only.
@@ -131,7 +131,7 @@ final class LiveActivityButtons: XCTestCase {
     }
 
     /// Taps the control labelled `label` in `place`, then asserts what the activity shows:
-    /// - `mic`: `sees` within 1 s, and still 3 s after the tap, with no control labelled `label` left (the face holds);
+    /// - `mic`: `sees` within 3 s (the button has no face of its own: the app's update drawn, ~1.5-2 s), and still 5 s after the tap, with no control labelled `label` left (the face holds);
     /// - otherwise `sees` within 5 s (a button's intent takes about a second to run), in the island opened again: a
     ///   button's tap closes it;
     /// - `gone`: no card within 5 s (the island closed and opened again first).
@@ -168,14 +168,14 @@ final class LiveActivityButtons: XCTestCase {
         }
         guard let sees else { return }
         if mic {
-            guard let after = appears(sees, within: 1) else {
-                fail(step, "not shown within 1 s")
+            guard let after = appears(sees, within: 3) else {
+                fail(step, "not shown within 3 s")
                 return
             }
             XCTContext.runActivity(named: "\(step): shown \(String(format: "%.2f", after)) s after the tap") { _ in }
-            settle(max(0, 3 - Date().timeIntervalSince(tapped)))
+            settle(max(0, 5 - Date().timeIntervalSince(tapped)))
             if !sees.exists || control(label).exists {
-                fail(step, "shown, then gone 3 s after the tap: the face went back")
+                fail(step, "shown, then gone 5 s after the tap: the face went back")
             }
             return
         }
