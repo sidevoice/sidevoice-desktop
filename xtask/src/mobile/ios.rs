@@ -378,6 +378,8 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
         }
         None => Vec::new(),
     };
+    // Both are printed before either is refused, so a refused archive's log shows what each was signed with.
+    let mut missing = Vec::new();
     for (what, executable) in [("the app", &bundle.executable), (EXTENSION, &appex_executable)] {
         let entitlements = signed_entitlements(executable);
         if let Some(entitlements) = &entitlements {
@@ -385,10 +387,9 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
             plist::Value::Dictionary(entitlements.clone()).to_writer_xml(&mut xml).map_err(|e| e.to_string())?;
             println!("{what}'s signed entitlements:\n{}", String::from_utf8_lossy(&xml));
         }
-        if let Some(warning) = app_group_missing(what, entitlements.as_ref(), identifier) {
-            eprintln!("::warning::{warning}");
-        }
+        missing.extend(app_group_missing(what, entitlements.as_ref(), identifier));
     }
+    ensure(missing.is_empty(), format!("{}: {}", ipa.display(), missing.join("; ")))?;
     check_bundle(&bundle)?;
     check_intent_metadata(|name| {
         let path = format!("{root}{name}");
@@ -416,10 +417,9 @@ fn signed_entitlements(executable: &[u8]) -> Option<plist::Dictionary> {
     })
 }
 
-/// The warning for `what` (the app or its extension) when it was signed without the App Group `group.<identifier>`
+/// Why `what` (the app or its extension) is refused when it was signed without the App Group `group.<identifier>`
 /// (mobile/tauri/ios-project.yml), which both need: the app keeps the creatures' stills in its container and the extension
-/// draws them from there, so without it every creature on the Live Activity is the placeholder mark. A warning and not a
-/// refusal: the rest of the build still reaches the testers.
+/// draws them from there, so without it every creature on the Live Activity is the placeholder mark.
 fn app_group_missing(what: &str, entitlements: Option<&plist::Dictionary>, identifier: &str) -> Option<String> {
     let group = format!("group.{identifier}");
     let Some(entitlements) = entitlements else {
@@ -458,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn an_app_or_extension_signed_without_the_app_group_is_warned_of() {
+    fn an_app_or_extension_signed_without_the_app_group_is_refused() {
         let other = signed_entitlements(&signed(
             "<dict><key>com.apple.security.application-groups</key><array><string>group.other</string></array></dict>",
         ));
@@ -608,13 +608,19 @@ mod tests {
         );
         let manifest = "<plist version=\"1.0\"><dict><key>NSPrivacyTracking</key><false/>\
              <key>NSPrivacyAccessedAPITypes</key><array/></dict></plist>";
+        let group = format!(
+            "<dict><key>com.apple.security.application-groups</key><array><string>group.{identifier}</string></array></dict>"
+        );
+        let mut app = executable(&["main", "_malloc"]);
+        app.extend(signed(&group));
         vec![
             ("Info.plist", info.into_bytes()),
             (MANIFEST, manifest.as_bytes().to_vec()),
-            ("Sidevoice", executable(&["main", "_malloc"])),
+            ("Sidevoice", app),
             ("embedded.mobileprovision", b"profile".to_vec()),
             ("_CodeSignature/CodeResources", b"seal".to_vec()),
             ("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info(version)),
+            ("PlugIns/SidevoiceActivity.appex/SidevoiceActivity", signed(&group)),
             ("Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
             ("PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
             (SYMBOLS, b"symbols".to_vec()),
@@ -626,7 +632,8 @@ mod tests {
 
     fn appex_info(version: &str) -> Vec<u8> {
         format!(
-            "<plist version=\"1.0\"><dict><key>CFBundleVersion</key><string>{version}</string>\
+            "<plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>SidevoiceActivity</string>\
+             <key>CFBundleVersion</key><string>{version}</string>\
              <key>CFBundleShortVersionString</key><string>0.1.0</string></dict></plist>"
         )
         .into_bytes()
@@ -721,6 +728,11 @@ mod tests {
         assert!(check(&stale, "ai.sidevoice.mobile", 42).unwrap_err().contains("build number is 0.1.0, not 42"));
         let no_symbols = without(&files, SYMBOLS);
         assert!(check(&no_symbols, "ai.sidevoice.mobile", 42).unwrap_err().contains("no Symbols/*.symbols"));
+        let mut no_group = without(&files, "PlugIns/SidevoiceActivity.appex/SidevoiceActivity");
+        no_group.push(("PlugIns/SidevoiceActivity.appex/SidevoiceActivity", signed("<dict/>")));
+        assert!(check(&no_group, "ai.sidevoice.mobile", 42)
+            .unwrap_err()
+            .contains("PlugIns/SidevoiceActivity.appex is signed without the App Group group.ai.sidevoice.mobile"));
     }
 
     #[test]

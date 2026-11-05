@@ -488,6 +488,7 @@
 				DE39A56F0E67229065F5310F /* Frameworks */,
 				830CF7DA60B05A6B7B7F76A8 /* Embed Foundation Extensions */,
 				EED069FD68684CBCFEC716C7 /* Embed Frameworks */,
+				805AC5EDD274815B17188469 /* Sign the Live Activity extension with its entitlements */,
 			);
 			buildRules = (
 			);
@@ -580,6 +581,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "npm run -- tauri ios xcode-script -v --platform \"${PLATFORM_DISPLAY_NAME:?}\" --sdk-root \"${SDKROOT:?}\" --framework-search-paths \"${FRAMEWORK_SEARCH_PATHS:?}\" --header-search-paths \"${HEADER_SEARCH_PATHS:?}\" --gcc-preprocessor-definitions \"${GCC_PREPROCESSOR_DEFINITIONS:-}\" --configuration \"${CONFIGURATION:?}\" ${FORCE_COLOR} ${ARCHS:?}\n";
+		};
+		805AC5EDD274815B17188469 /* Sign the Live Activity extension with its entitlements */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Sign the Live Activity extension with its entitlements";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${CODE_SIGNING_ALLOWED}\" = \"NO\" ]; then\n  codesign --force --sign - --entitlements \"${SRCROOT}/SidevoiceActivity/SidevoiceActivity.entitlements\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/PlugIns/SidevoiceActivity.appex\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

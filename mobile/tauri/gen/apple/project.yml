@@ -115,6 +115,18 @@ targets:
       - package: CallActivity
         product: CallActivity
       - target: SidevoiceActivity
+    # Live Activity: the extension signed with its own entitlements (the App Group) when the build signs nothing. The Tauri
+    # CLI archives a signed build that way, then signs only the app's executable, with the app's entitlements file, for the
+    # export to keep them when it signs for real; the export keeps an extension's the same way, from the signature it
+    # finds, so without this the extension ships with no App Group and draws no creature. After the app's build phases, so
+    # on the extension as embedded. The CLI's own post-build scripts (below) stay unused: a second key would replace this.
+    postBuildScripts:
+      - script: |
+          if [ "${CODE_SIGNING_ALLOWED}" = "NO" ]; then
+            codesign --force --sign - --entitlements "${SRCROOT}/SidevoiceActivity/SidevoiceActivity.entitlements" "${TARGET_BUILD_DIR}/${WRAPPER_NAME}/PlugIns/SidevoiceActivity.appex"
+          fi
+        name: Sign the Live Activity extension with its entitlements
+        basedOnDependencyAnalysis: false
     preBuildScripts:
       - script: |
           npm run -- tauri ios xcode-script -v --platform "${PLATFORM_DISPLAY_NAME:?}" --sdk-root "${SDKROOT:?}" --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration "${CONFIGURATION:?}" ${FORCE_COLOR} ${ARCHS:?}
