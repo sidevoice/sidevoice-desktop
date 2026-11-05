@@ -14,6 +14,7 @@ import UIKit
 public final class CallActivityBridge: NSObject {
     @objc public static func start(_ json: String) {
         let report = Report.read(json)
+        if #available(iOS 16.1, *) { Coming.now.start(enabled: ActivityAuthorizationInfo().areActivitiesEnabled) }
         DispatchQueue.main.async {
             if #available(iOS 16.1, *) { Controller.shared.start(report) }
         }
@@ -27,17 +28,26 @@ public final class CallActivityBridge: NSObject {
     }
 
     @objc public static func end() {
+        Coming.now.set(false)
         DispatchQueue.main.async {
             if #available(iOS 16.1, *) { Controller.shared.end() }
         }
     }
 
-    /// Whether the call's Live Activity is on the screens now: requested and not over. False before iOS 16.1, with Live
-    /// Activities off, and while the app has not yet been in front to request it. Any thread: the media controls ask on
-    /// every report, and give way to the activity only while it runs.
+    /// Whether the call's Live Activity is on the screens now (requested and not over), or on its way: from `start` until
+    /// it is requested, when one can come (`Coming`). False before iOS 16.1, with Live Activities off (from the call's
+    /// first report), and once a request has failed. Any thread: the media controls ask on every report, and give way to
+    /// the activity only while this holds. "On its way" counts because the first report comes before the main queue has
+    /// requested the activity: Now Playing shown for that moment would leave the app the system's Now Playing app for the
+    /// rest of the process, an empty card above the activity (HANDOVER-live-activity R2-6).
+    ///
+    /// It also holds while the app is not in front to request the activity, so with Live Activities on, a call that starts
+    /// in the background has no Now Playing either, and nothing on the Lock Screen until the app next comes to the front.
+    /// Deliberate (D2's scope): Now Playing shown until then would make the app the Now Playing app for good once the
+    /// activity came, the empty card again. A request that fails and later succeeds on a retry has the same trade-off.
     @objc public static func running() -> Bool {
         guard #available(iOS 16.1, *) else { return false }
-        return Activity<CallActivityAttributes>.activities.contains {
+        return Coming.now.get() || Activity<CallActivityAttributes>.activities.contains {
             $0.activityState != .ended && $0.activityState != .dismissed
         }
     }
@@ -302,6 +312,7 @@ final class Controller {
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             NSLog("Sidevoice: Live Activities are off for the app")
+            Coming.now.set(false)
             return
         }
         let state = current()
@@ -317,9 +328,11 @@ final class Controller {
             }
         } catch {
             failedAt = Date()
+            Coming.now.set(false)
             NSLog("Sidevoice: the call's Live Activity did not start: \(error)")
             return
         }
+        Coming.now.set(false)
         NSLog("Sidevoice: Live Activity: requested %@", new.id)
         activity = new
         lifecycle.adopt(new.id)

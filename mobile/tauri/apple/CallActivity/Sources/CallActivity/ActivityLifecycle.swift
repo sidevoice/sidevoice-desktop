@@ -61,3 +61,34 @@ public struct ActivityLifecycle: Equatable {
         return inFront ? .request : .wait
     }
 }
+
+/// Whether the call's activity is on its way (`CallActivityBridge.running`): from the call's start until it is requested,
+/// or found it cannot be. Set at once by the bridge's `start`, on the caller's thread, so the media controls asking on the
+/// same thread right after already see it; cleared by `end` and by the controller once the activity is requested or
+/// cannot be. Any thread.
+public final class Coming: @unchecked Sendable {
+    public static let now = Coming()
+    private let lock = NSLock()
+    private var value = false
+
+    public init() {}
+
+    /// A call starts. Its activity is on its way only if one can come: with Live Activities off for the app (`enabled`
+    /// false) none ever will, and Now Playing must not wait for it, not even until the app is next in front (D2 = A's
+    /// fallback: Now Playing and the headset's buttons from the call's first report).
+    public func start(enabled: Bool) {
+        set(enabled)
+    }
+
+    public func get() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    public func set(_ new: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        value = new
+    }
+}

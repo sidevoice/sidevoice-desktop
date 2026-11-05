@@ -34,8 +34,9 @@ trait Os {
     /// log file is not read by `log show`. Nothing elsewhere.
     fn os_log(_category: &str, _message: &str) {}
 
-    /// Whether the surface is on the system's screens now (iOS: a Live Activity that has been requested and is not over:
-    /// it needs iOS 16.1, the person may have it off, and it starts only while the app is in front). False where none is.
+    /// Whether the surface is on the system's screens now, or on its way (iOS: a Live Activity that has been requested and
+    /// is not over, or one the call's start asked for with Live Activities on and not yet requested: it needs iOS 16.1,
+    /// the person may have it off, and it starts only while the app is in front). False where none is.
     fn running() -> bool {
         false
     }
