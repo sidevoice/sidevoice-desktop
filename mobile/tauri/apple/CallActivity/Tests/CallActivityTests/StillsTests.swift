@@ -21,6 +21,12 @@ final class StillsTests: XCTestCase {
         XCTAssertNotNil(CallStills.image("straw-hat.png"))
     }
 
+    func testAStillIsScaledDownToItsSlot() throws {
+        CallStills.directory = Bundle.module.url(forResource: "Fixtures", withExtension: nil)
+        let image = try XCTUnwrap(CallStills.image("straw-hat.png", side: 26))
+        XCTAssertLessThanOrEqual(max(image.size.width, image.size.height) * image.scale, 78)
+    }
+
     func testNoAppGroupContainerIsNamed() {
         CallStills.directory = nil
         XCTAssertTrue(CallStills.problem("straw-hat.png")?.contains("no App Group container") ?? false)

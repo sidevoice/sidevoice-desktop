@@ -17,9 +17,11 @@ struct Still: View {
     var grey = false
     var ground = Ground.tile
     var overflow = false
+    /// The slot's side, in points: the still is drawn from a copy scaled down to it (`CallStills.image(_:side:)`).
+    var side: CGFloat
 
     @ViewBuilder var body: some View {
-        if let file = creature?.file, let image = CallStills.image(file) {
+        if let file = creature?.file, let image = CallStills.image(file, side: side * (overflow ? creature?.k ?? 1 : 1)) {
             let still = Image(uiImage: image).resizable().interpolation(.high).scaledToFit()
             let drawn = grey
                 // Offline: the gallery's `grayscale(1) brightness(.85)` at 70 %.
@@ -97,7 +99,7 @@ struct CreatureTile: View {
                             // CSS `circle` to the farthest corner from (50 %, 70 %).
                             endRadius: size * 0.8602))
             }
-            Still(creature: state.creature, grey: state.phase == .offline, overflow: true)
+            Still(creature: state.creature, grey: state.phase == .offline, overflow: true, side: inner)
                 .frame(width: inner, height: inner)
         }
         .frame(width: size, height: size)
@@ -146,7 +148,7 @@ struct RoundFace: View {
     var size: CGFloat
 
     var body: some View {
-        Still(creature: state.creature, grey: state.phase == .offline, ground: .disc)
+        Still(creature: state.creature, grey: state.phase == .offline, ground: .disc, side: size)
             .frame(width: size, height: size)
             .clipShape(Circle())
     }
@@ -171,7 +173,7 @@ struct OthersStack: View {
             HStack(spacing: 0) {
                 HStack(spacing: -8) {
                     ForEach(Array(state.others.prefix(3).enumerated()), id: \.offset) { _, other in
-                        Still(creature: other, ground: .disc, overflow: true)
+                        Still(creature: other, ground: .disc, overflow: true, side: 26)
                             .frame(width: 26, height: 26)
                     }
                 }
@@ -241,15 +243,19 @@ struct StateGlyph: View {
             case .listening:
                 // The mic (scheme E): you are talking.
                 symbol("mic.fill", effect: .pulse)
-            case .transcribing, .said:
-                // The bars, at full tone.
+            case .transcribing:
+                // The bars, at full tone, breathing while the words are transcribed (operator, 2026-11-05).
+                GlyphBars(breathe: true).frame(width: size, height: size)
+            case .said:
                 GlyphBars().frame(width: size, height: size)
             case .working:
                 symbol("ellipsis", effect: .bounce)
             case .speaking:
                 symbol("speaker.wave.2.fill", effect: .pulse)
             case .holding:
-                symbol("pause.circle.fill", effect: .fade)
+                // A slashed tray (operator, 2026-11-05): SF Symbols has none, so the tray with a slash drawn over it.
+                TraySlash(size: size)
+                    .transition(.opacity.combined(with: .scale(scale: 0.6, anchor: .bottom)).animation(.easeOut(duration: 0.5)))
             case .offline:
                 symbol("circle.slash", effect: .fade)
             }
@@ -302,11 +308,32 @@ struct SymbolEntrance: View {
 /// their bottom when they appear; always at full tone.
 @available(iOS 16.1, *)
 struct GlyphBars: View {
+    /// Transcribing: the bars fade to 35 % and back, twice, as they appear. A Live Activity's animations end within about
+    /// 2 s, so this is the slow blink the operator asked for, as long as the system lets it last.
+    var breathe = false
+    @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isLuminanceReduced) private var reduced
     static let heights: [CGFloat] = [7, 12, 16, 11, 7]
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if #available(iOS 17.0, *), breathe, !reduceMotion, !reduced {
+            bars
+                .keyframeAnimator(initialValue: 1.0, trigger: appeared) { content, opacity in
+                    content.opacity(opacity)
+                } keyframes: { _ in
+                    CubicKeyframe(0.35, duration: 0.5)
+                    CubicKeyframe(1, duration: 0.5)
+                    CubicKeyframe(0.35, duration: 0.5)
+                    CubicKeyframe(1, duration: 0.5)
+                }
+                .onAppear { appeared = true }
+        } else {
+            bars
+        }
+    }
+
+    private var bars: some View {
         GeometryReader { box in
             let scale = box.size.width / 24
             ZStack(alignment: .topLeading) {
@@ -334,6 +361,34 @@ struct Stretch: ViewModifier {
 
     func body(content: Content) -> some View {
         content.scaleEffect(x: 1, y: y, anchor: anchor)
+    }
+}
+
+/// Can't receive: SF Symbols' `tray` with a slash from top left to bottom right, cut out of the tray with a gap on each
+/// side (the gallery's `traySlash`).
+@available(iOS 16.1, *)
+struct TraySlash: View {
+    var size: CGFloat
+
+    var body: some View {
+        let slash = Path { path in
+            path.move(to: CGPoint(x: size * 0.15, y: size * 0.1))
+            path.addLine(to: CGPoint(x: size * 0.85, y: size * 0.82))
+        }
+        ZStack {
+            Image(systemName: "tray")
+                .font(.system(size: size * 0.8, weight: .bold))
+                .frame(width: size, height: size)
+                .mask {
+                    ZStack {
+                        Rectangle()
+                        slash.stroke(style: StrokeStyle(lineWidth: size * 0.22, lineCap: .round)).blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                }
+            slash.stroke(style: StrokeStyle(lineWidth: size * 0.09, lineCap: .round))
+        }
+        .frame(width: size, height: size)
     }
 }
 
@@ -409,12 +464,26 @@ extension CallStills {
         if once.first("not named") { log.error("no still named in the call's state: the app has not kept one for it") }
     }
 
-    /// The still `file` as an image; nil draws the placeholder. What stops it is logged once for each cause, so that a card with no
-    /// creature says why in the device's log (the widget extension has no other voice).
-    static func image(_ file: String) -> UIImage? {
+    private static let scaled = NSCache<NSString, UIImage>()
+
+    /// The still `file` as an image, scaled down to `side` points at the screen's 3×; nil draws the placeholder. The
+    /// compact island drew no creature on the phone while the expanded island and the Lock Screen drew the same 240–480 px
+    /// file: the system leaves out an image much larger than its slot there. A copy at the slot's size also keeps the
+    /// extension's memory down. What stops it is logged once for each cause, so that a card with no creature says why in
+    /// the device's log (the widget extension has no other voice).
+    static func image(_ file: String, side: CGFloat = 64) -> UIImage? {
+        let pixels = max(1, (side * 3).rounded(.up))
+        let key = "\(directory?.path ?? "-")/\(file)@\(Int(pixels))" as NSString
+        if let image = scaled.object(forKey: key) { return image }
         if let url = url(file), let image = UIImage(contentsOfFile: url.path) {
             if once.first("drawn \(file)") { log.notice("still drawn: \(file, privacy: .public)") }
-            return image
+            let width = image.size.width * image.scale, height = image.size.height * image.scale
+            let fit = min(1, pixels / max(width, height, 1))
+            let small = fit < 1
+                ? image.preparingThumbnail(of: CGSize(width: (width * fit).rounded(), height: (height * fit).rounded())) ?? image
+                : image
+            scaled.setObject(small, forKey: key)
+            return small
         }
         if let reason = problem(file) {
             if once.first(reason) { log.error("still not drawn: \(reason, privacy: .public)") }
