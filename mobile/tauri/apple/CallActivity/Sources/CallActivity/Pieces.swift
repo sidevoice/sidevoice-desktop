@@ -243,15 +243,19 @@ struct StateGlyph: View {
             case .listening:
                 // The mic (scheme E): you are talking.
                 symbol("mic.fill", effect: .pulse)
-            case .transcribing, .said:
-                // The bars, at full tone.
+            case .transcribing:
+                // The bars, at full tone, breathing while the words are transcribed (operator, 2026-11-05).
+                GlyphBars(breathe: true).frame(width: size, height: size)
+            case .said:
                 GlyphBars().frame(width: size, height: size)
             case .working:
                 symbol("ellipsis", effect: .bounce)
             case .speaking:
                 symbol("speaker.wave.2.fill", effect: .pulse)
             case .holding:
-                symbol("pause.circle.fill", effect: .fade)
+                // A slashed tray (operator, 2026-11-05): SF Symbols has none, so the tray with a slash drawn over it.
+                TraySlash(size: size)
+                    .transition(.opacity.combined(with: .scale(scale: 0.6, anchor: .bottom)).animation(.easeOut(duration: 0.5)))
             case .offline:
                 symbol("circle.slash", effect: .fade)
             }
@@ -304,11 +308,32 @@ struct SymbolEntrance: View {
 /// their bottom when they appear; always at full tone.
 @available(iOS 16.1, *)
 struct GlyphBars: View {
+    /// Transcribing: the bars fade to 35 % and back, twice, as they appear. A Live Activity's animations end within about
+    /// 2 s, so this is the slow blink the operator asked for, as long as the system lets it last.
+    var breathe = false
+    @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isLuminanceReduced) private var reduced
     static let heights: [CGFloat] = [7, 12, 16, 11, 7]
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if #available(iOS 17.0, *), breathe, !reduceMotion, !reduced {
+            bars
+                .keyframeAnimator(initialValue: 1.0, trigger: appeared) { content, opacity in
+                    content.opacity(opacity)
+                } keyframes: { _ in
+                    CubicKeyframe(0.35, duration: 0.5)
+                    CubicKeyframe(1, duration: 0.5)
+                    CubicKeyframe(0.35, duration: 0.5)
+                    CubicKeyframe(1, duration: 0.5)
+                }
+                .onAppear { appeared = true }
+        } else {
+            bars
+        }
+    }
+
+    private var bars: some View {
         GeometryReader { box in
             let scale = box.size.width / 24
             ZStack(alignment: .topLeading) {
@@ -336,6 +361,34 @@ struct Stretch: ViewModifier {
 
     func body(content: Content) -> some View {
         content.scaleEffect(x: 1, y: y, anchor: anchor)
+    }
+}
+
+/// Can't receive: SF Symbols' `tray` with a slash from top left to bottom right, cut out of the tray with a gap on each
+/// side (the gallery's `traySlash`).
+@available(iOS 16.1, *)
+struct TraySlash: View {
+    var size: CGFloat
+
+    var body: some View {
+        let slash = Path { path in
+            path.move(to: CGPoint(x: size * 0.15, y: size * 0.1))
+            path.addLine(to: CGPoint(x: size * 0.85, y: size * 0.82))
+        }
+        ZStack {
+            Image(systemName: "tray")
+                .font(.system(size: size * 0.8, weight: .bold))
+                .frame(width: size, height: size)
+                .mask {
+                    ZStack {
+                        Rectangle()
+                        slash.stroke(style: StrokeStyle(lineWidth: size * 0.22, lineCap: .round)).blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                }
+            slash.stroke(style: StrokeStyle(lineWidth: size * 0.09, lineCap: .round))
+        }
+        .frame(width: size, height: size)
     }
 }
 
