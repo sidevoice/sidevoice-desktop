@@ -2,7 +2,7 @@
 //! itself while the person records a shortcut. Only here is the keyboard listened to, and only while a single key is set
 //! (docs/SHORTCUTS.md → "Single keys"); a combination needs none of it.
 
-use sidevoice_desktop_core::shortcuts::{Heard, SingleKey};
+use sidevoice_desktop_core::shortcuts::{Heard, Listened};
 use std::sync::Arc;
 use tauri::{AppHandle, Runtime};
 
@@ -12,16 +12,8 @@ use tauri::{AppHandle, Runtime};
 mod imp;
 use imp::Native;
 
-/// What a listener hears of the keyboard, and no more: which of the app's single keys went down or up, and that another key
-/// was pressed (so a pending tap was a modifier of it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyEvent {
-    Single { key: SingleKey, down: bool },
-    Other,
-}
-
 /// Where a listener's events go. Called on the listener's own thread: it must be quick.
-pub type Sink = Arc<dyn Fn(KeyEvent) + Send + Sync>;
+pub type Sink = Arc<dyn Fn(Listened) + Send + Sync>;
 
 /// Where a capture's events go. Called on the main thread.
 pub type CaptureSink = Arc<dyn Fn(Heard) + Send + Sync>;

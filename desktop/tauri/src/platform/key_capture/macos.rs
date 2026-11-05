@@ -2,7 +2,7 @@
 //! down), made only while a single key is set and Input Monitoring is granted; and a local monitor of the app's own events
 //! for recording a shortcut, which needs no permission.
 
-use super::{CaptureSink, KeyEvent, Os, Sink};
+use super::{CaptureSink, Os, Sink};
 use block2::RcBlock;
 use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult};
 use core_graphics::event::{
@@ -11,7 +11,7 @@ use core_graphics::event::{
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSEvent, NSEventMask, NSEventType};
-use sidevoice_desktop_core::shortcuts::{Heard, Mods, SingleKey};
+use sidevoice_desktop_core::shortcuts::{Heard, Listened, Mods, SingleKey};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -91,11 +91,11 @@ fn run(sink: Sink, stop: Arc<AtomicBool>, ready: mpsc::Sender<bool>) {
                 CGEventType::FlagsChanged => {
                     let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
                     sink(match SingleKey::from_macos_modifier(code) {
-                        Some(key) => KeyEvent::Single { key, down: key.macos_down(event.get_flags().bits()) },
-                        None => KeyEvent::Other,
+                        Some(key) => Listened::Single { key, down: key.macos_down(event.get_flags().bits()) },
+                        None => Listened::Other,
                     });
                 }
-                CGEventType::KeyDown => sink(KeyEvent::Other),
+                CGEventType::KeyDown => sink(Listened::Other),
                 _ => {}
             }
             CallbackResult::Keep

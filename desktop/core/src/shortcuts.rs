@@ -289,6 +289,29 @@ pub enum Edge {
     Other,
 }
 
+/// What a listener of the keyboard hears, and no more: which of the app's single keys went down or up, and that another key was
+/// pressed (so a pending tap was a modifier of it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listened {
+    Single { key: SingleKey, down: bool },
+    Other,
+}
+
+/// What a listener's event means to each action: the edges to feed their machines. A single key's own edges go to the action bound
+/// to it; another key goes to every action bound to a key a listener carries, to make what is pending not a tap.
+pub fn route(bindings: &[Option<Parsed>; 3], heard: Listened) -> Vec<(Action, Edge)> {
+    Action::ALL
+        .into_iter()
+        .filter_map(|action| match (&bindings[action.index()], heard) {
+            (Some(Parsed::Single { key, .. }), Listened::Single { key: pressed, down }) if *key == pressed => {
+                Some((action, if down { Edge::Down } else { Edge::Up }))
+            }
+            (Some(binding), Listened::Other) if binding.listened().is_some() => Some((action, Edge::Other)),
+            _ => None,
+        })
+        .collect()
+}
+
 /// What the machine answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
@@ -989,6 +1012,27 @@ mod tests {
         assert_eq!(double.on(Edge::Up, at(1040)), None);
         assert_eq!(double.on(Edge::Down, at(1100)), None);
         assert_eq!(double.on(Edge::Up, at(1150)), None);
+    }
+
+    #[test]
+    fn what_a_listener_hears_reaches_only_the_actions_bound_to_it() {
+        let bound = |mute: &str, hold: &str, one: &str| [mute, hold, one].map(|text| parse(text).unwrap());
+        let bindings = bound("Ctrl+Alt+M", "Fn:hold", "RightControl:double");
+        let fn_key = |down| Listened::Single { key: SingleKey::Fn, down };
+        assert_eq!(route(&bindings, fn_key(true)), [(Action::HoldToTalk, Edge::Down)]);
+        assert_eq!(route(&bindings, fn_key(false)), [(Action::HoldToTalk, Edge::Up)]);
+        let control = Listened::Single { key: SingleKey::RightControl, down: true };
+        assert_eq!(route(&bindings, control), [(Action::OneTurn, Edge::Down)]);
+        assert!(route(&bindings, Listened::Single { key: SingleKey::RightAlt, down: true }).is_empty());
+        // Another key spoils a pending tap of every key a listener carries, not of a combination's action.
+        assert_eq!(
+            route(&bindings, Listened::Other),
+            [(Action::HoldToTalk, Edge::Other), (Action::OneTurn, Edge::Other)]
+        );
+        assert!(
+            route(&bound("Ctrl+Alt+M", "", "F13:tap"), Listened::Other).is_empty(),
+            "a hot key's action hears no keys"
+        );
     }
 
     #[test]

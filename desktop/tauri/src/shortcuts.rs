@@ -6,15 +6,15 @@
 //! Locks: `change` serialises changes and is only ever taken off the main thread (registering waits for it); `current` is
 //! what the hot key handler and the listener read, held for a moment and never across a call into the system.
 
-use crate::platform::key_capture::{self, KeyEvent};
+use crate::platform::key_capture;
 use crate::platform::{session, shortcut_access};
 use crate::{refusal, AppState};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::Command;
 use sidevoice_desktop_core::settings::{GlobalShortcut, Registration, Settings};
 use sidevoice_desktop_core::shortcuts::{
-    self, Action, Edge, Effect, Headset, HeadsetPress, Heard, Held, Hold, Machine, Parsed, Permission, PermissionKind,
-    PermissionState, Recorded, Recorder, Release, Status, Watch, WATCH_TICK,
+    self, Action, Edge, Effect, Headset, HeadsetPress, Heard, Held, Hold, Listened, Machine, Parsed, Permission,
+    PermissionKind, PermissionState, Recorded, Recorder, Release, Status, Watch, WATCH_TICK,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -128,7 +128,7 @@ fn apply_locked(app: &AppHandle, runtime: &Shortcuts) {
         if needed && key_capture::listens() && access != Some(false) {
             if listener.is_none() {
                 let target = app.clone();
-                *listener = key_capture::listen(Arc::new(move |event| key_event(&target, event)));
+                *listener = key_capture::listen(Arc::new(move |heard| key_event(&target, heard)));
             }
         } else {
             *listener = None;
@@ -426,22 +426,9 @@ fn hot_key(app: &AppHandle, action: Action, edge: Edge) {
     feed(app, action, edge);
 }
 
-/// What a listener heard: the single key's own edges to the action bound to it, and another key to every pending tap.
-fn key_event(app: &AppHandle, event: KeyEvent) {
-    let runtime = app.state::<Shortcuts>();
-    let targets: Vec<(Action, Edge)> = {
-        let current = runtime.current.lock().unwrap();
-        Action::ALL
-            .into_iter()
-            .filter_map(|action| match (&current.parsed[action.index()], event) {
-                (Some(Parsed::Single { key, .. }), KeyEvent::Single { key: heard, down }) if *key == heard => {
-                    Some((action, if down { Edge::Down } else { Edge::Up }))
-                }
-                (Some(binding), KeyEvent::Other) if binding.listened().is_some() => Some((action, Edge::Other)),
-                _ => None,
-            })
-            .collect()
-    };
+/// What a listener heard: the single key's own edges go to the action bound to it, and another key to every pending tap.
+fn key_event(app: &AppHandle, heard: Listened) {
+    let targets = shortcuts::route(&app.state::<Shortcuts>().current.lock().unwrap().parsed, heard);
     for (action, edge) in targets {
         feed(app, action, edge);
     }

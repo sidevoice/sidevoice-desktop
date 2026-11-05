@@ -513,7 +513,7 @@ pub fn run() {
             // A person still on the old mute default is moved to this system's, once (core `shortcuts::migrated_mute`).
             if let Some(kept) = stored.as_mut() {
                 if kept.migrate_shortcuts(shortcut_access::default_mute()) {
-                    if let Some(dir) = data::desktop_dir(&handle).ok() {
+                    if let Ok(dir) = data::desktop_dir(&handle) {
                         let _ = settings::save(&dir, kept);
                     }
                 }
