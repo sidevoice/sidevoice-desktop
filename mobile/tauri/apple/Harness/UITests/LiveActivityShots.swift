@@ -1,10 +1,12 @@
 import XCTest
 
 /// Every fixture's Live Activity as the system draws it on the Simulator: the Lock Screen card, the compact island (the
-/// app in the background), the expanded island (a long press on it) and the minimal island (beside a second activity).
+/// app in the background) and the expanded island (a long press on it). The minimal island is not shot: a second
+/// activity of the same app does not make the island show two minimal views (it shows one compact).
 /// The PNGs go to `$LA_OUT` as `<presentation>-<fixture>-<appearance>.png`, `$LA_APPEARANCE` being the Simulator's
 /// (`cargo xtask mobile live-activity ios` sets both, and the appearance); beside each expanded shot, the frames (pt) of
-/// what SpringBoard shows at the top of the screen, as JSON. Dark appearance shoots only the fixtures marked `dark`. `$LA_ONLY` (fixture names, comma-separated) shoots only those.
+/// what SpringBoard shows at the top of the screen, as JSON. Dark appearance shoots only the fixtures marked `dark`.
+/// `$LA_ONLY` (fixture names, comma-separated) shoots only those, in either appearance.
 final class LiveActivityShots: XCTestCase {
     let environment = ProcessInfo.processInfo.environment
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -38,7 +40,6 @@ final class LiveActivityShots: XCTestCase {
     func shoot(_ fixture: Fixture) {
         let app = XCUIApplication()
         app.launchEnvironment["LA_FIXTURE"] = fixture.json
-        if fixture.second { app.launchEnvironment["LA_SECOND"] = "1" }
         app.launch()
         let status = app.staticTexts["harness.status"]
         let started = NSPredicate(format: "label == 'started' OR label BEGINSWITH 'failed'")
@@ -66,11 +67,10 @@ final class LiveActivityShots: XCTestCase {
             settle(1)
         }
 
-        // The app in the background: the island shows the activity, compact (minimal beside a second one).
+        // The app in the background: the island shows the activity, compact.
         XCUIDevice.shared.press(.home)
         settle(1.5)
         if fixture.presentations.contains(.compact) { save(name(.compact, fixture)) }
-        if fixture.presentations.contains(.minimal) { save(name(.minimal, fixture)) }
 
         if fixture.presentations.contains(.expanded) {
             // A long press on the island expands it.

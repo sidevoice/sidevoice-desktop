@@ -44,28 +44,13 @@ final class Harness: ObservableObject {
         // The controller ends what an earlier fixture left before it requests its own.
         let before = Set(Activity<CallActivityAttributes>.activities.map(\.id))
         CallActivityBridge.start(fixture)
-        guard let id = await running(besides: before) else {
+        guard await running(besides: before) != nil else {
             status = "failed: the activity did not start"
             return
         }
         guard await ended(before) else {
             status = "failed: an earlier fixture's activity did not end"
             return
-        }
-        // A second activity, for the minimal presentation: the island shows two activities as two minimal views.
-        if environment["LA_SECOND"] != nil {
-            do {
-                _ = try Activity.request(
-                    attributes: CallActivityAttributes(), content: ActivityContent(state: Self.second, staleDate: nil),
-                    pushType: nil)
-            } catch {
-                status = "failed: the second activity did not start: \(error)"
-                return
-            }
-            guard await running(besides: before.union([id])) != nil else {
-                status = "failed: the second activity did not start"
-                return
-            }
         }
         status = "started"
     }
@@ -74,21 +59,6 @@ final class Harness: ObservableObject {
         status = "fixtures are Debug only"
     }
     #endif
-
-    /// Another conversation's call, working, for the second activity.
-    static var second: CallState {
-        var state = CallState()
-        state.phase = .working
-        state.title = "Ajustes de voz"
-        state.creature = .init(file: file("bunny-headphones"), k: 1.35)
-        state.conversationCount = 3
-        state.words.state = "Trabajando"
-        state.words.offline = "Desconectada"
-        state.words.mute = "Silenciar"
-        state.words.unmute = "Activar micrófono"
-        state.words.hangUp = "Colgar"
-        return state
-    }
 
     /// The Rust side's file name of still `id` (`Still::file_name`): the id's bytes in hex.
     static func file(_ id: String) -> String {

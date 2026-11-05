@@ -5,15 +5,13 @@ import Foundation
 /// with the gallery's sample texts (research/live-activity-design-2026-11-02, src/data.js `STRINGS`, es and en).
 struct Fixture {
     enum Presentation: String, CaseIterable {
-        case lock, compact, expanded, minimal
+        case lock, compact, expanded
     }
 
     /// `<state>[-<variant>]`, as the shots are named.
     var name: String
     var details: [String: Any]
     var presentations: [Presentation] = [.lock, .compact, .expanded]
-    /// A second activity beside it, for the minimal presentation.
-    var second = false
     /// Shot in dark appearance too: every state, and the variants the gallery draws dark. The others are shot in light
     /// only, which keeps the run within the CI's time.
     var dark = false
@@ -156,8 +154,8 @@ extension Fixture {
         return ["title": long ? texts.long.title : texts.title, "muted": micOff, "surface": surface]
     }
 
-    /// Every fixture the harness shoots (`dark`: in dark appearance too): each state; mic off; English; long texts in both languages; stills missing; 6
-    /// and 9 conversations; and the minimal island beside a second activity.
+    /// Every fixture the harness shoots (`dark`: in dark appearance too): each state; mic off; English; long texts in both
+    /// languages; stills missing; 6 and 9 conversations.
     static var all: [Fixture] {
         var all: [Fixture] = []
         for phase in phases {
@@ -178,13 +176,6 @@ extension Fixture {
         }
         for count in [6, 9] {
             all.append(Fixture(name: "working-conversations-\(count)", details: details("working", conversations: count)))
-        }
-        for (name, phase, micOff) in [("working", "working", false), ("listening", "listening", false),
-                                      ("working-mic-off", "working", true)] {
-            all.append(
-                Fixture(
-                    name: name, details: details(phase, micOff: micOff), presentations: [.minimal], second: true,
-                    dark: name == "working"))
         }
         return all
     }

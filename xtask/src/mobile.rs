@@ -21,7 +21,7 @@
 //!   screenshots and the app's log into dist/simulator/ (platform/ios_simulator.rs). Needs macOS with Xcode.
 //! - `mobile live-activity ios`: the call's Live Activity as the system draws it on an iPhone Pro simulator, in light and
 //!   dark, from fixtures of the call's details (the harness, mobile/tauri/apple/Harness, test only): the Lock Screen card and
-//!   the compact, expanded and minimal island of every state, with the expanded island's frames, into
+//!   the compact and expanded island of every state, with the expanded island's frames, into
 //!   dist/live-activity-sim/, and an `INDEX.md` that names the design gallery's PNG each shot is to match. `LA_ONLY`
 //!   (fixture names, comma-separated) shoots only those. Needs macOS with Xcode and XcodeGen.
 //! - `mobile lint android|ios`: Clippy, warnings denied, over the mobile crates for their target (they are empty on a

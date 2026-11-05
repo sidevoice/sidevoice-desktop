@@ -7,8 +7,8 @@
 #   with the creatures' stills written where the app writes them (the App Group's `call-stills/`). Debug only.
 # - `LiveActivityHarnessWidget`: the widget extension built from the shipping extension's own sources (../Widget,
 #   ../Intents), so the system draws the real views.
-# - `LiveActivityHarnessUITests`: XCUITest, which drives the fixtures and takes the Lock Screen, compact, expanded and
-#   minimal shots.
+# - `LiveActivityHarnessUITests`: XCUITest, which drives the fixtures and takes the Lock Screen, compact and expanded
+#   shots.
 name: LiveActivityHarness
 options:
   bundleIdPrefix: ai.sidevoice.mobile

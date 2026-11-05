@@ -2,8 +2,8 @@ name: live-activity-sim
 
 # The call's Live Activity as the system draws it on the iOS Simulator (docs/MOBILE.md → "The Live Activity on the
 # Simulator"): the harness (mobile/tauri/apple/Harness, test only) starts it from fixtures of the call's details through the
-# app's own bridge, and its UI tests shoot the Lock Screen card and the compact, expanded and minimal island of every
-# state, light and dark, on an iPhone Pro simulator. The artifact `live-activity-sim` holds the PNGs, the expanded island's
+# app's own bridge, and its UI tests shoot the Lock Screen card and the compact and expanded island of every state,
+# light and dark, on an iPhone Pro simulator. The artifact `live-activity-sim` holds the PNGs, the expanded island's
 # frames and an INDEX.md naming the design gallery's PNG each shot is to match.
 # It runs when what the activity shows can change: its Swift, the Rust that makes its surface, and the harness itself.
 # Run by hand with `ref` (a branch, a tag, a commit or `refs/pull/N/head`), it shoots that ref's Live Activity (its

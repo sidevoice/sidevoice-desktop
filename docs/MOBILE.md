@@ -453,14 +453,15 @@ names none of it, so nothing of it is in the app that ships):
 - **A host app** whose fixture mode is compiled in Debug only. Given the call's details in `LA_FIXTURE` (the JSON the Rust
   side hands `SidevoiceCallActivity`), it writes the creatures' stills where the app writes them (the App Group's
   `call-stills/`, under the Rust side's file names), then calls the app's own bridge, `CallActivityBridge.start`: the
-  controller, the text pager and ActivityKit are the app's. With `LA_SECOND` it starts a second activity beside it.
+  controller, the text pager and ActivityKit are the app's.
 - **The widget extension**, built from the shipping extension's own sources (`apple/Widget`, `apple/Intents`).
 - **XCUITest** (`UITests/`): the fixtures (`Fixtures.swift`: every state, mic off, English, long texts in both languages,
   stills missing, 6 and 9 conversations, the gallery's texts) and, per fixture, the Lock Screen card (locked, then woken),
-  the compact island (the app in the background), the expanded island (a long press on it, with the frames in pt of what
-  SpringBoard shows at the top of the screen, as JSON) and the minimal island (beside a second activity).
+  the compact island (the app in the background) and the expanded island (a long press on it, with the frames in pt of
+  what SpringBoard shows at the top of the screen, as JSON: the island's and its elements'). Not the minimal island: a
+  second activity of the same app does not make the island show two minimal views.
 
-It runs on the newest iPhone Pro simulator, in light and then in dark, into `dist/live-activity-sim/`
+It runs on the newest iPhone Pro simulator, in light and then in dark (every state; the variants in light only), into `dist/live-activity-sim/`
 (`<presentation>-<state>[-<variant>]-<light|dark>.png`, and `INDEX.md`, which names the design gallery's PNG each shot is
 to match). `LA_ONLY` (fixture names, comma-separated) shoots only those. CI: `.github/workflows/live-activity-sim.yml`, on
 the pull requests that touch the activity's Swift, the Rust that makes its surface or the harness, and by hand with `ref`
