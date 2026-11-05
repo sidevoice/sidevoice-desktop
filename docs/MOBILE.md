@@ -484,7 +484,7 @@ names none of it, so nothing of it is in the app that ships):
   (`LA_ANSWERS`). What it was asked is on the app's screen (`harness.actions`) and in the log (`LA harness stand-in: …`).
 - **The buttons** (`UITests/LiveActivityButtons.swift`, light only): mute both ways, skip and hang up on the Lock Screen card;
   mute both ways, hang up, skip and the × in the expanded island. Each asserts that the stand-in was asked, and what the
-  activity shows: the new mic state within 3 s of the tap (the app's update drawn) and still 5 s after it, the old one gone; no card after a hang-up, and the next state after a
+  activity shows: the new mic state within 10 s of the tap (the app's update, as the system draws it) and still 3 s after it is shown, the old one gone; no card after a hang-up, and the next state after a
   skip or a cancel, within 5 s. The host app plays silence on a loop to stay running in the background, as the app does
   in a call (its audio session active): suspended, it got some intents only once launched again. Not the audio switch: it is drawn only while headphones are connected, and the Simulator has none. A failed
   tap leaves a shot and SpringBoard's tree (`buttons-failed-*`). The island's × is tapped once more when nothing follows (its intent now and then never arrives), and the retry is logged (`LA buttons: retry`).
