@@ -4,7 +4,7 @@ import XCTest
 /// app in the background), the expanded island (a long press on it) and the minimal island (beside a second activity).
 /// The PNGs go to `$LA_OUT` as `<presentation>-<fixture>-<appearance>.png`, `$LA_APPEARANCE` being the Simulator's
 /// (`cargo xtask mobile live-activity ios` sets both, and the appearance); beside each expanded shot, the frames (pt) of
-/// what SpringBoard shows at the top of the screen, as JSON. `$LA_ONLY` (fixture names, comma-separated) shoots only those.
+/// what SpringBoard shows at the top of the screen, as JSON. Dark appearance shoots only the fixtures marked `dark`. `$LA_ONLY` (fixture names, comma-separated) shoots only those.
 final class LiveActivityShots: XCTestCase {
     let environment = ProcessInfo.processInfo.environment
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -24,7 +24,10 @@ final class LiveActivityShots: XCTestCase {
 
     func testEveryFixture() throws {
         let only = Set((environment["LA_ONLY"] ?? "").split(separator: ",").map(String.init))
-        let fixtures = Fixture.all.filter { only.isEmpty || only.contains($0.name) }
+        // Named fixtures are shot in either appearance; otherwise dark shoots those marked for it.
+        let fixtures = Fixture.all.filter {
+            only.isEmpty ? appearance == "light" || $0.dark : only.contains($0.name)
+        }
         XCTAssertFalse(fixtures.isEmpty, "no fixture named in LA_ONLY")
         for fixture in fixtures {
             XCTContext.runActivity(named: fixture.name) { _ in shoot(fixture) }
@@ -49,17 +52,23 @@ final class LiveActivityShots: XCTestCase {
         if fixture.presentations.contains(.lock) {
             // The Lock Screen: locked, then woken, with the app's activity on it; then unlocked, back to the app.
             XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
-            settle(1.5)
+            settle(1)
             XCUIDevice.shared.press(.home)
-            settle(2)
+            settle(1.5)
+            // The system asks once whether the app may show Live Activities, over its first card on the Lock Screen.
+            let allow = springboard.buttons["Allow"]
+            if allow.exists {
+                allow.tap()
+                settle(1)
+            }
             save(name(.lock, fixture))
             XCUIDevice.shared.press(.home)
-            settle(1.5)
+            settle(1)
         }
 
         // The app in the background: the island shows the activity, compact (minimal beside a second one).
         XCUIDevice.shared.press(.home)
-        settle(2)
+        settle(1.5)
         if fixture.presentations.contains(.compact) { save(name(.compact, fixture)) }
         if fixture.presentations.contains(.minimal) { save(name(.minimal, fixture)) }
 
@@ -69,12 +78,12 @@ final class LiveActivityShots: XCTestCase {
             springboard.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: screen.width / 2, dy: Self.islandCenterY))
                 .press(forDuration: 1)
-            settle(1.5)
+            settle(1.2)
             let shot = name(.expanded, fixture)
             save(shot)
             frames(shot)
             XCUIDevice.shared.press(.home)
-            settle(1)
+            settle(0.8)
         }
     }
 
