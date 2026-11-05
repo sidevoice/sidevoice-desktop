@@ -483,7 +483,7 @@ names none of it, so nothing of it is in the app that ships):
   activity shows: the new mic state within 1 s and still 2 s later; no card after a hang-up, and the next state after a
   skip or a cancel, within 5 s. The host app plays silence on a loop to stay running in the background, as the app does
   in a call (its audio session active): suspended, it got some intents only once launched again. Not the audio switch: it is drawn only while headphones are connected, and the Simulator has none. A failed
-  tap leaves a shot and SpringBoard's tree (`buttons-failed-*`).
+  tap leaves a shot and SpringBoard's tree (`buttons-failed-*`). The island's × is tapped once more when nothing follows (its intent now and then never arrives), and the retry is logged (`LA buttons: retry`).
 
 It runs on the newest iPhone Pro simulator, in light and then in dark (every state; the variants in light only), into `dist/live-activity-sim/`
 (`<presentation>-<state>[-<variant>]-<light|dark>.png`, and `INDEX.md`, which names the design gallery's PNG each shot is

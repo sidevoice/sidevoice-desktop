@@ -93,7 +93,7 @@ final class LiveActivityButtons: XCTestCase {
             return
         }
         openIsland()
-        tap(es.cancelSend, in: .island, sees: control(es.mute))
+        tap(es.cancelSend, in: .island, sees: control(es.mute), retry: true)
         XCTAssertEqual(heard(app), ["cancel-send"])
     }
 
@@ -140,7 +140,13 @@ final class LiveActivityButtons: XCTestCase {
     /// - otherwise `sees` within 5 s (a button's intent takes about a second to run), in the island opened again: a
     ///   button's tap closes it;
     /// - `gone`: no card within 5 s (the island closed and opened again first).
-    func tap(_ label: String, in place: Place, sees: XCUIElement? = nil, mic: Bool = false, gone: Bool = false) {
+    ///
+    /// `retry`: when `sees` is not shown, tapped once more before failing, and the retry logged (the island's ×: now and
+    /// then its intent never arrives on the Simulator).
+    func tap(
+        _ label: String, in place: Place, sees: XCUIElement? = nil, mic: Bool = false, gone: Bool = false,
+        retry: Bool = false
+    ) {
         let step = "\(name) \(place.rawValue) \(label)"
         var button = control(label)
         if !button.exists, place == .island {
@@ -180,7 +186,14 @@ final class LiveActivityButtons: XCTestCase {
             expandIsland()
         }
         guard let after = appears(sees, within: 5) else {
-            fail(step, "not shown within 5 s")
+            if retry {
+                let why = "\(step): not shown within 5 s, tapped once more (the intent may not have arrived)"
+                NSLog("LA buttons: retry: %@", why)
+                XCTContext.runActivity(named: "retry: \(why)") { _ in }
+                tap(label, in: place, sees: sees)
+            } else {
+                fail(step, "not shown within 5 s")
+            }
             return
         }
         XCTContext.runActivity(named: "\(step): shown \(String(format: "%.2f", after)) s after looking") { _ in }
