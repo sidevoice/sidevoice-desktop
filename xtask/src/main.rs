@@ -150,7 +150,7 @@ const USAGE: &str =
   | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
   | probe memory | probe voice-memory
   | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
-  | mobile build android | mobile build ios | mobile lint android | mobile lint ios | mobile renders ios | mobile sign android | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
+  | mobile build android | mobile build ios | mobile lint android | mobile lint ios | mobile renders ios | mobile live-activity ios | mobile sign android | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
   | mobile symbols --build-number N [--ips CRASH_REPORT]
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly | publish apk-nightly
@@ -174,6 +174,7 @@ fn main() -> ExitCode {
         ["mobile", "build", project] => mobile::build(project),
         ["mobile", "lint", project] => mobile::lint(project),
         ["mobile", "renders", project] => mobile::renders(project),
+        ["mobile", "live-activity", project] => mobile::live_activity(project),
         ["mobile", "sign", "android"] => mobile::sign::sign_android(),
         ["mobile", "test", project] => mobile::test(project),
         ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),

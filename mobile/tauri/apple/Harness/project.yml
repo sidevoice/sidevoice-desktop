@@ -1,0 +1,104 @@
+# The call's Live Activity on the iOS Simulator, for tests only (docs/MOBILE.md → "The Live Activity on the Simulator").
+# `cargo xtask mobile live-activity ios` renders this spec with XcodeGen into a scratch folder; the project is never
+# committed and nothing of it is in the app that ships (mobile/tauri/ios-project.yml names none of it).
+#
+# - `LiveActivityHarness`: a host app whose only job is to start the activity from a fixture of the call's details
+#   (the JSON the Rust side hands `SidevoiceCallActivity`), through the app's real bridge and controller (CallActivityApp),
+#   with the creatures' stills written where the app writes them (the App Group's `call-stills/`). Debug only.
+# - `LiveActivityHarnessWidget`: the widget extension built from the shipping extension's own sources (../Widget,
+#   ../Intents), so the system draws the real views.
+# - `LiveActivityHarnessUITests`: XCUITest, which drives the fixtures and takes the Lock Screen, compact and expanded
+#   shots.
+name: LiveActivityHarness
+options:
+  bundleIdPrefix: ai.sidevoice.mobile
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  CallActivity:
+    path: ../CallActivity
+settings:
+  base:
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+targets:
+  LiveActivityHarness:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: ../Intents
+      # The creatures' stills the fixtures name, as the page would hand them to the app.
+      - path: ../CallActivity/Tests/CallActivityTests/Fixtures
+        type: folder
+        buildPhase: resources
+    info:
+      path: Generated/App-Info.plist
+      properties:
+        CFBundleDisplayName: LA Harness
+        UILaunchScreen: {}
+        NSSupportsLiveActivities: true
+    entitlements:
+      path: Generated/App.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.ai.sidevoice.mobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.sidevoice.mobile.harness
+    dependencies:
+      - package: CallActivity
+        product: CallActivity
+      - package: CallActivity
+        product: CallActivityApp
+      - target: LiveActivityHarnessWidget
+  LiveActivityHarnessWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ../Widget
+      - path: ../Intents
+    info:
+      path: Generated/Widget-Info.plist
+      properties:
+        CFBundleDisplayName: LA Harness
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Generated/Widget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.ai.sidevoice.mobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.sidevoice.mobile.harness.activity
+    dependencies:
+      - package: CallActivity
+        product: CallActivity
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+  LiveActivityHarnessUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    info:
+      path: Generated/UITests-Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.sidevoice.mobile.harness.uitests
+        TEST_TARGET_NAME: LiveActivityHarness
+    dependencies:
+      - target: LiveActivityHarness
+schemes:
+  LiveActivityHarness:
+    build:
+      targets:
+        LiveActivityHarness: all
+        LiveActivityHarnessUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - LiveActivityHarnessUITests

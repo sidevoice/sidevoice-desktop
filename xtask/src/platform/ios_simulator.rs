@@ -20,6 +20,15 @@ trait Os {
     fn renders(_package: &Path, _out: &Path) -> Result<()> {
         Err(format!("the iOS simulator is run from a Mac with Xcode, not from {}", host::name()))
     }
+
+    /// The Live Activity harness `harness` (an XcodeGen spec, `project.yml`, whose scheme `LiveActivityHarness` holds
+    /// UI tests) built once and its tests run on the newest iPhone Pro simulator (not Pro Max), in light and then in
+    /// dark appearance, with `LA_OUT` set to `out` and `LA_APPEARANCE` to the appearance (`LA_ONLY`, when given, passed
+    /// on). In `out`: what the tests leave, `device.txt` and the harness's system log (`system-log.txt`). Both
+    /// appearances run whatever the first did; fails if either failed.
+    fn live_activity(_harness: &Path, _out: &Path, _only: Option<&str>) -> Result<()> {
+        Err(format!("the iOS simulator is run from a Mac with Xcode, not from {}", host::name()))
+    }
 }
 
 #[cfg_attr(target_os = "macos", path = "ios_simulator/macos.rs")]
@@ -32,6 +41,11 @@ use imp::Native;
 /// Runs the tests of the Swift package `package` on a simulator; their renders go to `out` (see `Os::renders`).
 pub fn renders(package: &Path, out: &Path) -> Result<()> {
     Native::renders(package, out)
+}
+
+/// Runs the Live Activity harness's UI tests on a simulator, in both appearances (see `Os::live_activity`).
+pub fn live_activity(harness: &Path, out: &Path, only: Option<&str>) -> Result<()> {
+    Native::live_activity(harness, out, only)
 }
 
 /// Runs the simulator app `zip` on a simulator and leaves its screenshots and logs in `out` (see `Os::screenshots`).

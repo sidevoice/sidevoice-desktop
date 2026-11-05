@@ -19,6 +19,11 @@
 //!   is that check alone, ios.rs).
 //! - `mobile screenshots ios`: the app `mobile build ios` left in dist/ run on an iPhone Pro Max simulator, in light and dark:
 //!   screenshots and the app's log into dist/simulator/ (platform/ios_simulator.rs). Needs macOS with Xcode.
+//! - `mobile live-activity ios`: the call's Live Activity as the system draws it on an iPhone Pro simulator, in light and
+//!   dark, from fixtures of the call's details (the harness, mobile/tauri/apple/Harness, test only): the Lock Screen card and
+//!   the compact and expanded island of every state, with the expanded island's frames, into
+//!   dist/live-activity-sim/, and an `INDEX.md` that names the design gallery's PNG each shot is to match. `LA_ONLY`
+//!   (fixture names, comma-separated) shoots only those. Needs macOS with Xcode and XcodeGen.
 //! - `mobile lint android|ios`: Clippy, warnings denied, over the mobile crates for their target (they are empty on a
 //!   computer: `#![cfg(mobile)]`).
 //! - `mobile sign android`: sign.rs.
@@ -562,6 +567,112 @@ pub fn renders(name: &str) -> Result<()> {
     platform::ios_simulator::renders(&repo().join(CALL_ACTIVITY), &repo().join("dist/live-activity"))
 }
 
+/// Where the Live Activity's Simulator harness is: its XcodeGen spec and UI tests.
+const HARNESS: &str = "mobile/tauri/apple/Harness";
+
+/// `mobile live-activity ios`: the harness's shots of the call's Live Activity into dist/live-activity-sim/, then their
+/// `INDEX.md`. The index is written whether or not every shot was taken: it lists those that were.
+pub fn live_activity(name: &str) -> Result<()> {
+    ensure(project(name)?.cli == "ios", "mobile live-activity: ios only")?;
+    let out = repo().join("dist/live-activity-sim");
+    let only = std::env::var("LA_ONLY").ok().filter(|only| !only.trim().is_empty());
+    let ran = platform::ios_simulator::live_activity(&repo().join(HARNESS), &out, only.as_deref());
+    if !out.is_dir() {
+        return ran;
+    }
+    let mut shots: Vec<String> = fs::read_dir(&out)
+        .map_err(|e| format!("{}: {e}", out.display()))?
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|file| file.ends_with(".png"))
+        .collect();
+    shots.sort();
+    let device = fs::read_to_string(out.join("device.txt")).unwrap_or_default();
+    write(&out.join("INDEX.md"), live_activity_index(&shots, device.trim()))?;
+    ran
+}
+
+/// A shot's name, `<presentation>-<state>[-<variant>]-<light|dark>.png`, in its parts.
+struct Shot<'a> {
+    presentation: &'a str,
+    state: &'a str,
+    variant: &'a str,
+    appearance: &'a str,
+}
+
+impl<'a> Shot<'a> {
+    fn read(file: &'a str) -> Option<Shot<'a>> {
+        let stem = file.strip_suffix(".png")?;
+        let (presentation, rest) = stem.split_once('-')?;
+        let (fixture, appearance) = rest.rsplit_once('-')?;
+        let (state, variant) = fixture.split_once('-').unwrap_or((fixture, ""));
+        Some(Shot { presentation, state, variant, appearance })
+    }
+
+    /// The design gallery's PNGs (research/live-activity-design-2026-11-02, png/) this shot is to match, the closest first.
+    /// The gallery draws Spanish texts, three conversations and its stills; a shot it has no picture of matches none.
+    fn gallery(&self) -> Vec<String> {
+        let (state, theme) = (self.state, self.appearance);
+        let mut names = Vec::new();
+        let mut add = |name: String| names.push(format!("{name}.png"));
+        match self.variant {
+            "" => {
+                // Your words are a moment of a turn, not a state: the gallery shows them in its sheets of every state.
+                if state != "said" {
+                    add(format!("pieces-{state}"));
+                }
+                if ["speaking-light", "speaking-dark", "listening-light", "working-light"]
+                    .contains(&format!("{state}-{theme}").as_str())
+                {
+                    add(format!("phones-{state}-{theme}"));
+                }
+                add(format!("states-{theme}"));
+            }
+            "mic-off" => {
+                if state == "working" {
+                    add("pieces-working-mic-off".into());
+                    if theme == "light" {
+                        add("phones-working-mic-off-light".into());
+                    }
+                }
+                add("states-mic-off-light".into());
+            }
+            "en" => add("states-en-light".into()),
+            "long" if state == "working" => add("pieces-working-long".into()),
+            "no-still" => add(format!("pieces-{state}-no-still")),
+            variant if variant.starts_with("conversations-") => add(format!("pieces-{state}")),
+            _ => {}
+        }
+        names
+    }
+}
+
+/// The artifact's `INDEX.md`: each shot (`shots`, file names) beside the gallery PNGs it is to match, and its frames.
+fn live_activity_index(shots: &[String], device: &str) -> String {
+    let mut index = String::from(
+        "# The call's Live Activity on the iOS Simulator\n\n\
+         Each shot is the whole screen of the simulator, from a fixture of the call's details (the JSON the Rust side hands \
+         the app's Live Activity bridge), named `<presentation>-<state>[-<variant>]-<light|dark>.png`. \
+         The gallery PNGs are the design's (`research/live-activity-design-2026-11-02/png/`), not in this artifact; the \
+         closest comes first. An expanded shot's `.json` holds the frames (pt) of what SpringBoard shows at the top of the \
+         screen.\n\n",
+    );
+    if !device.is_empty() {
+        index.push_str(&format!("Simulator: {device}.\n\n"));
+    }
+    index.push_str("| Shot | Gallery | Frames |\n|---|---|---|\n");
+    for file in shots {
+        let Some(shot) = Shot::read(file) else {
+            index.push_str(&format!("| {file} | (not a shot) | |\n"));
+            continue;
+        };
+        let gallery = shot.gallery();
+        let gallery = if gallery.is_empty() { "none drawn".to_owned() } else { gallery.join(", ") };
+        let frames = if shot.presentation == "expanded" { file.replace(".png", ".json") } else { String::new() };
+        index.push_str(&format!("| {file} | {gallery} | {frames} |\n"));
+    }
+    index
+}
+
 /// `mobile lint android|ios`: Clippy over the mobile crates for the target they exist for, warnings denied (the crates are
 /// empty on a computer, so `cargo xtask lint` does not see them: D-RULE-ROOT). Android through `cargo ndk`, which hands the
 /// NDK's compilers to the build scripts. Needs the web interface (`mobile/tauri/tauri.conf.json`'s `frontendDist`) and the
@@ -957,6 +1068,34 @@ mod tests {
         fs::create_dir_all(dir.path().join("arm64-sim/other")).unwrap();
         assert_eq!(find_app(dir.path(), 3), Some(app));
         assert_eq!(find_app(dir.path(), 2), None, "deeper than asked");
+    }
+
+    #[test]
+    fn a_shot_is_named_beside_the_gallery_pngs_it_is_to_match() {
+        let gallery = |file: &str| Shot::read(file).unwrap().gallery();
+        assert_eq!(
+            gallery("lock-working-light.png"),
+            ["pieces-working.png", "phones-working-light.png", "states-light.png"]
+        );
+        assert_eq!(gallery("expanded-said-dark.png"), ["states-dark.png"]);
+        assert_eq!(
+            gallery("compact-working-mic-off-light.png"),
+            ["pieces-working-mic-off.png", "phones-working-mic-off-light.png", "states-mic-off-light.png"]
+        );
+        assert_eq!(gallery("lock-listening-no-still-dark.png"), ["pieces-listening-no-still.png"]);
+        assert_eq!(gallery("expanded-working-conversations-9-light.png"), ["pieces-working.png"]);
+        assert_eq!(gallery("expanded-speaking-long-en-light.png"), Vec::<String>::new());
+        assert!(Shot::read("device.txt").is_none());
+    }
+
+    #[test]
+    fn the_index_lists_every_shot_and_the_frames_of_the_expanded_ones() {
+        let shots = ["expanded-idle-light.png".to_owned(), "lock-speaking-long-en-dark.png".to_owned()];
+        let index = live_activity_index(&shots, "device type t, runtime r");
+        assert!(index
+            .contains("| expanded-idle-light.png | pieces-idle.png, states-light.png | expanded-idle-light.json |"));
+        assert!(index.contains("| lock-speaking-long-en-dark.png | none drawn |  |"));
+        assert!(index.contains("Simulator: device type t, runtime r."));
     }
 
     #[test]
