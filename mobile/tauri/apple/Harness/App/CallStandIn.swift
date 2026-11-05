@@ -29,6 +29,7 @@ final class CallStandIn: NSObject {
 
     @MainActor private static func answer(_ action: String) {
         guard var details else {
+            NSLog("LA harness stand-in: %@ asked for with no call running", action)
             heard("\(action) no call")
             return
         }

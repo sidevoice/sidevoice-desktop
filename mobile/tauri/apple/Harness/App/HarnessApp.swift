@@ -51,14 +51,6 @@ final class Harness: ObservableObject {
             status = "failed: LA_FIXTURE is not a JSON object"
             return
         }
-        CallStandIn.details = details
-        CallStandIn.answers = (environment["LA_ANSWERS"].flatMap(Self.object) ?? [:]).compactMapValues {
-            $0 as? [String: Any]
-        }
-        CallStandIn.heard = { [weak self] said in
-            guard let self else { return }
-            actions = actions == "none" ? said : "\(actions), \(said)"
-        }
         guard writeStills() else {
             status = "failed: no App Group container"
             return
@@ -73,6 +65,16 @@ final class Harness: ObservableObject {
         guard await ended(before) else {
             status = "failed: an earlier fixture's activity did not end"
             return
+        }
+        // The stand-in answers once the call has started, as the Rust side acts only while a call runs: an intent that a
+        // tap of the previous test left, delivered at this launch, finds no call (logged) and leaves this card alone.
+        CallStandIn.details = details
+        CallStandIn.answers = (environment["LA_ANSWERS"].flatMap(Self.object) ?? [:]).compactMapValues {
+            $0 as? [String: Any]
+        }
+        CallStandIn.heard = { [weak self] said in
+            guard let self else { return }
+            actions = actions == "none" ? said : "\(actions), \(said)"
         }
         status = "started"
     }
