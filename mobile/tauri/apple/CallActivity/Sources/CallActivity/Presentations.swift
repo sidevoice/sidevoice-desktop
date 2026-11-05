@@ -238,7 +238,8 @@ public struct ExpandedBody: View {
         case .transcribing:
             // Only the pill, in the middle of what is under the camera row.
             VoicePill(state: state)
-                .frame(maxWidth: .infinity, maxHeight: Self.room)
+                .frame(maxWidth: .infinity)
+                .frame(height: Self.room)
         case .said:
             // Only your words, whole: five lines fill the room under the camera row, 26 from the sides (D-LA-CORNERS).
             Lines(
