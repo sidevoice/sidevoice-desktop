@@ -502,13 +502,17 @@ const PAGE_STILLS: [&str; 2] = [
 /// The unified log's category for a line `message` of the app's log with `target`: the lines about the creatures' stills
 /// (target `stills`, and the page's own about a still it could not draw or hand over, which reach the log through
 /// shared/tauri/js/webview-log.js as target `webview`) go in public, category `stills`, so a device's log shows each step
-/// of a still; every other line is the app's own or the page's and may carry what the person said, so it goes in category
-/// `app`, private.
+/// of a still; the lines with target `intent` (what the call's surfaces asked for and what came of it: action names,
+/// states and counters, never a title, a text or an id) go in public, category `intent`, next to the App Intents' own;
+/// every other line is the app's own or the page's and may carry what the person said, so it goes in category `app`,
+/// private.
 fn log_category(target: &str, message: &str) -> &'static str {
     let page_still = target == tauri_plugin_log::WEBVIEW_TARGET
         && PAGE_STILLS.iter().any(|form| message.starts_with(form));
     if target == "stills" || page_still {
         "stills"
+    } else if target == "intent" {
+        "intent"
     } else {
         "app"
     }
@@ -553,6 +557,22 @@ mod tests {
             log_category("sidevoice_mobile", "call_state: joined"),
             "app"
         );
+    }
+
+    #[test]
+    fn the_intent_lines_are_public_by_their_target_only() {
+        assert_eq!(
+            log_category(
+                "intent",
+                "call: mute true: the call's mute cannot be used now"
+            ),
+            "intent"
+        );
+        assert_eq!(
+            log_category("webview", "console.warn: [sidevoice] call: intent"),
+            "app"
+        );
+        assert_eq!(log_category("sidevoice_mobile", "call: mute true"), "app");
     }
 
     fn allowed(url: &str, app_origin: &str) -> bool {

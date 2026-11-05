@@ -24,9 +24,9 @@ mod screen;
 use tauri::{plugin::TauriPlugin, Runtime};
 
 pub use call_service::{
-    call_activates_audio, call_replaces_media_controls, request_call_focus, start_call_service,
-    stop_call_service, update_call_service, CallDetails, CallEvent, CallEvents, CallServiceError,
-    FocusState, StopReason,
+    call_activates_audio, call_replaces_media_controls, refresh_call_service, request_call_focus,
+    start_call_service, stop_call_service, update_call_service, CallDetails, CallEvent, CallEvents,
+    CallServiceError, FocusState, StopReason,
 };
 pub use call_surface::{
     clear_stills, forget_stills, os_log, save_still, stills_dir, CallSurface, Other, Phase,
