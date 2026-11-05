@@ -33,6 +33,12 @@ final class StillsTests: XCTestCase {
         XCTAssertNil(CallStills.image("nope.png"))
     }
 
+    func testTheNamedStillsSayWhetherEachIsThere() {
+        CallStills.directory = Bundle.module.url(forResource: "Fixtures", withExtension: nil)
+        let named = CallStills.naming([CallState.Creature(file: "straw-hat.png"), nil, CallState.Creature(file: "nope.png")])
+        XCTAssertTrue(named.hasPrefix("straw-hat.png (there), none, nope.png (no file nope.png in "), named)
+    }
+
     func testAPathIsNotAFileName() {
         CallStills.directory = Bundle.module.url(forResource: "Fixtures", withExtension: nil)
         XCTAssertNotNil(CallStills.problem("../x.png"))

@@ -324,8 +324,10 @@ test("the stack of conversations on the call's surfaces opens the page's list of
   assert.equal(api.run({ command: "open-conversations", page: 6 }), false, "another page's");
 });
 
-test("a report waits until the app has kept the still before it, and a refused still holds nothing up", async () => {
+test("a report waits until the app has kept the still before it, and a refused still holds nothing up and is said", async () => {
   const { api, win, invoked, intervals } = install("tauri://localhost");
+  const warned = [];
+  win.console = { warn: (...args) => warned.push(args) };
   const settled = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
   await settled();
   const answers = [];
@@ -353,9 +355,12 @@ test("a report waits until the app has kept the still before it, and a refused s
   view.callSurface = { still: { id: "t2#108", k: 1 } };
   subscribers.forEach((fn) => fn());
   await settled();
-  answers[1].reject(new Error("not kept"));
+  assert.equal(warned.length, 0, "a kept still says nothing");
+  answers[1].reject("call_still: not a PNG of a still's size");
   await settled();
   assert.equal(reports(), before + 2, "a refusal does not stop the reports");
+  // In the console the app's log takes (shared/tauri/js/webview-log.js), with the prefix its unified log makes public.
+  assert.equal(JSON.stringify(warned), JSON.stringify([["[sidevoice] call surface: call_still t2#108 failed:", "call_still: not a PNG of a still's size"]]));
 });
 
 test("host.debug is the phone's one developer switch, only where the app offers it, and sets go to the app", async () => {

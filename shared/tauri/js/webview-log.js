@@ -1,5 +1,5 @@
-// Sidevoice desktop: the room page's problems in the app log (desktop/tauri/src/lib.rs, tauri-plugin-log). Injected into the
-// room window only. Forwards `console.warn` / `console.error`, uncaught errors and unhandled rejections to the plugin's
+// Sidevoice: the page's problems in the app's log (tauri-plugin-log; sidevoice-shared-tauri's `js::WEBVIEW_LOG`), injected by
+// each app into the window that shows the room (the desktop's room window, the phone's one window). Forwards `console.warn` / `console.error`, uncaught errors and unhandled rejections to the plugin's
 // `log` command, and leaves the console as it was.
 //
 // What it writes is deliberately narrow: strings and numbers as given, an Error as `name: message` plus the first lines

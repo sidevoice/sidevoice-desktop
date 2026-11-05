@@ -426,6 +426,16 @@ extension CallStills {
         return UIImage(contentsOfFile: url.path) == nil ? "\(file) does not decode as an image" : nil
     }
 
+    /// The stills an activity's state names (the creature, then the stack's faces), each by its file and whether this
+    /// process can draw it (`problem`), or `none`: the app says it in the unified log as the state starts naming others,
+    /// beside what the extension says as it draws them.
+    public static func naming(_ creatures: [CallState.Creature?]) -> String {
+        creatures.map { (creature: CallState.Creature?) -> String in
+            guard let file = creature?.file, !file.isEmpty else { return "none" }
+            return "\(file) (\(problem(file) ?? "there"))"
+        }.joined(separator: ", ")
+    }
+
     /// A slot that has no still to draw (the placeholder is drawn instead): said once, by cause, in the unified log, so that a
     /// call whose creature never shows says whether the app named none (nothing kept, nothing in the report) or could not read
     /// the one it named (`image` says why).

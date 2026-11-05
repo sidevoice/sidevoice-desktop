@@ -201,7 +201,7 @@ fn is_room_page(current: Option<&str>, label: &str, origin: Option<&str>) -> Res
 
 /// The app log: `<LOG_FILE>.log` in the platform's log directory (macOS `~/Library/Logs/<identifier>/`, Linux
 /// `~/.local/share/<identifier>/logs/`, Windows `%LOCALAPPDATA%\<identifier>\logs\`), with the Rust side's lines and the
-/// room page's (desktop/tauri/js/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
+/// room page's (shared/tauri/js/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
 pub(crate) const LOG_FILE: &str = "sidevoice-desktop";
 const LOG_MAX_BYTES: u128 = 2_000_000;
 const LOG_KEPT: usize = 5;
@@ -315,7 +315,8 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
         .initialization_script(scripts::NO_CONTEXT_MENU)
-        .initialization_script(scripts::WEBVIEW_LOG)
+        // The room page's console warnings and errors, uncaught errors and unhandled rejections, into the app log.
+        .initialization_script(sidevoice_shared_tauri::js::WEBVIEW_LOG)
         .initialization_script(bridge::script_for_origin(
             APP_ORIGIN,
             host::updates_available(&build.channel),
