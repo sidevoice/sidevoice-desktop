@@ -164,7 +164,7 @@ final class RenderTests: XCTestCase {
     }
 
     /// The expanded island: black, radius 44, the camera at the top; B's content is `ExpandedBody`, which carries its own
-    /// paddings (18 at the sides, 26 for the bottom band (Saltar 30), 14 or 12 below, 4 below the camera's row: D-LA-CORNERS), as on
+    /// paddings (18 at the sides, 26 for the bottom band (Saltar 30), 14 below, 4 below the camera's row: D-LA-CORNERS), as on
     /// the device; speaking's creature is `ExpandedLeading`, beside the camera.
     func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
         ZStack(alignment: .topLeading) {
@@ -256,7 +256,7 @@ final class RenderTests: XCTestCase {
         if name.hasPrefix("expanded-") || name.hasPrefix("promax-expanded-") {
             XCTAssertLessThanOrEqual(image.size.height, 144.5, "\(name): \(image.size.height) pt tall")
         }
-        // The closed states fill it: 40 to the tile row, 48, 8, the 36 controls, 12 below (D-LA-CORNERS).
+        // The closed states fill it: 40 to the tile row, 48, 6, the 36 controls, 14 below (D-LA-CORNERS).
         if ["idle", "working", "holding", "offline"].contains(where: { name == "expanded-\($0)" }) {
             XCTAssertEqual(image.size.height, 144, accuracy: 0.5, "\(name): \(image.size.height) pt tall")
         }

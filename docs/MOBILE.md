@@ -401,12 +401,12 @@ its buttons need iOS 17 (before that it only shows the call).
   next state (at once if the app is in front, else when it next is); at launch and whenever it comes to the front it ends
   the app's activities that are not the call's (what a crash left). The buttons log each step to the unified log, subsystem `ai.sidevoice`, category `intent`.
 - **The expanded island's geometry** is deterministic: the widget zeroes the system's margins at the sides and the bottom
-  (`contentMargins`, iOS 17), and `ExpandedBody` carries 18 pt at the sides, 14 below the voice views and the reply, 12 below
-  the closed states, 4 below the camera's row (the `.bottom` region starts 36.7 pt down on a 17 Pro Max, so about 40 from
-  the island's edge). The bottom band (the controls, the capsule; Saltar 30) keeps 26 from the sides, clear of the device's
-  rounder bottom corners; text keeps 18 (D-LA-CORNERS). The budget is 144 pt (D-LA-144): the reply is three lines and
-  Saltar, listening a 46 header (tile 44), an 8 gap and the capsule, your words the same header and two lines of 15 on 18, the closed states a 48 tile row and the
-  36 controls (no model and machine line in the island: they stay on the card). Slack, if a device measures any, comes out
+  (`contentMargins`, iOS 17), and `ExpandedBody` carries 18 pt at the sides, 14 below every state (the device clips the
+  content about 13.3 pt above the island's bottom edge), 4 below the camera's row (the `.bottom` region starts 36.7 pt
+  down on a 17 Pro Max, so about 40 from the island's edge). The bottom band (the controls, the capsule; Saltar 30) keeps
+  26 from the sides, clear of the device's rounder bottom corners; text keeps 18 (D-LA-CORNERS). The budget is 144 pt
+  (D-LA-144): the reply is three lines and Saltar, listening a 46 header (tile 44), an 8 gap and the capsule, your words
+  the same header and two lines of 15 on 18, the closed states a 48 tile row, a 6 gap and the 36 controls (no model and machine line in the island: they stay on the card). Slack, if a device measures any, comes out
   of the gaps, never of a line or a button. Speaking's creature (30 pt) sits beside the camera in the `.leading` region
   (`ExpandedLeading`; empty in every other state): the device clips `.bottom`'s content at that region's top.
 - **Updates.** Every change goes out at once. **The words** (the expanded island only: never on the Lock Screen, in the

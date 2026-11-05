@@ -127,8 +127,8 @@ public struct ExpandedBody: View {
     }
 
     /// The island's geometry (R2-7, R2-8), made deterministic: the widget zeroes the system's margins at the sides and the
-    /// bottom (`contentMargins`, iOS 17), so these paddings are all there is there: 18 at the sides, 14 below the voice
-    /// views and the reply, 12 below the closed states' row. The bottom band (anything whose bottom lies within 36 pt of the
+    /// bottom (`contentMargins`, iOS 17), so these paddings are all there is there: 18 at the sides, 14 below. The device
+    /// clips the content about 13.3 pt above the island's bottom edge, so nothing ends lower than 14. The bottom band (anything whose bottom lies within 36 pt of the
     /// island's bottom: the controls, the capsule, Saltar) keeps 26 from the sides, Saltar 30, clear of the device's
     /// rounder corners; text keeps 18 (D-LA-CORNERS). The top is the system's: its `.bottom` region starts below the
     /// camera row (36.7 pt measured on a 17 Pro Max; `cameraRow` is the gallery's 36), and `top` takes it to 40 from the
@@ -139,7 +139,7 @@ public struct ExpandedBody: View {
             .environment(\.locale, state.locale)
             .padding(.horizontal, Self.side)
             .padding(.top, Self.top)
-            .padding(.bottom, Self.bottom(state.phase))
+            .padding(.bottom, Self.bottom)
     }
 
     public static let side: CGFloat = 18
@@ -153,12 +153,8 @@ public struct ExpandedBody: View {
     /// The gap from the camera row to the first element: 40 pt from the island's edge in all.
     public static let top: CGFloat = 4
 
-    public static func bottom(_ phase: CallState.Phase) -> CGFloat {
-        switch phase {
-        case .speaking, .listening, .transcribing, .said: 14
-        default: 12
-        }
-    }
+    /// Below every state, the closed states' row too (D-LA-CORNERS).
+    public static let bottom: CGFloat = 14
 
     @ViewBuilder
     private var content: some View {
@@ -179,7 +175,8 @@ public struct ExpandedBody: View {
                     ink: Palette.island.text)
             }
         case .idle, .working, .holding, .offline:
-            VStack(spacing: 8) {
+            // 6 between the header and the row, so the row's 14 below still fits 144 (D-LA-CORNERS).
+            VStack(spacing: 6) {
                 ClosedHeader(state: state)
                 HStack(spacing: 8) {
                     MuteToggle(micOff: state.micOff) { off in
