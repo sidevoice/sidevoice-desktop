@@ -3,7 +3,9 @@
 // `surface`), it does what the app does with one: it writes the creatures' stills where the app writes them (the App
 // Group's `call-stills/`, each under the file name the Rust side gives it), then hands the details to the app's own bridge
 // (`CallActivityBridge.start`), whose controller requests and updates the activity. Its status line says when the activity
-// runs. The fixture mode is compiled in Debug only, and this app is never part of the app that ships.
+// runs. The call's stand-in (CallStandIn.swift) answers the activity's buttons, with the details `LA_ANSWERS` gives by
+// action name, and `harness.actions` says what they asked. The fixture mode is compiled in Debug only, and this app is
+// never part of the app that ships.
 import ActivityKit
 import CallActivity
 import CallActivityApp
@@ -15,9 +17,13 @@ struct HarnessApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Text(harness.status)
-                .accessibilityIdentifier("harness.status")
-                .task { await harness.run() }
+            VStack {
+                Text(harness.status)
+                    .accessibilityIdentifier("harness.status")
+                Text(harness.actions)
+                    .accessibilityIdentifier("harness.actions")
+            }
+            .task { await harness.run() }
         }
     }
 }
@@ -25,6 +31,8 @@ struct HarnessApp: App {
 @MainActor
 final class Harness: ObservableObject {
     @Published var status = "waiting"
+    /// What the activity's buttons asked the call's stand-in, in order, comma-separated; "none" before any.
+    @Published var actions = "none"
 
     #if DEBUG
     func run() async {
@@ -36,6 +44,18 @@ final class Harness: ObservableObject {
         // ActivityKit starts an activity only for an app in front, as the app's controller knows.
         while UIApplication.shared.applicationState != .active {
             try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard let details = Self.object(fixture) else {
+            status = "failed: LA_FIXTURE is not a JSON object"
+            return
+        }
+        CallStandIn.details = details
+        CallStandIn.answers = (environment["LA_ANSWERS"].flatMap(Self.object) ?? [:]).compactMapValues {
+            $0 as? [String: Any]
+        }
+        CallStandIn.heard = { [weak self] said in
+            guard let self else { return }
+            actions = actions == "none" ? said : "\(actions), \(said)"
         }
         guard writeStills() else {
             status = "failed: no App Group container"
@@ -53,6 +73,10 @@ final class Harness: ObservableObject {
             return
         }
         status = "started"
+    }
+
+    private static func object(_ json: String) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
     }
     #else
     func run() async {
