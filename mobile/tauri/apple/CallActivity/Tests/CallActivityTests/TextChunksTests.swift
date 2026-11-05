@@ -272,8 +272,8 @@ final class SaidHoldTests: XCTestCase {
     func testAReplyThatStartsWhileYourWordsAreHeldWins() {
         var pager = TextPager(chunker: chunker)
         _ = pager.page(kind: .said, text: said, heard: 0, now: t0)
-        let reply = pager.page(kind: .reply, text: sentence("x"), heard: 0, holdable: false, now: t0 + 3)
-        XCTAssertEqual(reply.text, sentence("x"))
+        let reply = pager.page(kind: .reply, text: "Hecho.", heard: 0, holdable: false, now: t0 + 3)
+        XCTAssertEqual(reply.text, "Hecho.")
         XCTAssertFalse(reply.held)
     }
 }
