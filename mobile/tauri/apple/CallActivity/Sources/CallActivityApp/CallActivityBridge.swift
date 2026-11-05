@@ -7,7 +7,8 @@ import UIKit
 /// The Live Activity's door for the app's Rust side (mobile/tauri/plugin/src/platform/call_surface/ios.rs), which finds it
 /// by name: `start` when the app's own call starts, `show` on every change of the call's surface, `end` when it ends (and
 /// once at launch, for an activity an earlier run left). Each takes the call's details as JSON (`CallDetails`: `title`,
-/// `muted`, `surface`), from any thread; the work is done on the main queue, in order.
+/// `muted`, `surface`; `refresh` on a `show` after a tap, to update the activity even with the state it has), from any
+/// thread; the work is done on the main queue, in order.
 ///
 /// Nothing runs before iOS 16.1, or while the person has Live Activities off for the app.
 @objc(SidevoiceCallActivity)
@@ -92,6 +93,8 @@ struct Report: Decodable {
     var title: String?
     var muted: Bool?
     var surface: Surface?
+    /// Sent again even if the activity shows it already: after a tap, the mute toggle has flipped its own face.
+    var refresh: Bool?
 
     static func read(_ json: String) -> Report? {
         try? JSONDecoder().decode(Report.self, from: Data(json.utf8))
@@ -216,7 +219,7 @@ final class Controller {
     func show(_ report: Report?) {
         guard lifecycle.wanted else { return }
         self.report = report
-        publish()
+        publish(refresh: report?.refresh == true)
     }
 
     /// Ends the call's activity, and any other of the app's (one an earlier run left), at once.
