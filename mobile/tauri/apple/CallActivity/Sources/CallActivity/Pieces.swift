@@ -17,9 +17,11 @@ struct Still: View {
     var grey = false
     var ground = Ground.tile
     var overflow = false
+    /// The slot's side, in points: the still is drawn from a copy scaled down to it (`CallStills.image(_:side:)`).
+    var side: CGFloat
 
     @ViewBuilder var body: some View {
-        if let file = creature?.file, let image = CallStills.image(file) {
+        if let file = creature?.file, let image = CallStills.image(file, side: side * (overflow ? creature?.k ?? 1 : 1)) {
             let still = Image(uiImage: image).resizable().interpolation(.high).scaledToFit()
             let drawn = grey
                 // Offline: the gallery's `grayscale(1) brightness(.85)` at 70 %.
@@ -97,7 +99,7 @@ struct CreatureTile: View {
                             // CSS `circle` to the farthest corner from (50 %, 70 %).
                             endRadius: size * 0.8602))
             }
-            Still(creature: state.creature, grey: state.phase == .offline, overflow: true)
+            Still(creature: state.creature, grey: state.phase == .offline, overflow: true, side: inner)
                 .frame(width: inner, height: inner)
         }
         .frame(width: size, height: size)
@@ -146,7 +148,7 @@ struct RoundFace: View {
     var size: CGFloat
 
     var body: some View {
-        Still(creature: state.creature, grey: state.phase == .offline, ground: .disc)
+        Still(creature: state.creature, grey: state.phase == .offline, ground: .disc, side: size)
             .frame(width: size, height: size)
             .clipShape(Circle())
     }
@@ -171,7 +173,7 @@ struct OthersStack: View {
             HStack(spacing: 0) {
                 HStack(spacing: -8) {
                     ForEach(Array(state.others.prefix(3).enumerated()), id: \.offset) { _, other in
-                        Still(creature: other, ground: .disc, overflow: true)
+                        Still(creature: other, ground: .disc, overflow: true, side: 26)
                             .frame(width: 26, height: 26)
                     }
                 }
@@ -409,12 +411,26 @@ extension CallStills {
         if once.first("not named") { log.error("no still named in the call's state: the app has not kept one for it") }
     }
 
-    /// The still `file` as an image; nil draws the placeholder. What stops it is logged once for each cause, so that a card with no
-    /// creature says why in the device's log (the widget extension has no other voice).
-    static func image(_ file: String) -> UIImage? {
+    private static let scaled = NSCache<NSString, UIImage>()
+
+    /// The still `file` as an image, scaled down to `side` points at the screen's 3×; nil draws the placeholder. The
+    /// compact island drew no creature on the phone while the expanded island and the Lock Screen drew the same 240–480 px
+    /// file: the system leaves out an image much larger than its slot there. A copy at the slot's size also keeps the
+    /// extension's memory down. What stops it is logged once for each cause, so that a card with no creature says why in
+    /// the device's log (the widget extension has no other voice).
+    static func image(_ file: String, side: CGFloat = 64) -> UIImage? {
+        let pixels = max(1, (side * 3).rounded(.up))
+        let key = "\(directory?.path ?? "-")/\(file)@\(Int(pixels))" as NSString
+        if let image = scaled.object(forKey: key) { return image }
         if let url = url(file), let image = UIImage(contentsOfFile: url.path) {
             if once.first("drawn \(file)") { log.notice("still drawn: \(file, privacy: .public)") }
-            return image
+            let width = image.size.width * image.scale, height = image.size.height * image.scale
+            let fit = min(1, pixels / max(width, height, 1))
+            let small = fit < 1
+                ? image.preparingThumbnail(of: CGSize(width: (width * fit).rounded(), height: (height * fit).rounded())) ?? image
+                : image
+            scaled.setObject(small, forKey: key)
+            return small
         }
         if let reason = problem(file) {
             if once.first(reason) { log.error("still not drawn: \(reason, privacy: .public)") }
