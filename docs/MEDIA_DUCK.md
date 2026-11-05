@@ -5,6 +5,13 @@ muted) **or the agent is speaking in it** (the microphone muted or not), other a
 paused; when neither holds any more, the app gives back **only what it took**. The choice is `host.mediaDuck`
 (docs/BRIDGE.md), kept in `settings.json` as `mediaDuck`: `lower`, `pause` or `off`.
 
+How far Lower goes is the person's too (operator, 2026-11-05): `host.mediaDuck.setLevel(level)`, kept as `mediaDuckLevel`:
+`half` ("A little", 50 % of the app's volume), `quarter` ("A lot", 25 %, the default) or `mute` (0 %). Core `Level`;
+the same share on every OS (Windows and Linux: the app's volume times it; macOS: the tap's gain, or Music's and Spotify's
+`sound volume`). A new level while lowered moves what the app lowered at once, from the volume it had (core
+`Ducker::level`); a player the person changed meanwhile is left alone. Giving back is the same at 0 %: the app checks that
+the player is still at the volume it set (silence) and restores the one it had.
+
 "The microphone open" means the person's microphone open **in a call** (`micEnabled` of the joined call), nothing else. A
 microphone that listens all the time for a wake word (a possible future feature) must not count: it would keep other apps'
 media lowered or paused all day. Such a feature reports its listening apart from `micEnabled`, and `wanted` does not read it.
@@ -100,7 +107,7 @@ functions exist from 14.2, but System Audio Recording, `NSAudioCaptureUsageDescr
    auto-start on, **tap drift compensation off on Bluetooth** (it crackles there), on otherwise; the hardware's own input
    streams turned off for the IOProc (`kAudioDevicePropertyIOProcStreamUsage`), so a headset's microphone is not opened by
    it. If they cannot be turned off, the tap is not made.
-4. **IOProc**: the tap's samples to the output at the gain (`LOWERED_TO`, 0.25 of the volume, as on the other OSes), ramped
+4. **IOProc**: the tap's samples to the output at the gain (the chosen `Level`: 0.5, 0.25 or 0, as on the other OSes), ramped
    over 30 ms so the dip and the restore do not click; atomics only, no lock, allocation or log.
 5. **Giving back** is destroying the tap: ramp to 1, then stop, destroy the IOProc, the aggregate and the tap, in that
    order. The app's own volume is never touched, so nothing of a tap outlives the process (its debt has no app).
@@ -125,8 +132,9 @@ per-language `InfoPlist.strings`, as the mobile app has, are a follow-up (with t
 
 ## What `get` answers
 
-`{mode, lower, pause, access, capture?}`:
+`{mode, level, lower, pause, access?, capture?}`:
 
+- `level`: how far Lower goes, `half`, `quarter` or `mute` (as kept);
 - `lower`: `per-app` (any app, one by one), `some-apps` (only named apps: macOS without taps) or `none`;
 - `pause`: `media-controls`, `some-apps` or `none`;
 - `access`: macOS Automation of Music and Spotify, each app allowed on its own: `undetermined` while an open one has not

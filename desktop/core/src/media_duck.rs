@@ -14,8 +14,31 @@ pub enum Mode {
     Off,
 }
 
-/// How far a lowered player goes: this fraction of the volume it had.
-pub const LOWERED_TO: f32 = 0.25;
+/// How far a lowered player goes, as the person chose (Settings > Call, shown for Lower only; operator, 2026-11-05): a
+/// share of the volume it had.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    /// "A little": half of it.
+    Half,
+    /// "A lot": a quarter of it.
+    #[default]
+    Quarter,
+    /// "Mute": silent.
+    Mute,
+}
+
+impl Level {
+    /// The share of its volume a lowered player is left with.
+    pub fn share(self) -> f32 {
+        match self {
+            Level::Half => 0.5,
+            Level::Quarter => 0.25,
+            Level::Mute => 0.0,
+        }
+    }
+}
+
 /// Volumes this close are the same: the system rounds what it stores.
 const SAME: f32 = 0.03;
 /// How many times giving back is tried, one per change of the call, before it is given up.
@@ -142,6 +165,7 @@ impl Touch {
 #[derive(Debug, Default)]
 pub struct Ducker {
     open: Option<Mode>,
+    level: Level,
     touched: Vec<Touch>,
     retries: u8,
     now: u64,
@@ -150,7 +174,7 @@ pub struct Ducker {
 impl Ducker {
     /// A ducker that still owes what a run before it took and did not give back.
     pub fn owing(touched: Vec<Touch>) -> Self {
-        Ducker { open: None, touched, retries: 0, now: 0 }
+        Ducker { open: None, level: Level::default(), touched, retries: 0, now: 0 }
     }
 
     /// The time now, in seconds since the epoch, before each look: a pause owed for longer than an hour, with nothing asking
@@ -162,6 +186,38 @@ impl Ducker {
     /// What is owed now, for the desktop to keep.
     pub fn owed(&self) -> &[Touch] {
         &self.touched
+    }
+
+    /// How far to lower from now on. While the media is lowered, what the app lowered and still stands at the volume it set
+    /// goes to the new level at once (from the volume it had, which is what giving back restores); a player the person
+    /// changed meanwhile, or that is not there, is left as it is.
+    pub fn level(
+        &mut self,
+        level: Level,
+        mut probe: impl FnMut(&str, &str) -> Seen,
+        mut act: impl FnMut(&Step) -> bool,
+    ) {
+        if self.level == level {
+            return;
+        }
+        self.level = level;
+        if self.open != Some(Mode::Lower) {
+            return;
+        }
+        for touch in &mut self.touched {
+            let Touch::Lowered { key, app, from, to } = touch else { continue };
+            let Seen::Is(p) = probe(key, app) else { continue };
+            if !p.volume.is_some_and(|v| (v - *to).abs() <= SAME) {
+                continue;
+            }
+            let volume = *from * level.share();
+            if act(&Step::SetVolume { key: p.key.clone(), volume }) {
+                *to = match probe(&p.key, app) {
+                    Seen::Is(now) => now.volume.unwrap_or(volume),
+                    _ => volume,
+                };
+            }
+        }
     }
 
     /// Gives back what is owed, without taking anything: at start, for what an earlier run left.
@@ -195,7 +251,7 @@ impl Ducker {
                 {
                     continue;
                 }
-                let Some(step) = Self::take(mode, &player) else { continue };
+                let Some(step) = Self::take(mode, self.level, &player) else { continue };
                 if !act(&step) {
                     continue;
                 }
@@ -214,16 +270,16 @@ impl Ducker {
         }
     }
 
-    /// What `mode` does to a player that is playing, if anything. Pause only pauses: a player that cannot be paused is left
-    /// as it is, never lowered instead (operator, 2026-11-04).
-    fn take(mode: Mode, p: &Player) -> Option<Step> {
+    /// What `mode` does to a player that is playing, if anything; Lower takes it to `level`. Pause only pauses: a player
+    /// that cannot be paused is left as it is, never lowered instead (operator, 2026-11-04).
+    fn take(mode: Mode, level: Level, p: &Player) -> Option<Step> {
         if p.state != State::Playing {
             return None;
         }
         let key = p.key.clone();
         match (mode, p.volume) {
             (Mode::Pause, _) if p.pausable => Some(Step::Pause { key }),
-            (Mode::Lower, Some(from)) => Some(Step::SetVolume { key, volume: from * LOWERED_TO }),
+            (Mode::Lower, Some(from)) => Some(Step::SetVolume { key, volume: from * level.share() }),
             _ => None,
         }
     }
@@ -332,6 +388,8 @@ impl Hold {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Status {
     pub mode: Mode,
+    /// How far Lower goes.
+    pub level: Level,
     pub lower: Lowering,
     pub pause: Pausing,
     /// Whether the system lets the app control the named apps it lowers or pauses (macOS Automation of Music and
@@ -486,7 +544,7 @@ mod tests {
         world.run(&mut ducker, Some(Mode::Lower));
         assert!(ducker.owed().is_empty());
         *world.refuse.borrow_mut() = false;
-        world.players.borrow_mut()[0].volume = Some(LOWERED_TO);
+        world.players.borrow_mut()[0].volume = Some(Level::default().share());
         world.steps.borrow_mut().clear();
         world.run(&mut ducker, None);
         assert!(world.steps.borrow().is_empty());
@@ -690,11 +748,17 @@ mod tests {
 
     #[test]
     fn the_permissions_are_said_only_where_there_are_some() {
-        let status =
-            Status { mode: Mode::Lower, lower: Lowering::PerApp, pause: Pausing::None, access: None, capture: None };
+        let status = Status {
+            mode: Mode::Lower,
+            level: Level::Quarter,
+            lower: Lowering::PerApp,
+            pause: Pausing::None,
+            access: None,
+            capture: None,
+        };
         assert_eq!(
             serde_json::to_value(status).unwrap(),
-            serde_json::json!({"mode": "lower", "lower": "per-app", "pause": "none"})
+            serde_json::json!({"mode": "lower", "level": "quarter", "lower": "per-app", "pause": "none"})
         );
         let status = Status { access: Some(Access::Granted), capture: Some(Access::Undetermined), ..status };
         assert_eq!(serde_json::to_value(status).unwrap()["capture"], "undetermined");
@@ -708,5 +772,56 @@ mod tests {
         assert_eq!(serde_json::to_string(&Mode::Pause).unwrap(), r#""pause""#);
         assert_eq!(serde_json::from_str::<Mode>(r#""off""#).unwrap(), Mode::Off);
         assert!(serde_json::from_str::<Mode>(r#""mute""#).is_err());
+        assert_eq!(serde_json::to_string(&Level::Half).unwrap(), r#""half""#);
+        assert_eq!(serde_json::from_str::<Level>(r#""mute""#).unwrap(), Level::Mute);
+        assert_eq!(Level::default(), Level::Quarter);
+    }
+
+    #[test]
+    fn lowers_to_the_level_chosen() {
+        for (level, left) in [(Level::Half, 0.4), (Level::Quarter, 0.2), (Level::Mute, 0.0)] {
+            let world = World::new(vec![player("a", State::Playing, Some(0.8), false)]);
+            let mut ducker = Ducker::default();
+            ducker.level(level, |k, a| world.see(k, a), |step| world.act(step));
+            assert!(world.steps.borrow().is_empty(), "nothing lowered yet: nothing moves");
+            world.run(&mut ducker, Some(Mode::Lower));
+            assert!((world.get("a").volume.unwrap() - left).abs() < 1e-6, "{level:?}");
+            world.run(&mut ducker, None);
+            assert_eq!(world.get("a").volume, Some(0.8), "{level:?}: given back, silence included");
+            assert!(ducker.owed().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_new_level_while_lowered_applies_at_once_and_still_gives_back() {
+        let world = World::new(vec![
+            player("a", State::Playing, Some(0.8), false),
+            player("b", State::Playing, Some(1.0), false),
+        ]);
+        let mut ducker = Ducker::default();
+        world.run(&mut ducker, Some(Mode::Lower));
+        world.players.borrow_mut()[1].volume = Some(0.6); // the person moved b by hand
+        ducker.level(Level::Mute, |k, a| world.see(k, a), |step| world.act(step));
+        assert_eq!(world.get("a").volume, Some(0.0));
+        assert_eq!(world.get("b").volume, Some(0.6), "what the person changed is theirs");
+        ducker.level(Level::Half, |k, a| world.see(k, a), |step| world.act(step));
+        assert!((world.get("a").volume.unwrap() - 0.4).abs() < 1e-6, "from the volume it had, not from silence");
+        world.run(&mut ducker, None);
+        assert_eq!(world.get("a").volume, Some(0.8));
+        assert_eq!(world.get("b").volume, Some(0.6));
+        assert!(ducker.owed().is_empty());
+    }
+
+    #[test]
+    fn a_new_level_moves_nothing_while_paused_and_the_next_lowering_takes_it() {
+        let world = World::new(vec![player("a", State::Playing, Some(0.8), true)]);
+        let mut ducker = Ducker::default();
+        world.run(&mut ducker, Some(Mode::Pause));
+        world.steps.borrow_mut().clear();
+        ducker.level(Level::Mute, |k, a| world.see(k, a), |step| world.act(step));
+        assert!(world.steps.borrow().is_empty());
+        world.run(&mut ducker, None);
+        world.run(&mut ducker, Some(Mode::Lower));
+        assert_eq!(world.get("a").volume, Some(0.0));
     }
 }

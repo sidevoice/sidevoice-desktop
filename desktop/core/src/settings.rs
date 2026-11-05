@@ -45,6 +45,9 @@ pub struct Settings {
     /// lowered by default.
     #[serde(default)]
     pub media_duck: crate::media_duck::Mode,
+    /// How far Lower takes other apps (`host.mediaDuck.setLevel`): a quarter of their volume by default.
+    #[serde(default)]
+    pub media_duck_level: crate::media_duck::Level,
 }
 
 fn default_true() -> bool {
@@ -218,6 +221,7 @@ impl Settings {
             call_controls_corner: crate::call_controls::Corner::TopRight,
             debug: crate::debug_options::DebugOptions::default(),
             media_duck: crate::media_duck::Mode::Lower,
+            media_duck_level: crate::media_duck::Level::Quarter,
         }
     }
 }
@@ -383,6 +387,7 @@ mod tests {
                 repaint_counters: true,
             },
             media_duck: crate::media_duck::Mode::Pause,
+            media_duck_level: crate::media_duck::Level::Mute,
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), Some(s));

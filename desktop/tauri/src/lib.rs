@@ -110,9 +110,17 @@ pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings
     Ok(changed)
 }
 
-/// The choice about other apps' media, as kept.
-pub(crate) fn stored_media_duck(app: &AppHandle) -> sidevoice_desktop_core::media_duck::Mode {
-    app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.media_duck).unwrap_or_default()
+/// The choice about other apps' media and how far Lower goes, as kept.
+pub(crate) fn stored_media_duck(
+    app: &AppHandle,
+) -> (sidevoice_desktop_core::media_duck::Mode, sidevoice_desktop_core::media_duck::Level) {
+    app.state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| (s.media_duck, s.media_duck_level))
+        .unwrap_or_default()
 }
 
 /// Changes the settings with `change`, registers the mute shortcut they then hold and tells the card: how the system
@@ -517,7 +525,11 @@ pub fn run() {
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
             apply_shortcut(&handle, &current.mute_shortcut);
-            app.manage(media_duck::MediaDuck::start(current.media_duck, data::desktop_dir(&handle).ok()));
+            app.manage(media_duck::MediaDuck::start(
+                current.media_duck,
+                current.media_duck_level,
+                data::desktop_dir(&handle).ok(),
+            ));
             // Before the room opens, so its bridge offers `host.updater`.
             updater::setup(&handle);
             open_room(&handle)?;

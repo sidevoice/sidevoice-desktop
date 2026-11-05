@@ -5,7 +5,7 @@
 use crate::platform::media_duck as platform;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sidevoice_desktop_core::media_duck::{wanted, Access, Ducker, Hold, Mode, Permission, Status, Touch};
+use sidevoice_desktop_core::media_duck::{wanted, Access, Ducker, Hold, Level, Mode, Permission, Status, Touch};
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -17,6 +17,7 @@ const OWED: &str = "media-duck.json";
 
 enum Msg {
     Mode(Mode),
+    Level(Level),
     Call {
         joined: bool,
         mic_enabled: bool,
@@ -71,13 +72,16 @@ fn write(file: &Option<PathBuf>, owed: &[Touch]) {
 }
 
 impl MediaDuck {
-    /// Starts the worker with the person's choice; what an earlier run took and did not give back is given back first.
-    pub fn start(mode: Mode, dir: Option<PathBuf>) -> Self {
+    /// Starts the worker with the person's choice and level; what an earlier run took and did not give back is given back
+    /// first.
+    pub fn start(mode: Mode, level: Level, dir: Option<PathBuf>) -> Self {
         let (tx, rx) = mpsc::channel::<Msg>();
         let file = dir.map(|d| d.join(OWED));
         std::thread::spawn(move || {
             let (mut mode, mut joined, mut mic_enabled, mut agent_speaking) = (mode, false, false, false);
+            let mut level = level;
             let mut ducker = Ducker::owing(read(&file));
+            ducker.level(level, platform::player, platform::act);
             let mut hold = Hold::default();
             let mut last_written = Vec::<Touch>::new();
             let started = Instant::now();
@@ -107,6 +111,7 @@ impl MediaDuck {
                 for msg in first.into_iter().chain(rx.try_iter()) {
                     match msg {
                         Msg::Mode(m) => mode = m,
+                        Msg::Level(l) => level = l,
                         Msg::Call { joined: j, mic_enabled: m, agent_speaking: s } => {
                             (joined, mic_enabled, agent_speaking) = (j, m, s)
                         }
@@ -125,6 +130,8 @@ impl MediaDuck {
                 // A look only when the call really asks something else of the media: every report of the page comes through
                 // here, and a debt that cannot be paid is tried again at a change, not at each of them.
                 ducker.tick(now());
+                // A new level while lowered moves what is lowered at once; one taken next goes straight to it.
+                ducker.level(level, platform::player, platform::act);
                 ducker.follow(want, platform::players, platform::player, platform::act);
                 if ducker.owed() != last_written.as_slice() {
                     write(&file, ducker.owed());
@@ -159,9 +166,9 @@ pub fn release(app: &AppHandle) {
     }
 }
 
-fn status(mode: Mode) -> Status {
+fn status((mode, level): (Mode, Level)) -> Status {
     let (lower, pause) = platform::reach();
-    Status { mode, lower, pause, access: platform::access(), capture: platform::capture() }
+    Status { mode, level, lower, pause, access: platform::access(), capture: platform::capture() }
 }
 
 /// Asks the system for `permission` if it has not been asked yet: the person pressed Allow in the list of permissions. The
@@ -174,7 +181,8 @@ fn ask(permission: Permission) {
     }
 }
 
-/// `host.mediaDuck`'s one command: `action` `get`; `set` with `mode` (`lower`, `pause` or `off`); `allow` with
+/// `host.mediaDuck`'s one command: `action` `get`; `set` with `mode` (`lower`, `pause` or `off`); `level` with `level`
+/// (`half`, `quarter` or `mute`: how far Lower goes, applied at once while lowered); `allow` with
 /// `permission` (`capture` or `automation`), the person's own request to let the app do that, which is when the system may
 /// ask; or `settings` with `permission`, the system's page where the person turns it back on.
 #[tauri::command]
@@ -183,6 +191,7 @@ pub async fn media_duck(
     webview: Webview,
     action: String,
     mode: Option<String>,
+    level: Option<String>,
     permission: Option<String>,
 ) -> Result<Status, Value> {
     let refuse = |key: &str, why: String| json!({ "key": key, "message": why });
@@ -196,11 +205,21 @@ pub async fn media_duck(
         "set" => {
             let mode: Mode = serde_json::from_value(json!(mode))
                 .map_err(|_| refuse("bad_request", "mode is lower, pause or off".into()))?;
-            crate::change_settings(&app, |s| s.media_duck = mode).map_err(|e| refuse("internal", e))?;
+            let kept = crate::change_settings(&app, |s| s.media_duck = mode).map_err(|e| refuse("internal", e))?;
             if let Some(duck) = app.try_state::<MediaDuck>() {
                 duck.send(Msg::Mode(mode));
             }
-            Ok(status(mode))
+            Ok(status((kept.media_duck, kept.media_duck_level)))
+        }
+        "level" => {
+            let level: Level = serde_json::from_value(json!(level))
+                .map_err(|_| refuse("bad_request", "level is half, quarter or mute".into()))?;
+            let kept =
+                crate::change_settings(&app, |s| s.media_duck_level = level).map_err(|e| refuse("internal", e))?;
+            if let Some(duck) = app.try_state::<MediaDuck>() {
+                duck.send(Msg::Level(level));
+            }
+            Ok(status((kept.media_duck, kept.media_duck_level)))
         }
         "allow" => {
             let permission = permission_of(permission)?;
