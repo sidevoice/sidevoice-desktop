@@ -10,18 +10,31 @@ use std::fs;
 use std::path::Path;
 use url::Url;
 
-/// Global mute toggle: ⌃⌥M on macOS, Ctrl+Alt+M elsewhere; editable in settings. Not ⌘⇧M: a global shortcut takes the
-/// keys from every app, and ⌘⇧M is the Problems panel of VS Code (sidevoice/sidevoice-desktop#4).
-pub const DEFAULT_MUTE_SHORTCUT: &str = "Ctrl+Alt+M";
-
 pub const FILE_NAME: &str = "settings.json";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
-    /// The mute shortcut as [`normalize_shortcut`] writes it; empty disables it.
-    #[serde(default = "default_shortcut")]
+    /// The mute shortcut as [`crate::shortcuts::parse`] writes it; empty disables it. A file that has none is from before
+    /// the shortcut could be set from the page, and holds the shortcut every system registered then.
+    #[serde(default = "legacy_shortcut")]
     pub mute_shortcut: String,
+    /// The hold to talk shortcut (`host.shortcuts`); empty: none, the default.
+    #[serde(default)]
+    pub hold_to_talk_shortcut: String,
+    /// The say one thing shortcut (`host.shortcuts`); empty: none, the default.
+    #[serde(default)]
+    pub one_turn_shortcut: String,
+    /// Whether the mute shortcut has been through the move off its old default ([`crate::shortcuts::migrated_mute`]): once.
+    #[serde(default)]
+    pub shortcuts_migrated: bool,
+    /// What a headset's single press does where the app answers one (`host.shortcuts.setHeadset`).
+    #[serde(default)]
+    pub headset_press: crate::shortcuts::HeadsetPress,
+    /// Whether the person chose Allow for Input Monitoring: the system says only granted or not, and this tells a
+    /// permission never asked for from one refused.
+    #[serde(default)]
+    pub input_monitoring_asked: bool,
     /// "Always show the call controls": the call controls card shows during a call even while the room's window is in
     /// front; off, only while it is behind or minimised (core `call_controls::wanted`).
     #[serde(default)]
@@ -54,18 +67,13 @@ fn default_true() -> bool {
     true
 }
 
-fn default_shortcut() -> String {
-    DEFAULT_MUTE_SHORTCUT.to_string()
+fn legacy_shortcut() -> String {
+    crate::shortcuts::LEGACY_MUTE_SHORTCUT.to_string()
 }
 
-/// What the app offers, in this order, when the system refuses the mute shortcut: those of these it can register
-/// (checked against the systems' default lists: docs/SHORTCUTS.md).
-pub const SHORTCUT_ALTERNATIVES: [&str; 2] = ["Ctrl+Alt+Shift+M", "Ctrl+Alt+Shift+K"];
-
-/// The alternatives to offer for `refused`: never the refused one itself.
-pub fn shortcut_alternatives(refused: &str) -> impl Iterator<Item = &'static str> + '_ {
-    let refused = shortcut_keys(refused);
-    SHORTCUT_ALTERNATIVES.into_iter().filter(move |a| shortcut_keys(a) != refused)
+/// Whether two accelerators are the same keys, however each is written.
+pub fn same_shortcut(a: &str, b: &str) -> bool {
+    shortcut_keys(a) == shortcut_keys(b)
 }
 
 /// Whether the shortcut holds Control and Option together: VoiceOver's own keys on macOS (its "VO" modifier), so with
@@ -141,12 +149,21 @@ pub fn normalize_shortcut(text: &str) -> Option<String> {
         rest = at.1;
     }
     let key = rest.trim();
-    if !held.contains(&true) || modifier(key).is_some() {
+    if modifier(key).is_some() {
         return None;
     }
     let key = native_key(key, held[SHIFT])?;
+    // A key on its own would be taken from every app: only an F-key may be one.
+    if !held.contains(&true) && !is_function_key(&key) {
+        return None;
+    }
     let names = MODIFIERS.iter().zip(held).filter(|(_, on)| *on).map(|(names, _)| names[0]);
     Some(names.chain([key.as_str()]).collect::<Vec<_>>().join("+"))
+}
+
+/// `F1` to `F24`.
+fn is_function_key(key: &str) -> bool {
+    key.strip_prefix('F').is_some_and(|n| !n.starts_with('0') && n.parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)))
 }
 
 /// One key as the browser names it, as the app writes it: one character upper case (a character Shift made, its key);
@@ -164,57 +181,86 @@ fn native_key(key: &str, shift: bool) -> Option<String> {
     Some(first.to_uppercase().chain(key.chars().skip(1)).collect())
 }
 
-/// Whether the system took the mute shortcut.
+/// Whether the system took a global shortcut.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
 pub enum Registration {
     /// None set.
     #[default]
     Off,
     On,
-    /// The system would not register it: another app may hold it.
+    /// The system would not register it: another app may hold it, or the same keys are set for two actions.
     Refused,
+    /// A single key waits for a permission the system has not given (macOS: Input Monitoring).
+    NeedsPermission,
     /// No global shortcut backend is available in this desktop session.
     Unavailable,
 }
 
-/// The mute shortcut as the system took it: `host.muteShortcut`'s `MuteShortcut` (docs/BRIDGE.md → "The mute
-/// shortcut").
+/// A global shortcut as the system took it: `host.shortcuts`' `GlobalShortcut`, and `host.muteShortcut`'s `MuteShortcut`
+/// for the mute one (docs/BRIDGE.md → "The shortcuts").
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MuteShortcut {
-    /// As the app keeps it ([`normalize_shortcut`]); `None` when there is none.
+pub struct GlobalShortcut {
+    /// As the app keeps it ([`crate::shortcuts::parse`]); `None` when there is none.
     pub accelerator: Option<String>,
     /// How it reads on this system: ⌃⌥M, Ctrl+Alt+M.
     pub label: Option<String>,
     pub state: Registration,
-    /// Refused: those of [`SHORTCUT_ALTERNATIVES`] the system does take, to offer instead.
+    /// Refused: those of [`crate::shortcuts::ALTERNATIVES`] the system does take and nothing else of ours holds, to offer.
     pub alternatives: Vec<String>,
     /// macOS: VoiceOver is on, and the shortcut holds its keys (Control and Option together).
     pub voice_over: bool,
+    /// The system owns the keys and the label is its text (a Wayland portal): never here, the keys are the app's.
+    pub managed_by_system: bool,
 }
 
-impl MuteShortcut {
-    /// `accelerator` (empty: none, `off`) as the system took it, read as macOS (`macos`) or the others write it.
-    pub fn new(accelerator: &str, state: Registration, alternatives: Vec<String>, macos: bool) -> MuteShortcut {
+impl GlobalShortcut {
+    /// `accelerator` (empty: none, `off`) as the system took it, read as macOS (`macos`) or the others write it, in `language`.
+    pub fn new(
+        accelerator: &str,
+        state: Registration,
+        alternatives: Vec<String>,
+        macos: bool,
+        language: &str,
+    ) -> GlobalShortcut {
         if accelerator.is_empty() {
-            return MuteShortcut::default();
+            return GlobalShortcut::default();
         }
-        MuteShortcut {
+        GlobalShortcut {
             accelerator: Some(accelerator.to_owned()),
-            label: Some(crate::call_controls::shortcut_label(accelerator, macos)),
+            label: Some(crate::shortcuts::label(accelerator, macos, language)),
             state,
             alternatives,
             voice_over: false,
+            managed_by_system: false,
         }
     }
 }
 
 impl Settings {
-    /// First run: the default shortcut.
-    pub fn first_run() -> Self {
+    /// Moves a person still on the old mute default to `default_mute`, once ([`crate::shortcuts::migrated_mute`]).
+    /// Whether anything changed, for the caller to keep it.
+    pub fn migrate_shortcuts(&mut self, default_mute: &str) -> bool {
+        if self.shortcuts_migrated {
+            return false;
+        }
+        if let Some(moved) = crate::shortcuts::migrated_mute(&self.mute_shortcut, false, default_mute) {
+            self.mute_shortcut = moved;
+        }
+        self.shortcuts_migrated = true;
+        true
+    }
+
+    /// First run: `default_mute`, this system's default mute shortcut (`shortcut_access::default_mute`), and no other.
+    pub fn first_run(default_mute: &str) -> Self {
         Settings {
-            mute_shortcut: default_shortcut(),
+            mute_shortcut: default_mute.to_owned(),
+            hold_to_talk_shortcut: String::new(),
+            one_turn_shortcut: String::new(),
+            shortcuts_migrated: true,
+            headset_press: crate::shortcuts::HeadsetPress::Mute,
+            input_monitoring_asked: false,
             call_controls_always_shown: false,
             call_controls_enabled: true,
             update_mode: crate::updater::Mode::Automatic,
@@ -258,15 +304,16 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn a_refused_shortcut_has_alternatives_but_never_itself() {
-        let offered: Vec<_> = shortcut_alternatives("Control+Option+Shift+M").collect();
-        assert_eq!(offered, ["Ctrl+Alt+Shift+K"]);
-        assert_eq!(shortcut_alternatives(DEFAULT_MUTE_SHORTCUT).next(), Some("Ctrl+Alt+Shift+M"));
+    fn shortcuts_are_the_same_however_they_are_written() {
+        assert!(same_shortcut("Control+Option+Shift+M", "Ctrl+Alt+Shift+M"));
+        assert!(same_shortcut("shift+alt+ctrl+m", "Ctrl+Alt+Shift+M"));
+        assert!(!same_shortcut("Ctrl+Alt+M", "Ctrl+Alt+Shift+M"));
     }
 
     #[test]
     fn control_and_option_together_are_voice_overs_keys() {
-        assert!(uses_voice_over_keys(DEFAULT_MUTE_SHORTCUT));
+        assert!(uses_voice_over_keys(crate::shortcuts::DEFAULT_MUTE_MACOS));
+        assert!(uses_voice_over_keys(crate::shortcuts::DEFAULT_MUTE_OTHER));
         assert!(uses_voice_over_keys("Option+Control+Shift+M"));
         assert!(!uses_voice_over_keys("Cmd+Shift+M"));
         assert!(!uses_voice_over_keys(""));
@@ -279,11 +326,20 @@ mod tests {
         assert_eq!(normalize_shortcut("Option+Control+f5").as_deref(), Some("Ctrl+Alt+F5"));
         assert_eq!(normalize_shortcut("CTRL+ALT+space").as_deref(), Some("Ctrl+Alt+Space"));
         assert_eq!(normalize_shortcut("Alt+Ctrl+Ctrl+;").as_deref(), Some("Ctrl+Alt+;"), "a modifier held twice");
-        assert_eq!(normalize_shortcut(DEFAULT_MUTE_SHORTCUT).as_deref(), Some(DEFAULT_MUTE_SHORTCUT));
-        for alternative in SHORTCUT_ALTERNATIVES {
+        for kept in [crate::shortcuts::DEFAULT_MUTE_MACOS, crate::shortcuts::DEFAULT_MUTE_OTHER] {
+            assert_eq!(normalize_shortcut(kept).as_deref(), Some(kept), "a default is in the kept form");
+        }
+        for alternative in crate::shortcuts::ALTERNATIVES {
             assert_eq!(normalize_shortcut(alternative).as_deref(), Some(alternative), "already in the kept form");
         }
         assert_eq!(normalize_shortcut("  ").as_deref(), Some(""), "empty: none");
+        // A key on its own is only an F-key.
+        assert_eq!(normalize_shortcut("F9").as_deref(), Some("F9"));
+        assert_eq!(normalize_shortcut("f13").as_deref(), Some("F13"));
+        assert_eq!(normalize_shortcut("F24").as_deref(), Some("F24"));
+        for text in ["F25", "F0", "F05", "Fn", "Space", "7"] {
+            assert_eq!(normalize_shortcut(text), None, "{text}");
+        }
     }
 
     /// What sidevoice-web's recorder writes (`acceleratorOf`: the modifiers, then `event.key`, a single character
@@ -324,9 +380,7 @@ mod tests {
 
     #[test]
     fn what_is_not_a_shortcut() {
-        for text in
-            ["M", "F5", "Cmd", "Cmd+Shift", "Cmd+", "+M", "Cmd++M", "Cmd+M+K", "Hyper+M", "M+Cmd", "CmdOrCtrl+M"]
-        {
+        for text in ["M", "Cmd", "Cmd+Shift", "Cmd+", "+M", "Cmd++M", "Cmd+M+K", "Hyper+M", "M+Cmd", "CmdOrCtrl+M"] {
             assert_eq!(normalize_shortcut(text), None, "{text}");
         }
     }
@@ -334,18 +388,19 @@ mod tests {
     #[test]
     fn the_mute_shortcut_reads_as_the_seam_says() {
         assert_eq!(
-            serde_json::to_value(MuteShortcut::new("", Registration::On, vec![], true)).unwrap(),
-            json!({"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false})
+            serde_json::to_value(GlobalShortcut::new("", Registration::On, vec![], true, "en")).unwrap(),
+            json!({"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "managedBySystem": false})
         );
         assert_eq!(
-            serde_json::to_value(MuteShortcut::new("Ctrl+Alt+M", Registration::On, vec![], true)).unwrap(),
-            json!({"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false})
+            serde_json::to_value(GlobalShortcut::new("Ctrl+Alt+M", Registration::On, vec![], true, "en")).unwrap(),
+            json!({"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "managedBySystem": false})
         );
-        let refused = MuteShortcut::new("Cmd+Shift+M", Registration::Refused, vec!["Ctrl+Alt+Shift+M".into()], false);
+        let refused =
+            GlobalShortcut::new("Cmd+Shift+M", Registration::Refused, vec!["Ctrl+Alt+Shift+M".into()], false, "en");
         assert_eq!(
             serde_json::to_value(refused).unwrap(),
             json!({"accelerator": "Cmd+Shift+M", "label": "Super+Shift+M", "state": "refused",
-                   "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false})
+                   "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false, "managedBySystem": false})
         );
     }
 
@@ -362,7 +417,7 @@ mod tests {
 
     #[test]
     fn the_floating_card_shows_unless_switched_off() {
-        assert!(Settings::first_run().call_controls_enabled);
+        assert!(Settings::first_run(crate::shortcuts::DEFAULT_MUTE_MACOS).call_controls_enabled);
         let stored: Settings = serde_json::from_str("{}").unwrap();
         assert!(stored.call_controls_enabled, "a settings file from before the switch keeps the card on");
         let off: Settings = serde_json::from_str(r#"{"callControlsEnabled":false}"#).unwrap();
@@ -377,6 +432,11 @@ mod tests {
 
         let s = Settings {
             mute_shortcut: "Alt+M".into(),
+            hold_to_talk_shortcut: "Fn:hold".into(),
+            one_turn_shortcut: "RightControl:double".into(),
+            shortcuts_migrated: true,
+            headset_press: crate::shortcuts::HeadsetPress::OneTurn,
+            input_monitoring_asked: true,
             call_controls_always_shown: true,
             call_controls_enabled: false,
             update_mode: crate::updater::Mode::Manual,
@@ -396,7 +456,36 @@ mod tests {
         assert_eq!(load(&dir), None, "corrupt file: start as a first run rather than guess");
 
         fs::write(dir.join(FILE_NAME), "{}").unwrap();
-        assert_eq!(load(&dir), Some(Settings::first_run()), "what is missing takes its default");
+        let bare = load(&dir).unwrap();
+        assert_eq!(
+            bare.mute_shortcut, "Ctrl+Alt+M",
+            "a file from before the shortcut could be set holds what every system had"
+        );
+        assert!(!bare.shortcuts_migrated && bare.hold_to_talk_shortcut.is_empty() && bare.one_turn_shortcut.is_empty());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_old_mute_default_moves_once_where_the_default_changed() {
+        use crate::shortcuts::{DEFAULT_MUTE_MACOS as MAC, DEFAULT_MUTE_OTHER as OTHER};
+        assert_eq!(Settings::first_run(OTHER).mute_shortcut, OTHER);
+        assert!(Settings::first_run(OTHER).shortcuts_migrated, "a new install has nothing to move");
+        let old = |mute: &str| Settings { mute_shortcut: mute.into(), ..serde_json::from_str("{}").unwrap() };
+        let mut stored = old("Ctrl+Alt+M");
+        assert!(stored.migrate_shortcuts(OTHER));
+        assert_eq!((stored.mute_shortcut.as_str(), stored.shortcuts_migrated), (OTHER, true));
+        // Chosen again afterwards: kept, the move does not run twice.
+        stored.mute_shortcut = "Ctrl+Alt+M".into();
+        assert!(!stored.migrate_shortcuts(OTHER));
+        assert_eq!(stored.mute_shortcut, "Ctrl+Alt+M");
+        let mut chosen = old("Cmd+Shift+M");
+        assert!(chosen.migrate_shortcuts(OTHER));
+        assert_eq!(chosen.mute_shortcut, "Cmd+Shift+M", "an explicit choice stays");
+        let mut off = old("");
+        off.migrate_shortcuts(OTHER);
+        assert_eq!(off.mute_shortcut, "", "off stays off");
+        let mut mac = old("Ctrl+Alt+M");
+        assert!(mac.migrate_shortcuts(MAC));
+        assert_eq!(mac.mute_shortcut, MAC, "macOS keeps ⌃⌥M, and is marked so");
     }
 }

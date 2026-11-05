@@ -394,7 +394,7 @@ impl Placements {
 }
 
 /// The card advertises only a shortcut the system actually registered. The saved chord alone is no guarantee.
-pub fn shortcut_hint(shortcut: &crate::settings::MuteShortcut) -> &str {
+pub fn shortcut_hint(shortcut: &crate::settings::GlobalShortcut) -> &str {
     if shortcut.state == crate::settings::Registration::On {
         shortcut.label.as_deref().unwrap_or_default()
     } else {
@@ -446,17 +446,19 @@ mod tests {
     /// always shown or with the stage out of view, on screen or in the page.
     #[test]
     fn shortcut_hint_requires_successful_registration() {
-        use crate::settings::{MuteShortcut, Registration};
+        use crate::settings::{GlobalShortcut, Registration};
         for macos in [false, true] {
-            let on = MuteShortcut::new("Ctrl+Alt+M", Registration::On, vec![], macos);
+            let on = GlobalShortcut::new("Ctrl+Alt+M", Registration::On, vec![], macos, "en");
             assert_eq!(shortcut_hint(&on), on.label.as_deref().unwrap());
-            for state in [Registration::Off, Registration::Refused, Registration::Unavailable] {
-                let kept = MuteShortcut::new("Ctrl+Alt+M", state, vec![], macos);
+            for state in
+                [Registration::Off, Registration::Refused, Registration::NeedsPermission, Registration::Unavailable]
+            {
+                let kept = GlobalShortcut::new("Ctrl+Alt+M", state, vec![], macos, "en");
                 assert!(kept.label.is_some(), "a saved chord remains configured");
                 assert_eq!(shortcut_hint(&kept), "", "no working shortcut for {state:?}");
             }
         }
-        assert_eq!(shortcut_hint(&MuteShortcut::default()), "");
+        assert_eq!(shortcut_hint(&GlobalShortcut::default()), "");
     }
 
     #[test]
