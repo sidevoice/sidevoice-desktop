@@ -608,13 +608,19 @@ mod tests {
         );
         let manifest = "<plist version=\"1.0\"><dict><key>NSPrivacyTracking</key><false/>\
              <key>NSPrivacyAccessedAPITypes</key><array/></dict></plist>";
+        let group = format!(
+            "<dict><key>com.apple.security.application-groups</key><array><string>group.{identifier}</string></array></dict>"
+        );
+        let mut app = executable(&["main", "_malloc"]);
+        app.extend(signed(&group));
         vec![
             ("Info.plist", info.into_bytes()),
             (MANIFEST, manifest.as_bytes().to_vec()),
-            ("Sidevoice", executable(&["main", "_malloc"])),
+            ("Sidevoice", app),
             ("embedded.mobileprovision", b"profile".to_vec()),
             ("_CodeSignature/CodeResources", b"seal".to_vec()),
             ("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info(version)),
+            ("PlugIns/SidevoiceActivity.appex/SidevoiceActivity", signed(&group)),
             ("Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
             ("PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
             (SYMBOLS, b"symbols".to_vec()),
@@ -626,7 +632,8 @@ mod tests {
 
     fn appex_info(version: &str) -> Vec<u8> {
         format!(
-            "<plist version=\"1.0\"><dict><key>CFBundleVersion</key><string>{version}</string>\
+            "<plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>SidevoiceActivity</string>\
+             <key>CFBundleVersion</key><string>{version}</string>\
              <key>CFBundleShortVersionString</key><string>0.1.0</string></dict></plist>"
         )
         .into_bytes()
@@ -721,6 +728,11 @@ mod tests {
         assert!(check(&stale, "ai.sidevoice.mobile", 42).unwrap_err().contains("build number is 0.1.0, not 42"));
         let no_symbols = without(&files, SYMBOLS);
         assert!(check(&no_symbols, "ai.sidevoice.mobile", 42).unwrap_err().contains("no Symbols/*.symbols"));
+        let mut no_group = without(&files, "PlugIns/SidevoiceActivity.appex/SidevoiceActivity");
+        no_group.push(("PlugIns/SidevoiceActivity.appex/SidevoiceActivity", signed("<dict/>")));
+        assert!(check(&no_group, "ai.sidevoice.mobile", 42)
+            .unwrap_err()
+            .contains("PlugIns/SidevoiceActivity.appex is signed without the App Group group.ai.sidevoice.mobile"));
     }
 
     #[test]
