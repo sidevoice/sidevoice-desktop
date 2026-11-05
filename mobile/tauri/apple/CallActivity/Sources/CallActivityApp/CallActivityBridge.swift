@@ -282,6 +282,7 @@ final class Controller {
         watching = nil
         activity = nil
         sent = nil
+        named = nil
         if let over {
             enqueue {
                 if #available(iOS 16.2, *) {

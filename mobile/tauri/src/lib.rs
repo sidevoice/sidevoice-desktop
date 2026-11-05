@@ -491,9 +491,13 @@ fn unified_log() -> tauri_plugin_log::Target {
     )))
 }
 
-/// What the page says when a creature's still fails (sidevoice-web `call-surface-still.ts`, and the bridge's `call_still`
-/// in js/mobile-bridge.js): a conversation's id, a size and an error, never its words.
-const PAGE_STILLS: &str = "console.warn: [sidevoice] call surface: ";
+/// What the page says when a creature's still fails, in the only two forms that go public: sidevoice-web's
+/// `call-surface-still.ts` (`no still for`) and the bridge's `call_still` in js/mobile-bridge.js, each a conversation's
+/// id, a size and an error, never its words. Any other `[sidevoice] call surface:` warning stays private.
+const PAGE_STILLS: [&str; 2] = [
+    "console.warn: [sidevoice] call surface: no still for ",
+    "console.warn: [sidevoice] call surface: call_still ",
+];
 
 /// The unified log's category for a line `message` of the app's log with `target`: the lines about the creatures' stills
 /// (target `stills`, and the page's own about a still it could not draw or hand over, which reach the log through
@@ -501,7 +505,8 @@ const PAGE_STILLS: &str = "console.warn: [sidevoice] call surface: ";
 /// of a still; every other line is the app's own or the page's and may carry what the person said, so it goes in category
 /// `app`, private.
 fn log_category(target: &str, message: &str) -> &'static str {
-    let page_still = target == tauri_plugin_log::WEBVIEW_TARGET && message.starts_with(PAGE_STILLS);
+    let page_still = target == tauri_plugin_log::WEBVIEW_TARGET
+        && PAGE_STILLS.iter().any(|form| message.starts_with(form));
     if target == "stills" || page_still {
         "stills"
     } else {
@@ -520,6 +525,15 @@ mod tests {
         assert_eq!(
             page("console.warn: [sidevoice] call surface: no still for n|t#240 at 240px: Error: the SVG did not load"),
             "stills"
+        );
+        assert_eq!(
+            page("console.warn: [sidevoice] call surface: call_still n|t#240 failed: the still is too big"),
+            "stills"
+        );
+        assert_eq!(
+            page("console.warn: [sidevoice] call surface: report refused what the person said"),
+            "app",
+            "only the two forms about a still"
         );
         assert_eq!(page("console.warn: something the person said"), "app");
         assert_eq!(
