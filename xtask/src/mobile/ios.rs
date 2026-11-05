@@ -223,7 +223,7 @@ pub fn check_app(app: &Path) -> Result<()> {
 const EXTENSION: &str = "PlugIns/SidevoiceActivity.appex";
 
 /// The Live Activity's buttons (`LiveActivityIntent`s, mobile/tauri/apple/Intents, compiled into the app and the extension).
-const INTENTS: [&str; 5] = ["SetMicOff", "SkipReply", "CancelSend", "HangUp", "ToggleRoute"];
+const INTENTS: [&str; 5] = ["ToggleMic", "SkipReply", "CancelSend", "HangUp", "ToggleRoute"];
 
 /// The module of the Live Activity's Swift package (mobile/tauri/apple/CallActivity), linked statically: no intent may be
 /// declared there.
@@ -237,7 +237,7 @@ const PACKAGE_MODULE: &str = "CallActivity";
 /// package's metadata): it registers nothing for the app (`aggregateMetadataIsEmpty`) and every tap fails with "There is
 /// no metadata for SetMicOff" (TestFlight build 26, iOS 26). The actions are read as an object keyed by their identifier or
 /// an array of objects with an `identifier`; an identifier is the intent's name, alone or after its module
-/// (`CallActivity.SetMicOff`); the module of its type is its `fullyQualifiedTypeName`'s.
+/// (`CallActivity.ToggleMic`); the module of its type is its `fullyQualifiedTypeName`'s.
 fn check_intents(actions_data: &[u8], what: &str) -> Result<()> {
     let json: serde_json::Value = serde_json::from_slice(actions_data).map_err(|e| format!("{what}: {e}"))?;
     let actions: Vec<(String, Option<String>)> = match json.get("actions") {
@@ -687,15 +687,15 @@ mod tests {
         let mut app = without(&files, "Metadata.appintents/extract.actionsdata");
         app.push(("Metadata.appintents/extract.actionsdata", lacking));
         let error = check(&app, "ai.sidevoice.mobile", 42).unwrap_err();
-        assert!(error.contains("lacks SetMicOff"), "{error}");
+        assert!(error.contains("lacks ToggleMic"), "{error}");
         let no_metadata = without(&files, "PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata");
         assert!(check(&no_metadata, "ai.sidevoice.mobile", 42).unwrap_err().contains("appex/Metadata.appintents"));
         let listed: Vec<u8> = serde_json::json!({ "actions": [
-            {"identifier": "SetMicOff"}, {"identifier": "SetMicOff"}, {"identifier": "SkipReply"},
+            {"identifier": "ToggleMic"}, {"identifier": "ToggleMic"}, {"identifier": "SkipReply"},
             {"identifier": "CancelSend"}, {"identifier": "HangUp"}, {"identifier": "ToggleRoute"} ] })
         .to_string()
         .into_bytes();
-        assert!(check_intents(&listed, "x").unwrap_err().contains("SetMicOff 2 times"));
+        assert!(check_intents(&listed, "x").unwrap_err().contains("ToggleMic 2 times"));
     }
     #[test]
     fn a_signed_archive_of_the_app_at_the_build_passes() {

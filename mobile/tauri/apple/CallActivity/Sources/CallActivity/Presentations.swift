@@ -47,17 +47,17 @@ public struct LockCard: View {
             HStack(spacing: 8) {
                 // A button never ends in an ellipsis: its label whole, or its glyph alone (same colours, same name).
                 ViewThatFits(in: .horizontal) {
-                    MuteToggle(micOff: state.micOff) { off in
-                        MutePill(state: state, micOff: off, palette: palette, reduced: reduced)
-                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
+                    ActionButton(action: .mute) {
+                        MutePill(state: state, micOff: state.micOff, palette: palette, reduced: reduced)
                     }
-                    MuteToggle(micOff: state.micOff) { off in
+                    .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
+                    ActionButton(action: .mute) {
                         RoundButtonFace(
-                            symbol: off ? "mic.slash.fill" : "mic.fill", size: 40, glyph: 17,
-                            fill: off ? Ink.mutedFill : palette.button,
-                            ink: off ? Ink.mutedInk : palette.text)
-                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
+                            symbol: state.micOff ? "mic.slash.fill" : "mic.fill", size: 40, glyph: 17,
+                            fill: state.micOff ? Ink.mutedFill : palette.button,
+                            ink: state.micOff ? Ink.mutedInk : palette.text)
                     }
+                    .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
                 }
                 ActionButton(action: .skip, enabled: state.canSkip) {
                     RoundButtonFace(symbol: SkipGlyph.symbol, size: 40, glyph: 17, fill: palette.button, ink: palette.text)
@@ -171,13 +171,13 @@ public struct ExpandedBody: View {
             VStack(spacing: 8) {
                 ClosedHeader(state: state)
                 HStack(spacing: 8) {
-                    MuteToggle(micOff: state.micOff) { off in
+                    ActionButton(action: .mute) {
                         RoundButtonFace(
-                            symbol: off ? "mic.slash.fill" : "mic.fill", size: 36, glyph: 18,
-                            fill: off ? Ink.mutedFill : Palette.island.button,
-                            ink: off ? Ink.mutedInk : Palette.island.text)
-                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
+                            symbol: state.micOff ? "mic.slash.fill" : "mic.fill", size: 36, glyph: 18,
+                            fill: state.micOff ? Ink.mutedFill : Palette.island.button,
+                            ink: state.micOff ? Ink.mutedInk : Palette.island.text)
                     }
+                    .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
                     if state.route != nil {
                         ActionButton(action: .route) {
                             RoundButtonFace(
