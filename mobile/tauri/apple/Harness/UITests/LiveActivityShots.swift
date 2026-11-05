@@ -40,12 +40,16 @@ final class LiveActivityShots: XCTestCase {
     func shoot(_ fixture: Fixture) {
         let app = XCUIApplication()
         app.launchEnvironment["LA_FIXTURE"] = fixture.json
-        app.launch()
-        let status = app.staticTexts["harness.status"]
-        let started = NSPredicate(format: "label == 'started' OR label BEGINSWITH 'failed'")
-        let waited = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: started, object: status)], timeout: 30)
-        guard waited == .completed, status.label == "started" else {
-            XCTFail("\(fixture.name): the activity did not start (\(status.exists ? status.label : "no status"))")
+        // Launched once more if it did not start: a launch now and then reaches the app without its environment.
+        var said = ""
+        for _ in 0..<2 {
+            app.launch()
+            said = started(app)
+            if said == "started" { break }
+            app.terminate()
+        }
+        guard said == "started" else {
+            XCTFail("\(fixture.name): the activity did not start (\(said))")
             save("failed-\(fixture.name)")
             return
         }
@@ -85,6 +89,14 @@ final class LiveActivityShots: XCTestCase {
             XCUIDevice.shared.press(.home)
             settle(0.8)
         }
+    }
+
+    /// What the harness app's status says once the activity started or failed to (up to 30 s).
+    func started(_ app: XCUIApplication) -> String {
+        let status = app.staticTexts["harness.status"]
+        let done = NSPredicate(format: "label == 'started' OR label BEGINSWITH 'failed'")
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: done, object: status)], timeout: 30)
+        return status.exists ? status.label : "no status"
     }
 
     /// The island's centre, from the top of the screen (pt): iPhone 17 Pro, top 11 and 36.67 tall (spec/GEOMETRY.md).
