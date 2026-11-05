@@ -116,6 +116,13 @@ final class RenderTests: XCTestCase {
         var noHeadphones = Self.sample(.idle)
         noHeadphones.route = nil
         try sheet(noHeadphones, name: "idle-no-headphones")
+        // No other conversation: no stack at all.
+        var alone = Self.sample(.working)
+        alone.others = []
+        alone.conversationCount = 1
+        try sheet(alone, name: "working-no-others")
+        // Offline with the mic off: the face struck through, never the mic-off badge.
+        try sheet(Self.sample(.offline, micOff: true), name: "offline-mic-off-struck")
         var long = Self.sample(.working)
         long.title = "Refactorizar las notificaciones del escritorio y del móvil"
         long.model = "claude-opus-5-5 · xhigh"
@@ -203,6 +210,8 @@ final class RenderTests: XCTestCase {
             camera(x: (width - 125) / 2)
             // The `.leading` region, beside the camera: its content centred on the camera's row.
             ExpandedLeading(state: state).frame(height: ExpandedBody.cameraRow)
+            // The `.trailing` region, the other side of the camera: the voice states' glyph, at the island's end.
+            ExpandedTrailing(state: state).frame(width: width, height: ExpandedBody.cameraRow, alignment: .trailing)
             // The system's `.bottom` region starts below the camera's row and clips its content at its bounds, as the
             // device does; its side and bottom margins are zeroed.
             ExpandedBody(state: state).clipped().padding(.top, ExpandedBody.cameraRow)

@@ -7,12 +7,17 @@
     <color name="call_card_button">#21FFFFFF</color>
     <color name="call_card_badge_ring">#FF1E1E22</color>
     <color name="call_card_tile">#FF2F2741</color>
-    <color name="call_card_lila_ink">#FFCDBBF0</color>
-    <color name="call_card_lila">#FFC9B6EC</color>
-    <color name="call_card_green_ink">#FF74D3A6</color>
-    <color name="call_card_green">#FF74D3A6</color>
-    <color name="call_card_warn_ink">#FFF5A35C</color>
-    <color name="call_card_warn">#FFF5A35C</color>
-    <color name="call_card_grey_ink">#FFB8B8C0</color>
-    <color name="call_card_grey">#FF93939C</color>
+    <!-- Scheme E, dark: 50 % (ink) and 55 % (fill) of each tone on white. -->
+    <color name="call_card_listen_ink">#FF97DBBE</color>
+    <color name="call_card_listen">#FF8DD7B7</color>
+    <color name="call_card_speak_ink">#FF9EC5FE</color>
+    <color name="call_card_speak">#FF94BFFE</color>
+    <color name="call_card_work_ink">#FFB5A7EC</color>
+    <color name="call_card_work">#FFAE9EEA</color>
+    <color name="call_card_warn_ink">#FFF0D497</color>
+    <color name="call_card_warn">#FFEECF8C</color>
+    <color name="call_card_idle_ink">#FFDCD9E2</color>
+    <color name="call_card_idle">#FFD9D5DF</color>
+    <color name="call_card_offline_ink">#FFC5C2CA</color>
+    <color name="call_card_offline">#FFBFBCC4</color>
 </resources>

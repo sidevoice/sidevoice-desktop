@@ -81,6 +81,18 @@ public struct CallState: Codable, Hashable {
 
     public init() {}
 
+    /// Whether the expanded island draws the speaking layout: the creature and the state's glyph beside the camera, and
+    /// below only what the moment has (your pill, your words, the reply). The voice states: listening, transcribing, your
+    /// words, speaking.
+    public var voiceLayout: Bool {
+        [.listening, .transcribing, .said, .speaking].contains(phase)
+    }
+
+    /// Whether the faces wear the mic-off badge (and the compact its glyph): the mic off, but never while offline.
+    public var mutedBadge: Bool {
+        micOff && phase != .offline
+    }
+
     /// The locale the system's own words on the activity follow: the page's language, else the device's.
     public var locale: Locale {
         language.isEmpty ? .current : Locale(identifier: language)

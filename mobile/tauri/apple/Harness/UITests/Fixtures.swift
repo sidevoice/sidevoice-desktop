@@ -177,7 +177,7 @@ extension Fixture {
         for phase in ["working", "listening"] {
             all.append(Fixture(name: "\(phase)-no-still", details: details(phase, stills: false), dark: true))
         }
-        for count in [6, 9] {
+        for count in [1, 6, 9] {
             all.append(Fixture(name: "working-conversations-\(count)", details: details("working", conversations: count)))
         }
         return all

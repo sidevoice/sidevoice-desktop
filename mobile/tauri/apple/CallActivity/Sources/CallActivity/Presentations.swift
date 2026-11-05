@@ -180,9 +180,9 @@ struct MutePill: View {
     }
 }
 
-/// The expanded island's content below the camera (variant B, D-LA-EXPANDED-B): the header and the controls; the header
-/// and your voice's pill; the pill alone while transcribing; your words alone; or the reply. The island adds its edges.
-/// Speaking's creature is the `.leading` region's (`ExpandedLeading`).
+/// The expanded island's content below the camera (variant B, D-LA-EXPANDED-B): the header and the controls; in the voice
+/// states (the speaking layout: `ExpandedLeading`, `ExpandedTrailing`) your pill, your words or the reply alone. The island
+/// adds its edges.
 @available(iOS 16.1, *)
 public struct ExpandedBody: View {
     public var state: CallState
@@ -229,14 +229,9 @@ public struct ExpandedBody: View {
         switch state.phase {
         case .speaking:
             Reply(state: state)
-        case .listening:
-            // 7.91 under the header's 46.09, so the pill's 36 end the 90 under the camera row.
-            VStack(spacing: 7.91) {
-                VoiceHeader(state: state)
-                VoicePill(state: state)
-            }
-        case .transcribing:
-            // Only the pill, in the middle of what is under the camera row.
+        case .listening, .transcribing:
+            // The speaking layout (the face and the glyph are the regions beside the camera): only your pill, in the
+            // middle of what is under the camera row. No header.
             VoicePill(state: state)
                 .frame(maxWidth: .infinity)
                 .frame(height: Self.room)
@@ -304,84 +299,57 @@ struct ClosedHeader: View {
     }
 }
 
-/// Listening: tile 44, the conversation and the state ("Escuchándote"), the
-/// stack. 46.09 tall: the title and state lines (23.52, 1.99, 20.58), the tile centred on them.
-@available(iOS 16.1, *)
-struct VoiceHeader: View {
-    var state: CallState
-
-    var body: some View {
-        let palette = Palette.island
-        HStack(alignment: .center, spacing: 12) {
-            CreatureTile(state: state, size: 44, palette: palette)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(state.title)
-                    .font(DMSans.font(16, 700)).tracking(-0.16)
-                    .foregroundStyle(palette.text)
-                    .line(23.52)
-                StateLine(state: state, dark: true, size: 14, lineHeight: 20.58)
-                    .padding(.top, 1.99)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            OthersStack(state: state, palette: palette)
-        }
-        .frame(height: 46.09)
-    }
-}
-
-/// Your voice's pill (the creature redesign's `.vcap.card.pill`, reference 2026-11-04): 36 tall, fully rounded, #212125 with
-/// a 1-pt #4b4756 border, 16 in at its start and 6 at its end; a white 16-pt mic, then five white bars while listening or
-/// the state ("Transcribiendo…", 14 pt, 550) while transcribing; Cancelar envío as a 26-pt × on a white 14 % disc, 12 after.
+/// Your pill, under the camera row while you talk (scheme E's island): a small white rounded pill, 34 tall, 13 in at its
+/// start and 7 at its end, 9 between its parts, ink #1b1d24: the mic (13 pt), then a few bars while listening or the
+/// state ("Transcribiendo…", 14 pt, 600) while transcribing; Cancelar envío as a 20-pt × on a 10 % disc of the ink.
 @available(iOS 16.1, *)
 struct VoicePill: View {
     var state: CallState
+    static let ink = Color(hex: 0x1b1d24)
 
     var body: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "mic")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 16, height: 16)
-                if state.phase == .transcribing {
-                    Text(state.words.state)
-                        .font(DMSans.font(14, 550)).tracking(0.14)
-                        .lineLimit(1)
-                        .fixedSize()
-                } else {
-                    PillBars()
-                }
+        HStack(spacing: 9) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 13, height: 13)
+            if state.phase == .transcribing {
+                Text(state.words.state)
+                    .font(DMSans.font(14, 600))
+                    .lineLimit(1)
+                    .fixedSize()
+            } else {
+                PillBars()
             }
             ActionButton(action: .cancelSend, enabled: state.canCancelSend) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Color.white.opacity(0.14)))
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 20, height: 20)
+                    .background(Circle().fill(Self.ink.opacity(0.1)))
             }
             .accessibilityLabel(state.words.cancelSend)
         }
-        .foregroundStyle(Color.white)
-        .padding(.leading, 16)
-        .padding(.trailing, 6)
-        .frame(height: 36)
-        .background(Capsule().fill(Color(hex: 0x212125)))
-        .overlay(Capsule().strokeBorder(Color(hex: 0x4b4756), lineWidth: 1))
+        .foregroundStyle(Self.ink)
+        .padding(.leading, 13)
+        .padding(.trailing, 7)
+        .frame(height: 34)
+        .background(Capsule().fill(Color.white))
         .fixedSize()
     }
 }
 
-/// The pill's bars: five, white, 3 wide with 2.5 between them, 6 / 13 / 9 / 15 / 6 tall, centred in 16; still, since a
-/// Live Activity cannot follow the voice.
+/// The pill's bars: five, 2.5 wide every 4.5, 5 / 9 / 13 / 8 / 4 tall, centred in a 22 × 14 box; still, since a Live
+/// Activity cannot follow the voice.
 @available(iOS 16.1, *)
 struct PillBars: View {
-    static let heights: [CGFloat] = [6, 13, 9, 15, 6]
+    static let heights: [CGFloat] = [5, 9, 13, 8, 4]
 
     var body: some View {
-        HStack(spacing: 2.5) {
+        HStack(spacing: 2) {
             ForEach(Array(Self.heights.enumerated()), id: \.offset) { _, height in
-                RoundedRectangle(cornerRadius: 1.5).frame(width: 3, height: height)
+                RoundedRectangle(cornerRadius: 1.25).frame(width: 2.5, height: height)
             }
         }
-        .frame(height: 16)
+        .frame(width: 22, height: 14)
     }
 }
 
@@ -408,9 +376,10 @@ struct Reply: View {
     }
 }
 
-/// Expanded, leading: speaking's creature, a 30-pt circle beside the camera, 28 pt from the island's edge (B's 18 and
-/// 10). It has its own region because the device clips `.bottom`'s content at that region's top, below the camera row;
-/// 30 pt stays within the row (36.7 measured), so it never pushes `.bottom` down. Empty in every other state.
+/// Expanded, leading: the creature of the voice states (listening, transcribing, your words, speaking: they share the
+/// speaking layout), a 30-pt circle beside the camera, 28 pt from the island's edge (B's 18 and 10). It has its own region
+/// because the device clips `.bottom`'s content at that region's top, below the camera row; 30 pt stays within the row
+/// (36.7 measured), so it never pushes `.bottom` down. Empty in every other state.
 @available(iOS 16.1, *)
 public struct ExpandedLeading: View {
     public var state: CallState
@@ -423,9 +392,30 @@ public struct ExpandedLeading: View {
     public static let inset: CGFloat = ExpandedBody.side + 10
 
     public var body: some View {
-        if state.phase == .speaking {
+        if state.voiceLayout {
             RoundFace(state: state, size: Self.face)
                 .padding(.leading, Self.inset)
+        }
+    }
+}
+
+/// Expanded, trailing: in the voice states, the state's glyph in its tone, 22 pt from the island's edge, centred on the
+/// creature's row: the mic while listening, the bars while transcribing and for your words, the speaker while speaking.
+@available(iOS 16.1, *)
+public struct ExpandedTrailing: View {
+    public var state: CallState
+
+    public init(state: CallState) {
+        self.state = state
+    }
+
+    public static let inset: CGFloat = 22
+
+    public var body: some View {
+        if state.voiceLayout {
+            StateGlyph(phase: state.phase, size: 22)
+                .frame(height: ExpandedLeading.face)
+                .padding(.trailing, Self.inset)
         }
     }
 }
@@ -456,11 +446,11 @@ public struct CompactTrailing: View {
     }
 
     public var body: some View {
-        if (state.phase == .idle || state.phase == .said) && !state.micOff {
+        if (state.phase == .idle || state.phase == .said) && !state.mutedBadge {
             EmptyView()
         } else {
             HStack(spacing: 6) {
-                if state.micOff {
+                if state.mutedBadge {
                     Image(systemName: "mic.slash.fill")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Ink.micOffGlyph)
@@ -490,8 +480,18 @@ public struct MinimalFace: View {
             RoundFace(state: state, size: 24)
         }
         .frame(width: 34, height: 34)
+        .overlay {
+            if state.phase == .offline {
+                // Offline: the face struck through, a grey bar edged in the island's black.
+                ZStack {
+                    Capsule().fill(Color.black).frame(width: 5.5, height: 37)
+                    Capsule().fill(Color(hex: 0xb8b8c0)).frame(width: 2.5, height: 34)
+                }
+                .rotationEffect(.degrees(-45))
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
-            if state.micOff {
+            if state.mutedBadge {
                 // Inside the island's circle (it clips anything outside): centre at (27, 27) of the 36.67 box.
                 MicBadge(size: 12, glyph: 8, ring: .black, ringWidth: 1.5).offset(x: -2.33, y: -2.33)
             }

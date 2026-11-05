@@ -33,15 +33,17 @@ internal data class CallCard(
         SPEAKING("speaking"), HOLDING("holding"), OFFLINE("offline");
 
         /**
-         * The phase's tone (HANDOVER §2, D-LA-VOICE-LILA): the voice's states share the lila, working is green, can't
-         * receive amber, idle and offline grey.
+         * The phase's tone, scheme E (the operator's, 2026-11-05): listening, transcribing and your words green, speaking
+         * blue, working violet, can't receive amber, idle and offline greys.
          */
         val tone: Tone
             get() = when (this) {
-                LISTENING, TRANSCRIBING, SAID, SPEAKING -> Tone.LILA
-                WORKING -> Tone.GREEN
+                LISTENING, TRANSCRIBING, SAID -> Tone.LISTEN
+                SPEAKING -> Tone.SPEAK
+                WORKING -> Tone.WORK
                 HOLDING -> Tone.WARN
-                IDLE, OFFLINE -> Tone.GREY
+                IDLE -> Tone.IDLE
+                OFFLINE -> Tone.OFFLINE
             }
 
         companion object {
@@ -49,7 +51,7 @@ internal data class CallCard(
         }
     }
 
-    enum class Tone { LILA, GREEN, WARN, GREY }
+    enum class Tone { LISTEN, SPEAK, WORK, WARN, IDLE, OFFLINE }
 
     /** A creature's still: its PNG, [file] in the stills folder, and how much of it the body takes ([k], 1 by default). */
     data class Still(val file: String, val k: Double = 1.0)

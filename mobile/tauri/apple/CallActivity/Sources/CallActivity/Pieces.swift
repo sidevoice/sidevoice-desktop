@@ -107,14 +107,14 @@ struct CreatureTile: View {
             // The tile's box, and far around it for an accessory that stands out of it, less the badge's ring.
             ZStack(alignment: .bottomTrailing) {
                 Rectangle().padding(-size)
-                if state.micOff {
+                if state.mutedBadge {
                     Circle().frame(width: 26, height: 26).offset(x: 6, y: 6).blendMode(.destinationOut)
                 }
             }
             .compositingGroup()
         }
         .overlay(alignment: .bottomTrailing) {
-            if state.micOff {
+            if state.mutedBadge {
                 MicBadge(size: 22, glyph: 12).offset(x: 4, y: 4)
             }
         }
@@ -131,7 +131,7 @@ struct MicBadge: View {
     var ringWidth: CGFloat = 0
 
     var body: some View {
-        Circle().fill(Ink.hangUp)
+        Circle().fill(Ink.muted)
             .overlay(Image(systemName: "mic.slash.fill").font(.system(size: glyph * 0.85, weight: .semibold))
                 .foregroundStyle(.white))
             .frame(width: size, height: size)
@@ -152,7 +152,8 @@ struct RoundFace: View {
     }
 }
 
-/// The other conversations: up to three faces of 26 overlapping by 8, enlarged by their `k` (overflow), then the count.
+/// The other conversations: up to three faces of 26 overlapping by 8, enlarged by their `k` (overflow), then the count;
+/// nothing at all when the call has no other conversation.
 /// One link to the app's conversation list (D-LA-SIMPLE).
 @available(iOS 16.1, *)
 struct OthersStack: View {
@@ -160,6 +161,12 @@ struct OthersStack: View {
     var palette: Palette
 
     var body: some View {
+        if !state.others.isEmpty {
+            stack
+        }
+    }
+
+    private var stack: some View {
         Link(destination: CallLinks.conversations) {
             HStack(spacing: 0) {
                 HStack(spacing: -8) {
@@ -229,10 +236,14 @@ struct StateGlyph: View {
         let tone = Tone.of(phase, dark: true)
         Group {
             switch phase {
-            case .idle, .said:
+            case .idle:
                 EmptyView()
-            case .listening, .transcribing:
-                GlyphBars(phase: phase).frame(width: size, height: size)
+            case .listening:
+                // The mic (scheme E): you are talking.
+                symbol("mic.fill", effect: .pulse)
+            case .transcribing, .said:
+                // The bars, at full tone.
+                GlyphBars().frame(width: size, height: size)
             case .working:
                 symbol("ellipsis", effect: .bounce)
             case .speaking:
@@ -288,10 +299,9 @@ struct SymbolEntrance: View {
 
 /// Your voice's bars in the compact island (five; a stand-in for the app's): 2.4 wide at x 2.5 / 6.6 / 10.7 / 14.8 / 18.9 of
 /// a 24 box, 7 / 12 / 16 / 11 / 7 tall, centred; still, since a Live Activity cannot follow the voice. They grow from
-/// their bottom when listening starts; 45 % and greyed while transcribing.
+/// their bottom when they appear; always at full tone.
 @available(iOS 16.1, *)
 struct GlyphBars: View {
-    var phase: CallState.Phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isLuminanceReduced) private var reduced
     static let heights: [CGFloat] = [7, 12, 16, 11, 7]
@@ -313,9 +323,6 @@ struct GlyphBars: View {
                 }
             }
         }
-        .opacity(phase == .listening ? 1 : 0.45)
-        .saturation(phase == .listening ? 1 : 0.4)
-        .animation(.easeOut(duration: 1), value: phase)
     }
 }
 

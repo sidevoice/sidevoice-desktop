@@ -58,7 +58,7 @@ internal class CallCardViews(
     fun expanded(): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.call_card)
         val tone = tone()
-        views.setImageViewBitmap(R.id.call_card_tile, art.tile(card.still?.let(stills), card.still?.k ?: 1.0, tone.fill, grey = card.phase == CallCard.Phase.OFFLINE, muted = card.muted))
+        views.setImageViewBitmap(R.id.call_card_tile, art.tile(card.still?.let(stills), card.still?.k ?: 1.0, tone.fill, grey = card.phase == CallCard.Phase.OFFLINE, muted = card.muted && card.phase != CallCard.Phase.OFFLINE))
         views.setTextViewText(R.id.call_card_title, title())
         views.setTextViewText(R.id.call_card_sub, card.sub)
         views.setViewVisibility(R.id.call_card_sub, if (card.sub.isEmpty()) View.GONE else View.VISIBLE)
@@ -213,10 +213,12 @@ internal class CallCardViews(
 
     /** The phase's tone in this appearance: its ink (words) and fill (dot, glow). */
     private fun tone(): Ink = when (card.phase.tone) {
-        CallCard.Tone.LILA -> Ink(color(R.color.call_card_lila_ink), color(R.color.call_card_lila))
-        CallCard.Tone.GREEN -> Ink(color(R.color.call_card_green_ink), color(R.color.call_card_green))
+        CallCard.Tone.LISTEN -> Ink(color(R.color.call_card_listen_ink), color(R.color.call_card_listen))
+        CallCard.Tone.SPEAK -> Ink(color(R.color.call_card_speak_ink), color(R.color.call_card_speak))
+        CallCard.Tone.WORK -> Ink(color(R.color.call_card_work_ink), color(R.color.call_card_work))
         CallCard.Tone.WARN -> Ink(color(R.color.call_card_warn_ink), color(R.color.call_card_warn))
-        CallCard.Tone.GREY -> Ink(color(R.color.call_card_grey_ink), color(R.color.call_card_grey))
+        CallCard.Tone.IDLE -> Ink(color(R.color.call_card_idle_ink), color(R.color.call_card_idle))
+        CallCard.Tone.OFFLINE -> Ink(color(R.color.call_card_offline_ink), color(R.color.call_card_offline))
     }
 
     private data class Ink(val ink: Int, val fill: Int)
@@ -328,7 +330,7 @@ internal class CallCardArt(private val context: Context) {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         paint.color = context.getColor(R.color.call_card_badge_ring)
         canvas.drawCircle(cx, cy, radius + px(BADGE_RING), paint)
-        paint.color = context.getColor(R.color.call_card_end)
+        paint.color = context.getColor(R.color.call_card_mute_badge)
         canvas.drawCircle(cx, cy, radius, paint)
         val glyph = context.getDrawable(R.drawable.ic_card_mic_off_white) ?: return
         val half = px(BADGE_GLYPH) / 2

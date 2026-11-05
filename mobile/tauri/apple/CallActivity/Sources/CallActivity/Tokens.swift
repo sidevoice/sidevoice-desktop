@@ -21,22 +21,29 @@ struct Tone {
     var fill: Color
     var soft: Color
 
-    /// The tone of `phase` (D-LA-STATES, D-LA-VOICE-LILA): the voice states lila, working green, can't receive amber, idle
-    /// and offline grey.
+    /// The tone of `phase`, scheme E (the operator's, 2026-11-05): listening, transcribing and your words green, speaking
+    /// blue, working violet, can't receive amber, idle and offline greys. Light: the colour itself, its soft 14 % of it on
+    /// white; dark: 55 % (fill) and 50 % (ink) of it on white, its soft 30 % on #111 (the gallery's mix).
     static func of(_ phase: CallState.Phase, dark: Bool) -> Tone {
         switch phase {
-        case .listening, .transcribing, .said, .speaking:
-            return dark ? Tone(ink: Color(hex: 0xcdbbf0), fill: Color(hex: 0xc9b6ec), soft: Color(hex: 0x2f2741))
-                : Tone(ink: Color(hex: 0x4a2f6b), fill: Color(hex: 0x4a2f6b), soft: Color(hex: 0xece4f7))
+        case .listening, .transcribing, .said:
+            return dark ? Tone(ink: Color(hex: 0x97dbbe), fill: Color(hex: 0x8dd7b7), soft: Color(hex: 0x1a4331))
+                : Tone(ink: Color(hex: 0x2fb67c), fill: Color(hex: 0x2fb67c), soft: Color(hex: 0xe2f5ed))
+        case .speaking:
+            return dark ? Tone(ink: Color(hex: 0x9ec5fe), fill: Color(hex: 0x94bffe), soft: Color(hex: 0x1e3658))
+                : Tone(ink: Color(hex: 0x3d8bfd), fill: Color(hex: 0x3d8bfd), soft: Color(hex: 0xe4efff))
         case .working:
-            return dark ? Tone(ink: Color(hex: 0x74d3a6), fill: Color(hex: 0x74d3a6), soft: Color(hex: 0x14271e))
-                : Tone(ink: Color(hex: 0x1d6b45), fill: Color(hex: 0x1d6b45), soft: Color(hex: 0xe2f3e9))
+            return dark ? Tone(ink: Color(hex: 0xb5a7ec), fill: Color(hex: 0xae9eea), soft: Color(hex: 0x2c244d))
+                : Tone(ink: Color(hex: 0x6b4fd8), fill: Color(hex: 0x6b4fd8), soft: Color(hex: 0xeae6fa))
         case .holding:
-            return dark ? Tone(ink: Color(hex: 0xf5a35c), fill: Color(hex: 0xf5a35c), soft: Color(hex: 0x2e1f10))
-                : Tone(ink: Color(hex: 0x9a4a00), fill: Color(hex: 0x9a4a00), soft: Color(hex: 0xfdeedd))
-        case .idle, .offline:
-            return dark ? Tone(ink: Color(hex: 0xb8b8c0), fill: Color(hex: 0x93939c), soft: Color(hex: 0x26262b))
-                : Tone(ink: Color(hex: 0x545766), fill: Color(hex: 0x686b7a), soft: Color(hex: 0xefebf4))
+            return dark ? Tone(ink: Color(hex: 0xf0d497), fill: Color(hex: 0xeecf8c), soft: Color(hex: 0x4f3e1a))
+                : Tone(ink: Color(hex: 0xe0a82e), fill: Color(hex: 0xe0a82e), soft: Color(hex: 0xfbf3e2))
+        case .idle:
+            return dark ? Tone(ink: Color(hex: 0xdcd9e2), fill: Color(hex: 0xd9d5df), soft: Color(hex: 0x434247))
+                : Tone(ink: Color(hex: 0xb9b3c4), fill: Color(hex: 0xb9b3c4), soft: Color(hex: 0xf5f4f7))
+        case .offline:
+            return dark ? Tone(ink: Color(hex: 0xc5c2ca), fill: Color(hex: 0xbfbcc4), soft: Color(hex: 0x353438))
+                : Tone(ink: Color(hex: 0x8a8594), fill: Color(hex: 0x8a8594), soft: Color(hex: 0xefeef0))
         }
     }
 }
@@ -57,10 +64,12 @@ struct Palette {
 
 enum Ink {
     static let hangUp = Color(hex: 0xdc362e)
+    /// The mic muted (scheme E): the badge on the face.
+    static let muted = Color(hex: 0xe5484d)
     static let mutedFill = Color(hex: 0xf9dedc)
     static let mutedInk = Color(hex: 0x601410)
-    /// The compact island's mic-off glyph (GEOMETRY: rgb(255, 180, 171)).
-    static let micOffGlyph = Color(hex: 0xffb4ab)
+    /// The compact island's mic-off glyph: the mic muted's dark ink (scheme E).
+    static let micOffGlyph = Color(hex: 0xf2a4a6)
     static let disabled = 0.32
 }
 

@@ -9,18 +9,25 @@
     <!-- The mute badge's 2 dp ring on the creature (GEOMETRY: the badge's ring), and the creature tile's ground. -->
     <color name="call_card_badge_ring">#FFF2F0F6</color>
     <color name="call_card_tile">#FFECE4F7</color>
-    <!-- Tones: ink (the state's words) and fill (its dot, the tile's glow). -->
-    <color name="call_card_lila_ink">#FF4A2F6B</color>
-    <color name="call_card_lila">#FF4A2F6B</color>
-    <color name="call_card_green_ink">#FF1D6B45</color>
-    <color name="call_card_green">#FF1D6B45</color>
-    <color name="call_card_warn_ink">#FF9A4A00</color>
-    <color name="call_card_warn">#FF9A4A00</color>
-    <color name="call_card_grey_ink">#FF545766</color>
-    <color name="call_card_grey">#FF686B7A</color>
+    <!-- Tones, scheme E (the operator's, 2026-11-05): ink (the state's words) and fill (its dot, the tile's glow). Listening,
+         transcribing and your words green, speaking blue, working violet, can't receive amber, idle and offline greys. -->
+    <color name="call_card_listen_ink">#FF2FB67C</color>
+    <color name="call_card_listen">#FF2FB67C</color>
+    <color name="call_card_speak_ink">#FF3D8BFD</color>
+    <color name="call_card_speak">#FF3D8BFD</color>
+    <color name="call_card_work_ink">#FF6B4FD8</color>
+    <color name="call_card_work">#FF6B4FD8</color>
+    <color name="call_card_warn_ink">#FFE0A82E</color>
+    <color name="call_card_warn">#FFE0A82E</color>
+    <color name="call_card_idle_ink">#FFB9B3C4</color>
+    <color name="call_card_idle">#FFB9B3C4</color>
+    <color name="call_card_offline_ink">#FF8A8594</color>
+    <color name="call_card_offline">#FF8A8594</color>
     <!-- Mute while off, and hang up: the same in both appearances. -->
     <color name="call_card_muted">#FFF9DEDC</color>
     <color name="call_card_muted_ink">#FF601410</color>
     <color name="call_card_end">#FFDC362E</color>
+    <!-- The mic muted (scheme E): the badge on the creature. -->
+    <color name="call_card_mute_badge">#FFE5484D</color>
     <color name="call_card_white">#FFFFFFFF</color>
 </resources>
