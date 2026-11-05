@@ -406,8 +406,8 @@ its buttons need iOS 17 (before that it only shows the call).
   down on a 17 Pro Max, so about 40 from the island's edge). The bottom band (the controls, the capsule; Saltar 30) keeps
   26 from the sides, clear of the device's rounder bottom corners; text keeps 18 (D-LA-CORNERS). The budget is 144 pt
   (D-LA-144): the reply is three lines and Saltar, listening a 46 header (tile 44), an 8 gap and the capsule, your words
-  the same header and two lines of 15 on 18, the closed states a 48 tile row, a 6 gap and the 36 controls (no model and machine line in the island: they stay on the card). Slack, if a device measures any, comes out
-  of the gaps, never of a line or a button. Speaking's creature (30 pt) sits beside the camera in the `.leading` region
+  the same header and two lines of 15 on 18, the closed states a 48 tile row, a 6 gap and the 36 controls (no model and
+  machine line in the island: they stay on the card). Slack, if a device measures any, comes out of the gaps, never of a line or a button. Speaking's creature (30 pt) sits beside the camera in the `.leading` region
   (`ExpandedLeading`; empty in every other state): the device clips `.bottom`'s content at that region's top.
 - **Updates.** Every change goes out at once. **The words** (the expanded island only: never on the Lock Screen, in the
   compact or minimal) are chunked by the app, where the updates are made (`TextChunker`, `TextPager` in the package; the
