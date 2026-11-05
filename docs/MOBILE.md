@@ -395,8 +395,9 @@ its buttons need iOS 17 (before that it only shows the call).
 - **The Xcode project** gets it through the Tauri CLI's own input for it, a custom XcodeGen template
   (`mobile/tauri/ios-project.yml`, `bundle > iOS > template`): the CLI's template plus the package, the app's file
   (`mobile/tauri/apple/App`), the buttons' App Intents (`mobile/tauri/apple/Intents`, compiled into the app and into the
-  extension), the App Group `group.ai.sidevoice.mobile` on the app and the
-  extension, and the widget extension `SidevoiceActivity` (`ai.sidevoice.mobile.activity`, `mobile/tauri/apple/Widget`),
+  extension), the App Group `group.ai.sidevoice.mobile` on the app and the extension (the extension signed with it by a
+  post-build script of the app when the build signs nothing, as the CLI archives a signed build), and the widget
+  extension `SidevoiceActivity` (`ai.sidevoice.mobile.activity`, `mobile/tauri/apple/Widget`),
   embedded in the app, at the app's version. When the CLI's version moves, its template is taken again and these
   additions kept. `Info.ios.plist` declares `NSSupportsLiveActivities` and the app's URL scheme, `sidevoice`
   (`sidevoice://conversations`, the stack of the other conversations; `sidevoice://call`, the rest of the activity).
@@ -461,8 +462,8 @@ its buttons need iOS 17 (before that it only shows the call).
   - the activity's state names it (`activity state names stills: <file> (there|<why not>), …`, the app's Swift);
   - the extension drew it (`still drawn: <file>`) or not (`still not drawn: <why>`, `no still named in the call's state`).
 
-  `mobile testflight` prints the entitlements the app and the extension were signed with, and warns when either lacks the
-  App Group (`cargo xtask mobile testflight`, `ios::check_ipa`).
+  `mobile testflight` prints the entitlements the app and the extension were signed with, and refuses the archive
+  when either lacks the App Group (`cargo xtask mobile testflight`, `ios::check_ipa`).
 - **Evidence.** `cargo xtask mobile renders ios` runs the package's tests on an iPhone Pro Max simulator: every state's
   views drawn to PNG at 3× (`ImageRenderer`) into dist/live-activity/, one sheet per state laid out as the gallery's
   `pieces-<state>.png`, plus the mic off, Always-On, stale, the reply's and your words' chunks, missing stills, the audio on the speaker, no headphones,
