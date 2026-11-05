@@ -40,7 +40,8 @@ Beta. What works today:
 - Pairing with your machine through a one-time code, and calls with its conversations.
 - The tray (menu-bar) icon with the call state (idle, live, muted): mute, hang up, show the window, the room's Settings, quit.
   Closing the window keeps the call going.
-- A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable in the room's Settings).
+- Global shortcuts, set in the room's Settings › Shortcuts: mute (⌃⌥M on macOS, Ctrl+Alt+Shift+M elsewhere), hold to talk and say one thing
+  (none until you set one). On macOS a single key such as Fn works too, once you allow Input Monitoring; the app asks only when you choose one.
 - The voice call runs in the app: the microphone and the speaker with the app's own echo cancellation (Sonora, pure
   Rust), transcription (Whisper, on Metal on Apple Silicon) and speech (Kokoro) downloaded the first time they are
   needed. A provider (OpenAI, ElevenLabs) with your own key is kept in the macOS keychain, so on Windows and Linux

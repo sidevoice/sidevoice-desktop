@@ -22,6 +22,17 @@ iOS's (17 and later, a notification). What differs between the two is a private 
 method per difference, implemented by `macos.rs` and `ios.rs`: the playback state (macOS sets it, iOS has none to
 set) and how the gesture is heard.
 
+## What the single press does on the desktop
+
+Where the app owns the headset's buttons (macOS, `available()`), the one command it hears, `MediaCommand::ToggleMute` (the system's
+play/pause, **and** the AirPods mute gesture, which arrive the same way), does what the person chose in Settings › Shortcuts › Headset
+buttons (`host.shortcuts.setHeadset({press})`, kept with the app's settings): **mute** (the default, as always), **say one thing**, **skip what
+is playing**, or **nothing** (desktop `src/shortcuts.rs` `headset_press`; the shared plugin is not changed). `HeadsetStatus` is `null` on
+Windows and Linux, where the page owns the media session and the app has nothing to map. The double press (`doublePress`) is `null`: the
+path the app listens on sends no next-track command (see below), so it cannot send one. Outside a call the app leaves the buttons to other apps
+(`outsideCall`: `leave`), as the handlers are only attached while a call is on. A headset's hold to talk stays ruled out (desktop#447).
+Mobile is out of scope here: it is owned by the call's surface (Live Activity, Android's session).
+
 On a phone the same rule holds for the native commands: play unmutes, pause toggles. On Android a headset's single press
 arrives as pause while the session plays (the microphone is open) and as play while it is paused (muted). There is no
 next-track mapping (skip the reply) on any host: the desktop has none, and adding one is its own decision.

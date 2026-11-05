@@ -79,7 +79,8 @@ toggles twice. CI simulates a call on a macOS runner and checks the app becomes 
 - During a call, with the window behind other apps (or hidden), the call controls card floats over them: a
   non-activating panel, so clicking it never takes the focus from the app the person is in, on every Space and over
   full-screen apps (docs/BRIDGE.md → "The call controls card"). The global mute shortcut is ⌃⌥M (⌘⇧M is VS Code's
-  Problems panel); VoiceOver also listens to ⌃⌥ while it is on.
+  Problems panel); VoiceOver also listens to ⌃⌥ while it is on. A single key (Fn, a right-hand modifier) as a shortcut uses a listen-only event tap and
+  needs Input Monitoring, asked only when one is chosen (docs/SHORTCUTS.md).
 - Quit: tray → "Quit Sidevoice" or ⌘Q.
 
 ## What signing and notarization would need
