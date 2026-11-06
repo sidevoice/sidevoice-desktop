@@ -179,6 +179,34 @@ pub fn window_at(rest: Point, anchor: Rect, window: Size, work: Rect) -> Point {
     fit(Point { x: rest.x - anchor.x, y: rest.y - anchor.y }, window, work)
 }
 
+/// The room the card's resting box (its [`anchor`]) has to each side before the work area ends, in logical pixels, whole:
+/// the card's `room` (call-controls/host.ts). Measured from where the card rests, not from where its window is now, which
+/// [`fit`] may have moved in: the page slides its voice text inward by what is missing here, so the window need not move
+/// for it, and the two never both correct the same overhang. Never negative, and whole pixels rounded down: the room is
+/// never overstated, so a text that fits it never reaches past the edge.
+pub fn room(rest: Point, anchor: Rect, work: Rect) -> Room {
+    Room { left: (rest.x - work.x).max(0.0).floor(), right: (work.right() - (rest.x + anchor.width)).max(0.0).floor() }
+}
+
+/// The room while the card is being dragged: its window is at `window` (on the display, from the work area's corner) and its
+/// box sits at `anchor` inside it.
+pub fn room_dragging(window: Point, anchor: Rect, work: Rect) -> Room {
+    room(Point { x: window.x + anchor.x, y: window.y + anchor.y }, anchor, work)
+}
+
+/// What [`room`] says: the distances from the card's box to the work area's left and right edges.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Room {
+    pub left: f64,
+    pub right: f64,
+}
+
+impl Room {
+    pub fn json(self) -> serde_json::Value {
+        serde_json::json!({ "left": self.left, "right": self.right })
+    }
+}
+
 /// `at`, moved just enough for a card of `size` to be inside the work area.
 pub fn keep_inside(at: Point, size: Size, work: Rect) -> Point {
     Point {
@@ -444,6 +472,38 @@ mod tests {
 
     const WORK: Rect = Rect { x: 0.0, y: 25.0, width: 1440.0, height: 850.0 }; // a MacBook under its menu bar
     const CARD: Size = Size { width: 414.0, height: 82.0 };
+
+    #[test]
+    fn room_while_dragging_follows_the_window_and_changes_only_by_whole_pixels() {
+        let anchor = Rect { x: 12.0, y: 12.0, width: 200.0, height: 200.0 };
+        // The window 212px from the edge at x 0 puts the box 224px in; dragged to the edge (window at -12) the room is gone.
+        assert_eq!(room_dragging(Point { x: 212.0, y: 0.0 }, anchor, WORK), Room { left: 224.0, right: 1016.0 });
+        assert_eq!(room_dragging(Point { x: -12.0, y: 0.0 }, anchor, WORK), Room { left: 0.0, right: 1240.0 });
+        // A sub-pixel move of the pointer is the same room: nothing to push.
+        assert_eq!(
+            room_dragging(Point { x: 100.2, y: 0.0 }, anchor, WORK),
+            room_dragging(Point { x: 100.7, y: 0.0 }, anchor, WORK)
+        );
+    }
+
+    #[test]
+    fn room_is_the_distance_from_the_resting_box_to_each_edge_of_the_work_area() {
+        let box_ = Rect { x: 0.0, y: 0.0, width: 200.0, height: 200.0 };
+        // Mid-screen: plenty either side.
+        assert_eq!(room(Point { x: 600.0, y: 100.0 }, box_, WORK), Room { left: 600.0, right: 640.0 });
+        // Against the left edge, then the right edge (the work area starts at x 0 and ends at 1440).
+        assert_eq!(room(Point { x: 0.0, y: 100.0 }, box_, WORK), Room { left: 0.0, right: 1240.0 });
+        assert_eq!(room(Point { x: 1240.0, y: 100.0 }, box_, WORK), Room { left: 1240.0, right: 0.0 });
+        // A work area that does not start at 0: the distance is from its own edge.
+        let second = Rect { x: 100.0, y: 0.0, width: 1000.0, height: 800.0 };
+        assert_eq!(room(Point { x: 130.5, y: 0.0 }, box_, second), Room { left: 30.0, right: 769.0 });
+        // Never overstated: a fractional room is rounded down on each side.
+        assert_eq!(room(Point { x: 10.9, y: 0.0 }, box_, WORK), Room { left: 10.0, right: 1229.0 });
+        // A box wider than the work area has no room, never a negative one.
+        let wide = Rect { x: 0.0, y: 0.0, width: 2000.0, height: 10.0 };
+        assert_eq!(room(Point { x: 0.0, y: 0.0 }, wide, WORK), Room { left: 0.0, right: 0.0 });
+        assert_eq!(Room { left: 3.0, right: 4.0 }.json(), serde_json::json!({ "left": 3.0, "right": 4.0 }));
+    }
 
     /// The whole rule (#165), every case: the card shows when switched on, in a call, not hidden for now, and either
     /// always shown or with the stage out of view, on screen or in the page.

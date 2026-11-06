@@ -83,6 +83,8 @@ struct Inner {
     rest: Option<(Display, Spot)>,
     /// What the card was last told of its place and its resized size.
     told_place: Option<Corner>,
+    /// …and the room its box has to the work area's sides (core `room`), which is also what the card hears on subscribing.
+    told_room: Option<logic::Room>,
     told_size: Option<Option<Size>>,
     drag: Option<Drag>,
     resize: Option<Resize>,
@@ -243,6 +245,7 @@ fn watch_view(app: AppHandle) {
             if closed(&app) {
                 return;
             }
+            watch_display(&app);
             let Some((now, shown, page)) = stage_in_view(&app) else { return };
             if was.replace(now).is_some_and(|before| before != now) {
                 debug(&format!("call-controls stage in view={now}: {shown:?} page={page:?}"));
@@ -250,6 +253,38 @@ fn watch_view(app: AppHandle) {
             }
         }
     });
+}
+
+/// Whether the display the card rests on is no longer what it was (its work area, its scale, its place on the desktop, or it
+/// is gone), which no window event Tauri forwards says reliably (a taskbar moved, a monitor plugged in): looked at with the
+/// stage, and the card placed again. Not while the person drags or resizes it, which place it themselves.
+fn watch_display(app: &AppHandle) {
+    let Some(card) = card(app) else { return };
+    let (key, before) = {
+        let inner = card.0.lock().unwrap();
+        if !inner.shown || inner.drag.is_some() || inner.resize.is_some() {
+            return;
+        }
+        match &inner.rest {
+            Some((display, _)) => (display.key.clone(), display.clone()),
+            None => return,
+        }
+    };
+    if !desktop_geometry::positions_available() {
+        return;
+    }
+    // Asked with the lock released (#170). The same display as `place` finds it by (its key, else the room's or the primary).
+    let Some(now) = desktop_geometry::display(app, crate::room_window(app).as_ref(), Some(&key), None) else { return };
+    if now != before {
+        debug(&format!("call-controls display changed: {} -> {}", before.key, now.key));
+        place(app);
+    }
+}
+
+/// The card's window moved to a monitor of another scale, or the scale itself changed (a window event of the platform): placed
+/// again at once, which tells the card its room there.
+pub fn scale_changed(app: &AppHandle) {
+    watch_display(app);
 }
 
 /// Shows or hides the card for the call as it is now, and tells it what changed. Called on every change of the call,
@@ -296,6 +331,7 @@ pub fn update(app: &AppHandle) {
             inner.level = 0;
             inner.hand = false;
             inner.told_place = None;
+            inner.told_room = None;
             inner.told_size = None;
             if inner.pointer_inside.is_some() {
                 inner.pointer_inside = Some(false);
@@ -475,12 +511,19 @@ pub fn playback(app: &AppHandle, level: f64, thread_id: Option<String>) {
 fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
     let settings =
         app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(settings::Settings::first_run);
-    let (level, pointer, clicks, place, size) = card(app)
+    let (level, pointer, clicks, place, size, room) = card(app)
         .map(|card| {
             let inner = card.0.lock().unwrap();
-            (inner.level, inner.pointer_inside, inner.outside_clicks, inner.told_place, inner.told_size.flatten())
+            (
+                inner.level,
+                inner.pointer_inside,
+                inner.outside_clicks,
+                inner.told_place,
+                inner.told_size.flatten(),
+                inner.told_room,
+            )
         })
-        .unwrap_or((0, None, 0, None, None));
+        .unwrap_or((0, None, 0, None, None, None));
     let shortcut = crate::shortcuts::shortcut_of(app, sidevoice_desktop_core::shortcuts::Action::Mute);
     let mut state = serde_json::json!({
         "call": call,
@@ -493,6 +536,9 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
     });
     if let Some(place) = place {
         state["place"] = place.place();
+    }
+    if let Some(room) = room {
+        state["room"] = room.json();
     }
     state
 }
@@ -545,8 +591,13 @@ fn place(app: &AppHandle) {
             at.x, at.y, display.key, size.width, size.height, rest.x, rest.y
         ));
         let resized = inner.placements.sizes.get(&display.key).copied();
+        let room = logic::room(rest, anchor, display.work);
         inner.rest = Some((display, spot));
         let mut patch = serde_json::Map::new();
+        if inner.told_room != Some(room) {
+            inner.told_room = Some(room);
+            patch.insert("room".into(), room.json());
+        }
         if inner.told_place != Some(spot.corner) {
             inner.told_place = Some(spot.corner);
             patch.insert("place".into(), spot.corner.place());
@@ -828,6 +879,23 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
                 let to = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
                 let decision = card.0.lock().unwrap().moves.advance();
                 move_when_latest(&app, to, decision);
+                // The room moves with the card: told again as it changes, so a balloon never waits for the drop to fit.
+                if let Some(display) = desktop_geometry::display(&app, crate::room_window(&app).as_ref(), None, Some(p))
+                {
+                    let patch = {
+                        let mut inner = card.0.lock().unwrap();
+                        let size = inner.size.unwrap_or(FIRST_SIZE);
+                        let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
+                        let room = logic::room_dragging(display.to_local(to), anchor, display.work);
+                        (inner.told_room != Some(room)).then(|| {
+                            inner.told_room = Some(room);
+                            serde_json::json!({ "room": room.json() })
+                        })
+                    };
+                    if let Some(patch) = patch {
+                        push(&app, patch);
+                    }
+                }
             }
         }
         DragPhase::End => {
