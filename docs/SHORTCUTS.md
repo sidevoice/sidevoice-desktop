@@ -113,13 +113,13 @@ alternatives and nothing left registered, and two actions on the same keys.
 ## What the app offers instead, and clashes
 
 When the system refuses a shortcut the answer is `refused` with the action's own suggestion from `ALTERNATIVES`, if the system takes it and nothing
-else of ours asks for it, for the page to offer in one click: **Ctrl+Shift+F9** for mute, **Ctrl+Shift+F11** for hold to talk and **Ctrl+Shift+F12**
-for say one thing, on every system. They are keys every keyboard has (no F13 to F19), and were checked against the systems' lists:
+else of ours asks for it, for the page to offer in one click: **Ctrl+Shift+F9** for mute, **Ctrl+Shift+F10** for say one thing and **Ctrl+Shift+F11**
+for hold to talk (⌃⇧F9 to F11 on a Mac), on every system. They are keys every keyboard has (no F13 to F19), and were checked against the systems' lists:
 
 - macOS: Option+Shift with the volume and brightness keys makes fine adjustments (F1, F2 and F10 to F12 when the F-keys act as media keys), so no
-  Option+Shift here; Control+F2 to F8 is keyboard navigation, so none of those. Control+Shift with F9, F11 and F12 appears nowhere in
+  Option+Shift here; Control+F2 to F8 is keyboard navigation, so none of those. Control+Shift with F9, F10 and F11 appears nowhere in
   [Mac keyboard shortcuts](https://support.apple.com/en-us/102650) (read 2026-11-06; its only F-key entry is Fn-F11, Show the desktop).
-- Windows: F10 opens the menu bar and Shift+F10 is the context menu, so F10 is left out; Ctrl+Shift with F9, F11 and F12 appears nowhere in
+- Windows: F10 alone opens the menu bar and Shift+F10 is the context menu, but Ctrl+Shift+F10 is in no list; Ctrl+Shift with F9, F10 and F11 appears nowhere in
   [Keyboard shortcuts in Windows](https://support.microsoft.com/en-us/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec)
   (read 2026-11-06; plain F11 maximizes a window).
 - Linux: the GNOME and KDE lists in Sources were **not** re-read for these three; Ctrl+Alt+F1 to F12 (virtual terminals) is the one family

@@ -759,11 +759,14 @@ pub struct Taken {
 }
 
 /// What the app offers an action when its keys are taken, one for each action in [`Action::ALL`] order, if the system takes it
-/// and nothing else of ours holds it: common keys, F9 to F12 with Ctrl and Shift (no F13 to F19, which most keyboards do not
-/// have). Checked against the systems' default lists (docs/SHORTCUTS.md → "What the app offers instead"): not F10, which opens a
-/// menu bar on Windows and Linux, and not with Option and Shift on a Mac, where those keys with the volume and brightness keys
-/// make fine adjustments; nor Control with F2 to F8, keyboard navigation.
-pub const ALTERNATIVES: [&str; 3] = ["Ctrl+Shift+F9", "Ctrl+Shift+F11", "Ctrl+Shift+F12"];
+/// and nothing else of ours holds it: the operator's row (R17), Control and Shift with F9 to F11, the same keys as Ctrl+Shift on
+/// Windows and Linux; common keys, no F13 to F19. mute Ctrl+Shift+F9, say one thing Ctrl+Shift+F10, hold to talk Ctrl+Shift+F11.
+///
+/// Checked against the systems' lists (docs/SHORTCUTS.md → "What the app offers instead"), none clashes on any of the three:
+/// not Option+Shift, which with F10 to F12 adjusts the volume finely on a Mac; not Control with F2 to F8, keyboard navigation;
+/// F10 and Shift+F10 alone are Windows' menu bar and context menu, and Ctrl+Shift+F10 is in neither list. Ctrl+Shift+F12 is the
+/// one to use for an action should any of these ever clash on a platform.
+pub const ALTERNATIVES: [&str; 3] = ["Ctrl+Shift+F9", "Ctrl+Shift+F11", "Ctrl+Shift+F10"];
 
 /// What the app offers `action` in place of `asked`: not what anything is asking for, and only if the system takes it.
 pub fn alternatives_for<R: Registrar>(
@@ -1704,7 +1707,7 @@ mod tests {
         );
         // And the refused one is offered its own suggestion, if the system takes it.
         let mut fake = Fake::default();
-        assert_eq!(alternatives_for(&mut fake, &wanted(None, None, None), Action::OneTurn, ""), ["Ctrl+Shift+F12"]);
+        assert_eq!(alternatives_for(&mut fake, &wanted(None, None, None), Action::OneTurn, ""), ["Ctrl+Shift+F10"]);
         assert_eq!(
             alternatives_for(&mut fake, &wanted(None, None, None), Action::Mute, "Ctrl+Shift+F9"),
             Vec::<String>::new()
@@ -1718,6 +1721,10 @@ mod tests {
     /// R17: the suggestions are common keys a keyboard has, one for each action, and none of them is a system shortcut.
     #[test]
     fn the_suggestions_are_common_keys_one_for_each_action() {
+        // The operator's row: mute ⌃⇧F9, say one thing ⌃⇧F10, hold to talk ⌃⇧F11.
+        assert_eq!(ALTERNATIVES[Action::Mute.index()], "Ctrl+Shift+F9");
+        assert_eq!(ALTERNATIVES[Action::OneTurn.index()], "Ctrl+Shift+F10");
+        assert_eq!(ALTERNATIVES[Action::HoldToTalk.index()], "Ctrl+Shift+F11");
         let mut seen = Vec::new();
         for (action, suggestion) in Action::ALL.into_iter().zip(ALTERNATIVES) {
             assert_eq!(ALTERNATIVES[action.index()], suggestion);
@@ -1726,7 +1733,6 @@ mod tests {
             let Parsed::Combo(keys) = &parsed else { panic!("a combination") };
             let function: u8 = keys.rsplit('+').next().unwrap().trim_start_matches('F').parse().unwrap();
             assert!((9..=12).contains(&function), "F9 to F12, never F13 to F19: {suggestion}");
-            assert_ne!(function, 10, "F10 opens a menu bar on Windows and Linux");
             assert!(
                 keys.starts_with("Ctrl+Shift+") && !keys.contains("Alt"),
                 "{suggestion}: Control and Shift, never with Option on a Mac"

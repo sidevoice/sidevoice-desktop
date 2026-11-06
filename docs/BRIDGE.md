@@ -969,7 +969,7 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
   mute default (Ctrl+Alt+M) is moved once to this system's (core `shortcuts::migrated_mute`); and once, a stored value equal to this
   system's default becomes absent (`shortcutsDefaultsMigrated`; core `Settings::migrate_shortcuts`).
 - What the app suggests when keys are refused (`alternatives`): one for each action, common keys no system shortcut uses: Ctrl+Shift+F9 (mute),
-  Ctrl+Shift+F11 (hold to talk) and Ctrl+Shift+F12 (say one thing), the same on every system (docs/SHORTCUTS.md → "What the app offers instead").
+  Ctrl+Shift+F10 (say one thing) and Ctrl+Shift+F11 (hold to talk), the same on every system (docs/SHORTCUTS.md → "What the app offers instead").
 - App → page: `window.__sidevoiceHost.shortcutsEvent(status)` (`webview.eval`) whenever the app registers a shortcut (set from the
   page), to `shortcuts.subscribe`'s listeners and, with the mute one, `muteShortcut.subscribe`'s. `voiceOver` is read when
   asked: VoiceOver turned on or off tells no one.
