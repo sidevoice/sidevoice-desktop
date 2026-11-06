@@ -589,3 +589,9 @@ pub fn run() {
 pub fn run_reset_helper() {
     data::run_reset_helper();
 }
+
+/// The fresh-process check of System Audio Recording (`--sidevoice-capture-check`, docs/MEDIA_DUCK.md): prints the system's
+/// answer for this process, which has only just started, and returns. Nothing of the app starts.
+pub fn run_capture_check() {
+    println!("{}", platform::media_duck::capture_check().word());
+}

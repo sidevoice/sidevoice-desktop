@@ -127,6 +127,28 @@ functions exist from 14.2, but System Audio Recording, `NSAudioCaptureUsageDescr
    instead of lower). `openSettings("capture")` opens Privacy & Security → Screen & System Audio Recording,
    `openSettings("automation")` Privacy & Security → Automation.
 
+   **A running process is not told when the person allows it** (macOS 14.4 and later: granting it in System Settings makes the
+   system offer "Quit & Reopen"): `TCCAccessPreflight` keeps answering `undetermined` or `denied` in the process that was
+   already running. A fresh process is told the truth, and one this app starts is attributed to it, so the app asks its own
+   executable, started with `--sidevoice-capture-check` (core `CAPTURE_CHECK_FLAG`; `main.rs` answers it before anything of
+   the app starts): it calls the same `TCCAccessPreflight`, prints `granted`, `denied`, `undetermined` or `unknown` and
+   exits (3 s limit, then it is killed and counts as no answer). It is asked (a) every 1.5 s while `allow("capture")` waits for the
+   person's answer, so the wait ends at once when the child says granted or denied instead of running its 60 s, and (b) at
+   each read of `get` while this process says `undetermined` or `denied`. Answers are shared: a read reuses one less than 5 s
+   old (the page reads again at each focus and visibility change), and only one child runs at a time (core `Recent`).
+   **Only this process's own `granted` makes a tap** (`tapping`, `taps::set`, `taps::ask` read `permission()`, never the
+   child's answer): the child's only tells the page that a restart is due. `restart`, below.
+
+### Restart
+
+`host.mediaDuck.restart()` (`media_duck` action `restart`) quits and reopens the app (`AppHandle::restart`, as an update's
+restart does: from a thread of its own, 300 ms after the answer, calling `release` first, which gives back what the app
+took, then the local host's shutdown; `RunEvent::Exit` runs the rest). Core `may_restart` refuses it, with the key in the
+rejection, unless `capture` is `restart` (`media_duck.restart-not-needed`) and while a call is joined
+(`media_duck.restart-in-call`: the page disables its button and says the restart waits until the call ends); a reset under way
+refuses with `reset.busy`. The reopened app is a new process, so its own check answers `granted` and taps work. It opens
+where the app opens; returning to Settings → Permissions (or the setup's permissions step) is not done yet.
+
 Usage strings (`NSAudioCaptureUsageDescription`, `NSAppleEventsUsageDescription`) are English only for now;
 per-language `InfoPlist.strings`, as the mobile app has, are a follow-up (with the Spanish `NSMicrophoneUsageDescription`).
 
@@ -141,7 +163,10 @@ per-language `InfoPlist.strings`, as the mobile app has, are a follow-up (with t
   been asked (Allow asks it), else `denied` if one was refused, else `granted` if one was allowed, else `unknown` (the system
   answers only for an app that is open: a closed app keeps its last yes or no, never a "not asked"); absent elsewhere;
 - `capture`: macOS 14.4 and later only, System Audio Recording, `granted`, `denied`, `undetermined` or `unknown` (the
-  check could not be made); absent elsewhere.
+  check could not be made), or `restart`: allowed, but this running process cannot see it, so the app has to be restarted
+  (`restart()`); it is the answer of a fresh process (`--sidevoice-capture-check`, above) when this process's own is
+  `undetermined` or `denied`, and no tap is made while it is `restart`. A fresh `denied` where this process says
+  `undetermined` is answered as `denied` (the person refused and this process was not told); absent elsewhere.
 
 How far this system can carry out the choice, for the page to say so. `access` and `capture` are the permissions the page
 lists (Settings → Permissions and the setup's permissions step, each a row with Allow or Open System Settings); the Call
@@ -152,6 +177,12 @@ nothing.
 
 The per-OS checklist is in the pull request (#408). macOS items to verify on a device, from the research:
 
+- Allow on System Audio Recording: the system asks, the person allows, and within about 2 s the row offers "Restart now"
+  instead of waiting its 60 s; Allow, then deny: the row shows denied with Open System Settings.
+- Allowed from System Settings (the switch, not the prompt) while the app runs, then coming back to the window: the row
+  offers "Restart now"; the child's check really sees the change before any restart (if it does not, the fallback is the
+  plain line "If you allowed it, restart Sidevoice" after Allow or Open System Settings, shown under the same state).
+- Restart now reopens the app, the row shows Allowed, and Lower taps other apps; refused in a call, the button is disabled.
 - No prompt for listing processes; the System Audio Recording prompt appears only on its "Allow" in the list of permissions.
 - Denied: nothing goes silent (no muting tap is made); Music and Spotify are lowered through Apple events instead.
 - `kill -9` while lowered on 14.x, 15.x and 26: the other apps come back at once (`mutedWhenTapped`), and the next start

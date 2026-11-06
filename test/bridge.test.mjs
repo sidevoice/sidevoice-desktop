@@ -1660,9 +1660,10 @@ test("host.mediaDuck gets, sets, levels, asks and opens settings through the med
     media_duck: ({ action, mode, level }) => (action === "set" ? { ...status, mode } : action === "level" ? { ...status, level } : status),
   });
   const { host } = install(win, ORIGIN);
-  assert.deepEqual(Object.keys(host.mediaDuck).sort(), ["allow", "get", "openSettings", "set", "setLevel"]);
+  assert.deepEqual(Object.keys(host.mediaDuck).sort(), ["allow", "get", "openSettings", "restart", "set", "setLevel"]);
   assert.deepEqual(await host.mediaDuck.allow("capture"), status);
   assert.deepEqual(await host.mediaDuck.openSettings("automation"), status);
+  assert.deepEqual(await host.mediaDuck.restart(), status);
   assert.ok(Object.isFrozen(host.mediaDuck));
   assert.deepEqual(await host.mediaDuck.get(), status);
   assert.equal((await host.mediaDuck.set("pause")).mode, "pause");
@@ -1676,6 +1677,7 @@ test("host.mediaDuck gets, sets, levels, asks and opens settings through the med
   assert.deepEqual(calls.filter(([cmd]) => cmd === "media_duck").map(([, args]) => args), [
     { action: "allow", permission: "capture" },
     { action: "settings", permission: "automation" },
+    { action: "restart" },
     { action: "get" },
     { action: "set", mode: "pause" },
     { action: "level", level: "mute" },

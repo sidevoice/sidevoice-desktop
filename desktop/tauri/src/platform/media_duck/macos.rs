@@ -8,7 +8,7 @@ use super::{Lowering, Mode, Os, Pausing};
 use objc2_core_services::{
     typeApplicationBundleID, typeWildCard, AECreateDesc, AEDesc, AEDeterminePermissionToAutomateTarget, AEDisposeDesc,
 };
-use sidevoice_desktop_core::media_duck::{Access, Player, Seen, State};
+use sidevoice_desktop_core::media_duck::{capture_for, Access, Player, Reader, Seen, State};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -156,6 +156,12 @@ impl Os for Native {
     }
 
     fn capture() -> Option<Access> {
+        // This process answers as it was when it started: where it says no or not yet, a fresh one says whether the person
+        // has allowed it since, and the app then has to be restarted (never a tap from that answer: `tapping`).
+        Some(capture_for(Reader::Report, Self::capture_own()?, || taps::fresh(taps::FRESH_READ)))
+    }
+
+    fn capture_own() -> Option<Access> {
         taps::supported().then(taps::permission)
     }
 

@@ -318,7 +318,7 @@
 
   /** What happens to other apps' media while the microphone is open or the agent speaks in a call: sidevoice-web's
    *  `MediaDuckBridge`, onto the `media_duck` command (docs/MEDIA_DUCK.md). Its answer is `{mode, level, lower, pause,
-   *  access?, capture?}`. */
+   *  access?, capture?}` (`capture` may be `restart`: allowed, and only a restart applies it). */
   function mediaDuck() {
     const invalid = () => ({ key: "bad_request", message: "set(mode) takes 'lower', 'pause' or 'off'." });
     const unleveled = () => ({ key: "bad_request", message: "setLevel(level) takes 'half', 'quarter' or 'mute'." });
@@ -331,6 +331,9 @@
       allow: (permission) => named("allow", permission),
       /** The system's page where the person turns `permission` back on (macOS); rejects `unsupported` elsewhere. */
       openSettings: (permission) => named("settings", permission),
+      /** Quits and reopens the app, once `capture` says `restart` (System Audio Recording is allowed but only a new process
+       *  sees it); refused with `media_duck.restart-in-call` while a call is joined, `media_duck.restart-not-needed` otherwise. */
+      restart: () => call("media_duck", { action: "restart" }),
       set: (mode) => (typeof mode === "string" ? call("media_duck", { action: "set", mode }) : Promise.reject(invalid())),
       /** How far Lower takes other apps: `half`, `quarter` (the default) or `mute`; applied at once while lowered. */
       setLevel: (level) => (typeof level === "string" ? call("media_duck", { action: "level", level }) : Promise.reject(unleveled())),

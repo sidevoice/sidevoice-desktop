@@ -82,6 +82,110 @@ pub enum Access {
     Undetermined,
     /// The system can only say with one of the apps open, and none is: the last answer it gave, if it ever did, is lost.
     Unknown,
+    /// Allowed, but this running process cannot see it: macOS answers a process only as it was when it started, so the
+    /// app has to be restarted for the permission to apply (macOS System Audio Recording). Never made by this process's
+    /// own answer: a tap that mutes is made only when the process itself reads `Granted`.
+    Restart,
+}
+
+impl Access {
+    /// The word the check that runs in a fresh process prints (`--sidevoice-capture-check`), the same as the page's.
+    pub fn word(self) -> &'static str {
+        match self {
+            Access::Granted => "granted",
+            Access::Denied => "denied",
+            Access::Undetermined => "undetermined",
+            Access::Unknown => "unknown",
+            Access::Restart => "restart",
+        }
+    }
+
+    /// What a fresh process printed, read back; a word that is not one of the system's four answers is `None` (the check
+    /// did not run properly).
+    pub fn from_word(output: &str) -> Option<Access> {
+        match output.trim() {
+            "granted" => Some(Access::Granted),
+            "denied" => Some(Access::Denied),
+            "undetermined" => Some(Access::Undetermined),
+            "unknown" => Some(Access::Unknown),
+            _ => None,
+        }
+    }
+}
+
+/// The argument that makes the app's executable only print its System Audio Recording answer and exit, without starting
+/// the app. A process the app starts is attributed to it for the system's privacy checks, and a fresh process is told what
+/// the running one is not (macOS 14.4 and later).
+pub const CAPTURE_CHECK_FLAG: &str = "--sidevoice-capture-check";
+
+/// What the page is told when the running process answered `own` and a fresh one answered `fresh` (`None`: it could not be
+/// asked). Granted only for a fresh process: restart to apply it. A fresh refusal where this process thinks it was never
+/// asked is the person's answer too. Anything else is this process's own answer, the only one a tap relies on.
+pub fn with_fresh(own: Access, fresh: Option<Access>) -> Access {
+    match (own, fresh) {
+        (Access::Undetermined | Access::Denied, Some(Access::Granted)) => Access::Restart,
+        (Access::Undetermined, Some(Access::Denied)) => Access::Denied,
+        _ => own,
+    }
+}
+
+/// Who is asking for System Audio Recording's answer. Only a report to the page may start a fresh process; the check that
+/// runs in that process (`--sidevoice-capture-check`) is a child, and a child never starts one: it reads its own answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader {
+    Report,
+    Check,
+}
+
+/// The answer for `reader` where this process says `own`. `probe` (a fresh process) is only ever called for a report, and
+/// only where `own` is a no or not yet: the check path cannot reach it.
+pub fn capture_for(reader: Reader, own: Access, probe: impl FnOnce() -> Option<Access>) -> Access {
+    match (reader, own) {
+        (Reader::Report, Access::Undetermined | Access::Denied) => with_fresh(own, probe()),
+        _ => own,
+    }
+}
+
+/// Whether a restart for a permission may go ahead: only when the page was told one is needed (`capture` is `Restart`), and
+/// not while a call is joined (it would drop it): the refusal's key otherwise.
+pub fn may_restart(capture: Option<Access>, joined: bool) -> Result<(), &'static str> {
+    if capture != Some(Access::Restart) {
+        return Err("media_duck.restart-not-needed");
+    }
+    if joined {
+        return Err("media_duck.restart-in-call");
+    }
+    Ok(())
+}
+
+/// The last answer of a fresh process and when it was had, so that many reads in a short while (the page asks again at
+/// each focus and visibility change) start one process, not many.
+#[derive(Debug)]
+pub struct Recent(Option<(u64, Option<Access>)>);
+
+impl Default for Recent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Recent {
+    pub const fn new() -> Self {
+        Recent(None)
+    }
+
+    /// The answer had less than `ttl_ms` ago, else the one `probe` gives now (kept, even when it is `None`: a check that
+    /// failed is not repeated at once either). `now_ms` is any clock that does not go back.
+    pub fn get(&mut self, now_ms: u64, ttl_ms: u64, probe: impl FnOnce() -> Option<Access>) -> Option<Access> {
+        if let Some((at, answer)) = self.0 {
+            if now_ms.saturating_sub(at) < ttl_ms {
+                return answer;
+            }
+        }
+        let answer = probe();
+        self.0 = Some((now_ms, answer));
+        answer
+    }
 }
 
 /// What a player is doing.
@@ -417,6 +521,83 @@ pub enum Permission {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[test]
+    fn a_fresh_process_that_sees_the_grant_asks_for_a_restart() {
+        use Access::*;
+        assert_eq!(with_fresh(Undetermined, Some(Granted)), Restart);
+        assert_eq!(with_fresh(Denied, Some(Granted)), Restart);
+        // This process's own answer stands in every other case.
+        assert_eq!(with_fresh(Granted, Some(Granted)), Granted);
+        assert_eq!(with_fresh(Granted, Some(Denied)), Granted);
+        assert_eq!(with_fresh(Undetermined, Some(Undetermined)), Undetermined);
+        assert_eq!(with_fresh(Undetermined, None), Undetermined);
+        assert_eq!(with_fresh(Denied, Some(Undetermined)), Denied);
+        assert_eq!(with_fresh(Denied, Some(Denied)), Denied);
+        assert_eq!(with_fresh(Unknown, Some(Granted)), Unknown);
+        // A refusal the fresh process sees where this one never saw a question is shown as a refusal.
+        assert_eq!(with_fresh(Undetermined, Some(Denied)), Denied);
+    }
+
+    #[test]
+    fn the_check_never_probes_and_a_report_probes_only_where_it_can_matter() {
+        use Access::*;
+        for own in [Granted, Denied, Undetermined, Unknown, Restart] {
+            assert_eq!(capture_for(Reader::Check, own, || panic!("the check started a process")), own);
+        }
+        assert_eq!(capture_for(Reader::Report, Denied, || Some(Granted)), Restart);
+        assert_eq!(capture_for(Reader::Report, Undetermined, || Some(Denied)), Denied);
+        assert_eq!(capture_for(Reader::Report, Granted, || panic!("nothing to ask")), Granted);
+        assert_eq!(capture_for(Reader::Report, Unknown, || panic!("nothing to ask")), Unknown);
+    }
+
+    #[test]
+    fn the_checks_words_round_trip_and_junk_is_not_an_answer() {
+        use Access::*;
+        for a in [Granted, Denied, Undetermined, Unknown] {
+            assert_eq!(Access::from_word(a.word()), Some(a));
+            assert_eq!(Access::from_word(&format!("{}\n", a.word())), Some(a));
+        }
+        assert_eq!(Access::from_word(""), None);
+        assert_eq!(Access::from_word("restart"), None);
+        assert_eq!(Access::from_word("Granted"), None);
+        assert_eq!(serde_json::to_value(Restart).unwrap(), "restart");
+    }
+
+    #[test]
+    fn a_restart_goes_only_when_one_was_offered_and_not_in_a_call() {
+        assert_eq!(may_restart(Some(Access::Restart), false), Ok(()));
+        assert_eq!(may_restart(Some(Access::Restart), true), Err("media_duck.restart-in-call"));
+        for c in [None, Some(Access::Granted), Some(Access::Denied), Some(Access::Undetermined)] {
+            assert_eq!(may_restart(c, false), Err("media_duck.restart-not-needed"));
+        }
+    }
+
+    #[test]
+    fn a_fresh_answer_is_reused_until_it_is_old() {
+        let mut recent = Recent::default();
+        let runs = RefCell::new(0);
+        let mut ask = |now, ttl, answer| {
+            recent.get(now, ttl, || {
+                *runs.borrow_mut() += 1;
+                answer
+            })
+        };
+        assert_eq!(ask(0, 5_000, Some(Access::Undetermined)), Some(Access::Undetermined));
+        // A storm of reads is one process; the answer given is the first one.
+        for t in [1, 100, 4_999] {
+            assert_eq!(ask(t, 5_000, Some(Access::Granted)), Some(Access::Undetermined));
+        }
+        assert_eq!(*runs.borrow(), 1);
+        // A caller that wants it fresher gets a new one, and the next reader shares it.
+        assert_eq!(ask(1_500, 1_000, Some(Access::Granted)), Some(Access::Granted));
+        assert_eq!(ask(1_600, 5_000, None), Some(Access::Granted));
+        assert_eq!(*runs.borrow(), 2);
+        // A check that failed is not retried at once either.
+        assert_eq!(ask(7_000, 5_000, None), None);
+        assert_eq!(ask(7_100, 5_000, Some(Access::Granted)), None);
+        assert_eq!(*runs.borrow(), 3);
+    }
 
     fn player(key: &str, state: State, volume: Option<f32>, pausable: bool) -> Player {
         Player { key: key.into(), app: format!("app-{key}"), state, volume, pausable }
