@@ -1,4 +1,5 @@
 use super::{LabelStyle, Os};
+use sidevoice_desktop_core::shortcuts::Platform;
 
 pub(super) struct Native;
 
