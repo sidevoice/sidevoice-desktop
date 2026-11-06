@@ -179,6 +179,27 @@ pub fn window_at(rest: Point, anchor: Rect, window: Size, work: Rect) -> Point {
     fit(Point { x: rest.x - anchor.x, y: rest.y - anchor.y }, window, work)
 }
 
+/// The room the card's resting box (its [`anchor`]) has to each side before the work area ends, in logical pixels, whole:
+/// the card's `room` (call-controls/host.ts). Measured from where the card rests, not from where its window is now, which
+/// [`fit`] may have moved in: the page slides its voice text inward by what is missing here, so the window need not move
+/// for it, and the two never both correct the same overhang. Never negative.
+pub fn room(rest: Point, anchor: Rect, work: Rect) -> Room {
+    Room { left: (rest.x - work.x).max(0.0).round(), right: (work.right() - (rest.x + anchor.width)).max(0.0).round() }
+}
+
+/// What [`room`] says: the distances from the card's box to the work area's left and right edges.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Room {
+    pub left: f64,
+    pub right: f64,
+}
+
+impl Room {
+    pub fn json(self) -> serde_json::Value {
+        serde_json::json!({ "left": self.left, "right": self.right })
+    }
+}
+
 /// `at`, moved just enough for a card of `size` to be inside the work area.
 pub fn keep_inside(at: Point, size: Size, work: Rect) -> Point {
     Point {
@@ -441,6 +462,23 @@ mod tests {
 
     const WORK: Rect = Rect { x: 0.0, y: 25.0, width: 1440.0, height: 850.0 }; // a MacBook under its menu bar
     const CARD: Size = Size { width: 414.0, height: 82.0 };
+
+    #[test]
+    fn room_is_the_distance_from_the_resting_box_to_each_edge_of_the_work_area() {
+        let box_ = Rect { x: 0.0, y: 0.0, width: 200.0, height: 200.0 };
+        // Mid-screen: plenty either side.
+        assert_eq!(room(Point { x: 600.0, y: 100.0 }, box_, WORK), Room { left: 600.0, right: 640.0 });
+        // Against the left edge, then the right edge (the work area starts at x 0 and ends at 1440).
+        assert_eq!(room(Point { x: 0.0, y: 100.0 }, box_, WORK), Room { left: 0.0, right: 1240.0 });
+        assert_eq!(room(Point { x: 1240.0, y: 100.0 }, box_, WORK), Room { left: 1240.0, right: 0.0 });
+        // A work area that does not start at 0: the distance is from its own edge.
+        let second = Rect { x: 100.0, y: 0.0, width: 1000.0, height: 800.0 };
+        assert_eq!(room(Point { x: 130.5, y: 0.0 }, box_, second), Room { left: 31.0, right: 770.0 });
+        // A box wider than the work area has no room, never a negative one.
+        let wide = Rect { x: 0.0, y: 0.0, width: 2000.0, height: 10.0 };
+        assert_eq!(room(Point { x: 0.0, y: 0.0 }, wide, WORK), Room { left: 0.0, right: 0.0 });
+        assert_eq!(Room { left: 3.0, right: 4.0 }.json(), serde_json::json!({ "left": 3.0, "right": 4.0 }));
+    }
 
     /// The whole rule (#165), every case: the card shows when switched on, in a call, not hidden for now, and either
     /// always shown or with the stage out of view, on screen or in the page.

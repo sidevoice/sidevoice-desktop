@@ -48,7 +48,7 @@ pub fn call_controls_script(template: &str, no_context_menu: &str, origin: &str,
     format!("{bridge}\n{no_context_menu}")
 }
 
-/// What the app pushes to the card: any subset of `{call, level, playback, place, size, pointerInside,
+/// What the app pushes to the card: any subset of `{call, level, playback, place, room, size, pointerInside,
 /// outsideClicks, alwaysExpanded, muteShortcut}` (call-controls/host.ts `CallControlsState`).
 pub fn call_controls_push(patch: &serde_json::Value) -> String {
     format!("window.__sidevoiceHost && window.__sidevoiceHost.receive({patch});")

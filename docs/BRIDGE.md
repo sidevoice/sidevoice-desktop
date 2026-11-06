@@ -441,9 +441,15 @@ The card's page talks to the app only through `window.__sidevoiceHost.host.callC
 | `resize(phase, edge)` | `call_controls_resize`: `start`, `move`, `end` by the grip's corner (`nw`, `ne`, `sw`, `se`); only while `layout` says the card may be resized; absent on Wayland |
 
 App → card: `window.__sidevoiceHost.receive(patch)` (`webview.eval`), any subset of
-`{call, level, playback, place, size, pointerInside, outsideClicks, alwaysExpanded, muteShortcut}` (web
+`{call, level, playback, place, room, size, pointerInside, outsideClicks, alwaysExpanded, muteShortcut}` (web
 `call-controls/host.ts` `CallControlsState`) — `call` is the room's snapshot above, `playback` the voice's output
-level (`{level, threadId}`), `place` `{vertical: "upper"|"lower", horizontal: "left"|"right"}`, `size` the picture's
+level (`{level, threadId}`), `place` `{vertical: "upper"|"lower", horizontal: "left"|"right"}`, `room`
+`{left, right}` (whole CSS pixels, never negative: how far the card's resting box, shadow margin included, is from the
+work area's left and right edges; the page slides the avatar's voice text inward by what it lacks there, and wraps it to
+the width the sides allow; sent when the card is placed and whenever the numbers change, so after a drag, a change of
+size or format, or a move to another display; measured from where the card rests, not from where its window is now,
+so the window moving in at an edge (`fit`) and the text sliding never both correct the same overhang; absent on
+Wayland, where the app does not know the position: the text stays centred), `size` the picture's
 resized window or `null`, `alwaysExpanded` "Always show the call controls", `muteShortcut` the global shortcut as the
 person reads it (⌃⌥M, Ctrl+Alt+M). `capabilities/call-controls.json` grants the five commands
 to that window only, and each re-checks the caller's label and origin.

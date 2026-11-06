@@ -83,6 +83,8 @@ struct Inner {
     rest: Option<(Display, Spot)>,
     /// What the card was last told of its place and its resized size.
     told_place: Option<Corner>,
+    /// …and the room its box has to the work area's sides (core `room`), which is also what the card hears on subscribing.
+    told_room: Option<logic::Room>,
     told_size: Option<Option<Size>>,
     drag: Option<Drag>,
     resize: Option<Resize>,
@@ -296,6 +298,7 @@ pub fn update(app: &AppHandle) {
             inner.level = 0;
             inner.hand = false;
             inner.told_place = None;
+            inner.told_room = None;
             inner.told_size = None;
             if inner.pointer_inside.is_some() {
                 inner.pointer_inside = Some(false);
@@ -480,12 +483,19 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
         .unwrap()
         .clone()
         .unwrap_or_else(|| settings::Settings::first_run(crate::platform::shortcut_access::default_mute()));
-    let (level, pointer, clicks, place, size) = card(app)
+    let (level, pointer, clicks, place, size, room) = card(app)
         .map(|card| {
             let inner = card.0.lock().unwrap();
-            (inner.level, inner.pointer_inside, inner.outside_clicks, inner.told_place, inner.told_size.flatten())
+            (
+                inner.level,
+                inner.pointer_inside,
+                inner.outside_clicks,
+                inner.told_place,
+                inner.told_size.flatten(),
+                inner.told_room,
+            )
         })
-        .unwrap_or((0, None, 0, None, None));
+        .unwrap_or((0, None, 0, None, None, None));
     let shortcut = crate::shortcuts::shortcut_of(app, sidevoice_desktop_core::shortcuts::Action::Mute);
     let mut state = serde_json::json!({
         "call": call,
@@ -498,6 +508,9 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
     });
     if let Some(place) = place {
         state["place"] = place.place();
+    }
+    if let Some(room) = room {
+        state["room"] = room.json();
     }
     state
 }
@@ -550,8 +563,13 @@ fn place(app: &AppHandle) {
             at.x, at.y, display.key, size.width, size.height, rest.x, rest.y
         ));
         let resized = inner.placements.sizes.get(&display.key).copied();
+        let room = logic::room(rest, anchor, display.work);
         inner.rest = Some((display, spot));
         let mut patch = serde_json::Map::new();
+        if inner.told_room != Some(room) {
+            inner.told_room = Some(room);
+            patch.insert("room".into(), room.json());
+        }
         if inner.told_place != Some(spot.corner) {
             inner.told_place = Some(spot.corner);
             patch.insert("place".into(), spot.corner.place());
