@@ -11,18 +11,19 @@ use crate::platform::{session, shortcut_access};
 use crate::{refusal, AppState};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::Command;
-use sidevoice_desktop_core::settings::{GlobalShortcut, Registration, Settings};
+use sidevoice_desktop_core::settings::{GlobalShortcut, Refusal, Registration, Settings};
 use sidevoice_desktop_core::shortcuts::{
-    self, Action, Edge, Effect, Headset, HeadsetPress, Heard, Held, Hold, KeyReach, Listened, Machine, Parsed,
-    Permission, PermissionKind, PermissionState, Recorded, Recorder, Release, Status, Watch, WATCH_TICK,
+    self, Action, Carried, Edge, Effect, Headset, HeadsetPress, Heard, Held, Hint, Hold, KeyMachine, KeyReach,
+    Listened, Machine, Parsed, Permission, PermissionKind, PermissionState, Pulse, Recorded, Recorder, Release,
+    SingleKey, Status, Watch, WATCH_TICK,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
-/// How long a recording waits for a key before it gives up (the person walked away).
-const RECORD_WAIT: Duration = Duration::from_secs(60);
+/// How long a recording waits for a key before it gives up (the person walked away): the page is told, as an error.
+const RECORD_WAIT: Duration = Duration::from_secs(15);
 
 #[derive(Default)]
 pub(crate) struct Shortcuts {
@@ -45,10 +46,19 @@ struct Current {
     shortcuts: [GlobalShortcut; 3],
     permission: Option<Permission>,
     headset: Option<Headset>,
-    /// What each is bound to, and the gesture it makes.
+    /// What each is bound to.
     parsed: [Option<Parsed>; 3],
+    /// The gesture of each combination (a single key is in `keys`).
     machines: [Option<Machine>; 3],
+    /// The single keys in use, each with what it carries and its machine: one key, however many ways it is pressed.
+    keys: Vec<KeySlot>,
     hold: Hold,
+}
+
+struct KeySlot {
+    key: SingleKey,
+    carried: Carried,
+    machine: KeyMachine,
 }
 
 /// Starts the shortcuts: the plugin's hot keys come to [`hot_key`].
@@ -57,30 +67,9 @@ pub(crate) fn setup(app: &AppHandle) {
     shortcut_access::configure(app, Arc::new(hot_key));
 }
 
-fn setting(settings: &Settings, action: Action) -> &str {
-    match action {
-        Action::Mute => &settings.mute_shortcut,
-        Action::HoldToTalk => &settings.hold_to_talk_shortcut,
-        Action::OneTurn => &settings.one_turn_shortcut,
-    }
-}
-
-fn setting_mut(settings: &mut Settings, action: Action) -> &mut String {
-    match action {
-        Action::Mute => &mut settings.mute_shortcut,
-        Action::HoldToTalk => &mut settings.hold_to_talk_shortcut,
-        Action::OneTurn => &mut settings.one_turn_shortcut,
-    }
-}
-
 /// What is kept, or a first run's defaults.
 fn stored(app: &AppHandle) -> Settings {
-    app.state::<AppState>()
-        .settings
-        .lock()
-        .unwrap()
-        .clone()
-        .unwrap_or_else(|| Settings::first_run(shortcut_access::default_mute()))
+    app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(Settings::first_run)
 }
 
 /// What a kept shortcut asks for: what cannot be read (a file from another build, edited) is no shortcut.
@@ -107,20 +96,26 @@ pub(crate) fn apply(app: &AppHandle) {
 fn apply_locked(app: &AppHandle, runtime: &Shortcuts) {
     let settings = stored(app);
     let language = app.state::<AppState>().language;
-    let parsed: [Option<Parsed>; 3] = Action::ALL.map(|action| parse_kept(action, setting(&settings, action)));
-    // The same physical single key, set for two actions in any way of pressing it: the first holds it. (Hot keys are told
-    // apart by the diff itself, which sees the same keys however they are written.)
-    let duplicate = shortcuts::shared_keys(&parsed);
-    let wanted: [Option<String>; 3] =
-        std::array::from_fn(|i| if duplicate[i] { None } else { parsed[i].as_ref().and_then(Parsed::hot_key) });
+    let default_mute = shortcut_access::default_mute();
+    let parsed: [Option<Parsed>; 3] =
+        Action::ALL.map(|action| parse_kept(action, &settings.shortcut_or_default(action, default_mute)));
+    // The same physical single key set for two actions in the same way: the first holds it. The same key in different ways
+    // coexist (one machine tells them apart by time), and an F-key has one hot key between them, the first action's.
+    let duplicate = shortcuts::duplicates(&parsed);
+    let rides = shortcuts::rides(&parsed, &duplicate);
+    let wanted: [Option<String>; 3] = std::array::from_fn(|i| {
+        if duplicate[i].is_some() || rides[i].is_some() {
+            None
+        } else {
+            parsed[i].as_ref().and_then(Parsed::hot_key)
+        }
+    });
     let taken = shortcut_access::replace(app, &mut runtime.held.lock().unwrap(), &wanted);
-    // What a refused single key is offered instead, as a refused hot key is.
-    let offered = if duplicate.contains(&true) { shortcut_access::alternatives(app, &wanted) } else { Vec::new() };
 
     // The listener: only while a single key that needs it is set and the system allows it (macOS: Input Monitoring, which is
     // asked for only on the person's Allow). Nothing is created, and nothing asked, while only combinations are set.
     let access = key_capture::access();
-    let needed = (0..3).any(|i| !duplicate[i] && parsed[i].as_ref().is_some_and(|p| p.listened().is_some()));
+    let needed = (0..3).any(|i| duplicate[i].is_none() && parsed[i].as_ref().is_some_and(|p| p.listened().is_some()));
     let listening = {
         let mut listener = runtime.listener.lock().unwrap();
         if needed && key_capture::listens() && access != Some(false) {
@@ -139,8 +134,13 @@ fn apply_locked(app: &AppHandle, runtime: &Shortcuts) {
     for action in Action::ALL {
         let i = action.index();
         let Some(binding) = &parsed[i] else { continue };
-        let (state, alternatives) = if duplicate[i] {
-            (Registration::Refused, offered.clone())
+        let (state, alternatives, refusal) = if let Some(holder) = duplicate[i] {
+            let offered = shortcut_access::alternatives(app, &wanted, action);
+            (Registration::Refused, offered, Some(Refusal::Duplicate { action: holder }))
+        } else if let Some(owner) = rides[i] {
+            // The same hot key as the earlier action's, pressed in another way: it is taken, or not, with it.
+            let of = &all[owner.index()];
+            (of.state, of.alternatives.clone(), of.refusal)
         } else if binding.listened().is_some() {
             let state = if !key_capture::listens() {
                 Registration::Unavailable
@@ -151,11 +151,28 @@ fn apply_locked(app: &AppHandle, runtime: &Shortcuts) {
             } else {
                 Registration::Unavailable
             };
-            (state, vec![])
+            (state, vec![], None)
         } else {
-            taken[i].clone().map_or((Registration::Off, vec![]), |t| (t.state, t.alternatives))
+            match taken[i].clone() {
+                None => (Registration::Off, vec![], None),
+                Some(t) => {
+                    let refusal = (t.state == Registration::Refused)
+                        .then(|| t.holder.map_or(Refusal::Taken, |action| Refusal::Duplicate { action }));
+                    (t.state, t.alternatives, refusal)
+                }
+            }
         };
-        all[i] = GlobalShortcut::new(&binding.accelerator(), state, alternatives, symbols, language);
+        all[i] = GlobalShortcut {
+            refusal,
+            ..GlobalShortcut::new(&binding.accelerator(), state, alternatives, symbols, language)
+        };
+    }
+    // What the system's default is for each, and whether the person never chose: the page keeps neither.
+    for action in Action::ALL {
+        let default = shortcuts::default_of(action, default_mute);
+        let shortcut = &mut all[action.index()];
+        shortcut.is_default = settings.shortcut(action).is_none();
+        shortcut.default = (!default.is_empty()).then(|| default.to_owned());
     }
     let permission = (key_capture::listens() && parsed.iter().flatten().any(Parsed::is_single)).then(|| Permission {
         kind: PermissionKind::InputMonitoring,
@@ -171,21 +188,42 @@ fn apply_locked(app: &AppHandle, runtime: &Shortcuts) {
         .then(|| Headset::new(settings.headset_press, settings.headset_double_press));
 
     // What each does: a binding that did not change keeps its machine (a hold in progress goes on), one that did starts over.
+    let active: [bool; 3] = std::array::from_fn(|i| parsed[i].is_some() && all[i].state == Registration::On);
+    let keys = shortcuts::single_keys(&parsed, &active.map(|on| !on));
     let mut let_go = false;
     {
         let mut current = runtime.current.lock().unwrap();
         for action in Action::ALL {
             let i = action.index();
-            let active = parsed[i].is_some() && all[i].state == Registration::On;
-            let same = current.parsed[i] == parsed[i] && current.machines[i].is_some() == active;
+            let combo = active[i] && matches!(parsed[i], Some(Parsed::Combo(_)));
+            let same = current.parsed[i] == parsed[i] && current.machines[i].is_some() == combo;
             if !same {
-                if action == Action::HoldToTalk && current.hold.is_on() {
+                if action == Action::HoldToTalk && current.hold.is_on() && current.machines[i].is_some() {
                     let_go = true;
                 }
                 current.machines[i] =
-                    parsed[i].as_ref().filter(|_| active).map(|p| Machine::new(shortcuts::gesture(action, p)));
+                    parsed[i].as_ref().filter(|_| combo).and_then(|p| shortcuts::gesture(action, p)).map(Machine::new);
             }
         }
+        // A key whose ways did not change keeps its machine, so a press in progress goes on.
+        let before = std::mem::take(&mut current.keys);
+        let held_before = before.iter().find(|slot| slot.carried.hold.is_some()).map(|slot| slot.key);
+        if current.hold.is_on()
+            && held_before.is_some_and(|key| !keys.iter().any(|(k, c)| *k == key && c.hold.is_some()))
+        {
+            let_go = true;
+        }
+        current.keys = keys
+            .into_iter()
+            .map(|(key, carried)| {
+                let ways = carried.ways();
+                let machine = before
+                    .iter()
+                    .find(|slot| slot.key == key && slot.machine.ways() == ways)
+                    .map_or_else(|| KeyMachine::new(ways), |slot| slot.machine.clone());
+                KeySlot { key, carried, machine }
+            })
+            .collect();
         current.parsed = parsed;
         current.shortcuts = all;
         current.permission = permission;
@@ -272,10 +310,21 @@ pub(crate) fn set(app: &AppHandle, action: Action, text: &str) -> Result<GlobalS
         }
     }
     let kept = parsed.map(|p| p.accelerator()).unwrap_or_default();
+    choose(app, action, Some(kept))
+}
+
+/// `host.shortcuts.restore`: puts `action` back on this system's default, as if the person never chose.
+pub(crate) fn restore(app: &AppHandle, action: Action) -> Result<GlobalShortcut, Value> {
+    choose(app, action, None)
+}
+
+/// Keeps what the person chose for `action` (empty: none; `None`: the default) and registers it.
+fn choose(app: &AppHandle, action: Action, kept: Option<String>) -> Result<GlobalShortcut, Value> {
     {
         let runtime = app.state::<Shortcuts>();
         let _one_at_a_time = runtime.change.lock().unwrap();
-        crate::change_settings(app, |s| *setting_mut(s, action) = kept).map_err(|e| refusal("internal", e))?;
+        crate::change_settings(app, |s| s.choose_shortcut(action, kept, shortcut_access::default_mute()))
+            .map_err(|e| refusal("internal", e))?;
         if *runtime.recordings.lock().unwrap() == 0 {
             apply_locked(app, &runtime);
         }
@@ -382,48 +431,94 @@ fn headset_does(app: &AppHandle, press: HeadsetPress) {
 }
 
 /// `host.shortcuts.record`: the app hears the next key itself, Fn included, and answers with the accelerator, or `None` for
-/// Escape (or no key for a minute). Meanwhile the hot keys and the listener are let go of, so the keys recorded do not fire
-/// what they are bound to.
+/// Escape. No key for [`RECORD_WAIT`] is the error `record_timeout`, not a cancel. A key it cannot take (a modifier on its own
+/// where only the right-hand ones can be a key) is ignored, the page told why, and the recording goes on. Meanwhile the hot
+/// keys and the listener are let go of, so the keys recorded do not fire what they are bound to.
+///
+/// Nothing here blocks a worker of the async runtime: setting the capture up and giving the keys back wait on the main thread
+/// and on the shortcut locks, so both run on the blocking pool, the second also when the page goes away (the future is dropped).
 pub(crate) async fn record(app: AppHandle, action: Action) -> Result<Option<String>, Value> {
     if !key_capture::captures() {
         return Err(refusal("unsupported", "this system cannot capture a key for the page"));
     }
     let (done, mut result) = tokio::sync::oneshot::channel::<Option<String>>();
-    let recorder = Arc::new(Mutex::new(Recorder::new(action)));
+    let recorder = Arc::new(Mutex::new(Recorder::on(action, key_capture::listens())));
     let finish = Arc::new(Mutex::new(Some(done)));
-    pause(&app);
     let heard = {
-        let (recorder, finish) = (recorder.clone(), finish.clone());
-        Arc::new(move |heard: Heard| {
-            if let Recorded::Done(answer) = recorder.lock().unwrap().hear(heard, Instant::now()) {
+        let (recorder, finish, app) = (recorder.clone(), finish.clone(), app.clone());
+        Arc::new(move |heard: Heard| match recorder.lock().unwrap().hear(heard, Instant::now()) {
+            Recorded::Done(answer) => {
                 if let Some(done) = finish.lock().unwrap().take() {
                     let _ = done.send(answer);
                 }
             }
+            Recorded::Hint(hint) => tell_hint(&app, hint),
+            Recorded::Pending => {}
         })
     };
-    let Some(capture) = key_capture::capture(&app, heard) else {
-        resume(&app);
+    let starting = app.clone();
+    let session = tauri::async_runtime::spawn_blocking(move || Recording::start(&starting, heard))
+        .await
+        .map_err(|e| refusal("internal", e))?;
+    let Some(_session) = session else {
         return Err(refusal("unsupported", "this system cannot capture a key for the page"));
     };
     let deadline = tokio::time::Instant::now() + RECORD_WAIT;
-    let answer = loop {
+    loop {
         tokio::select! {
-            got = &mut result => break got.unwrap_or(None),
+            got = &mut result => return Ok(got.unwrap_or(None)),
             _ = tokio::time::sleep(Duration::from_millis(50)) => {
                 // A lone tap waits to see whether a second one follows.
                 if let Recorded::Done(answer) = recorder.lock().unwrap().settle(Instant::now()) {
-                    break answer;
+                    return Ok(answer);
                 }
                 if tokio::time::Instant::now() >= deadline {
-                    break None;
+                    return Err(refusal("record_timeout", "no key was pressed"));
                 }
             }
         }
-    };
-    drop(capture);
-    resume(&app);
-    Ok(answer)
+    }
+}
+
+/// A recording on: the hot keys and the listener are let go of, and keys are captured, until this is dropped.
+struct Recording {
+    app: AppHandle,
+    capture: Option<key_capture::Capture>,
+}
+
+impl Recording {
+    /// On the blocking pool. `None`: the system could not capture, and nothing was left let go of.
+    fn start(app: &AppHandle, heard: key_capture::CaptureSink) -> Option<Recording> {
+        pause(app);
+        match key_capture::capture(app, heard) {
+            Some(capture) => Some(Recording { app: app.clone(), capture: Some(capture) }),
+            None => {
+                resume(app);
+                None
+            }
+        }
+    }
+}
+
+impl Drop for Recording {
+    fn drop(&mut self) {
+        let (app, capture) = (self.app.clone(), self.capture.take());
+        // Giving the keys back waits for locks and the main thread: not here, which may be an async worker.
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            drop(capture);
+            resume(&app);
+        });
+    }
+}
+
+/// Tells the page why a key was ignored while recording (`recordHint`).
+fn tell_hint(app: &AppHandle, hint: Hint) {
+    if let Some(window) = crate::room_window(app) {
+        let _ = window.eval(format!(
+            "window.__sidevoiceHost && window.__sidevoiceHost.recordHint && window.__sidevoiceHost.recordHint({})",
+            json!(hint)
+        ));
+    }
 }
 
 /// Lets go of the hot keys and the listener while a key is being recorded.
@@ -454,16 +549,23 @@ fn resume(app: &AppHandle) {
 // What the keys do
 // ---------------------------------------------------------------------------------------------------------------------
 
-/// A hot key went down or up.
+/// A hot key went down or up: a combination's action, or an F-key used as a single key.
 fn hot_key(app: &AppHandle, action: Action, edge: Edge) {
-    feed(app, action, edge);
+    let key = match &app.state::<Shortcuts>().current.lock().unwrap().parsed[action.index()] {
+        Some(Parsed::Single { key, .. }) => Some(*key),
+        _ => None,
+    };
+    match key {
+        Some(key) => feed_key(app, key, edge),
+        None => feed(app, action, edge),
+    }
 }
 
-/// What a listener heard: the single key's own edges go to the action bound to it, and another key to every pending tap.
+/// What a listener heard: a single key's own edges go to its machine, and another key to every pending lone key.
 fn key_event(app: &AppHandle, heard: Listened) {
     let targets = shortcuts::route(&app.state::<Shortcuts>().current.lock().unwrap().parsed, heard);
-    for (action, edge) in targets {
-        feed(app, action, edge);
+    for (key, edge) in targets {
+        feed_key(app, key, edge);
     }
 }
 
@@ -471,11 +573,62 @@ fn feed(app: &AppHandle, action: Action, edge: Edge) {
     let effect = {
         let runtime = app.state::<Shortcuts>();
         let mut current = runtime.current.lock().unwrap();
-        current.machines[action.index()].as_mut().and_then(|machine| machine.on(edge, Instant::now()))
+        current.machines[action.index()].as_mut().and_then(|machine| machine.on(edge))
     };
     if let Some(effect) = effect {
         act(app, action, effect);
     }
+}
+
+/// An edge of a single key: its machine says what that does (by the way it was pressed), and when the clock decides next.
+fn feed_key(app: &AppHandle, key: SingleKey, edge: Edge) {
+    let (done, deadline) = {
+        let runtime = app.state::<Shortcuts>();
+        let mut current = runtime.current.lock().unwrap();
+        let Some(slot) = current.keys.iter_mut().find(|slot| slot.key == key) else { return };
+        (done_by(&slot.carried, slot.machine.on(edge, Instant::now())), slot.machine.deadline())
+    };
+    for (action, effect) in done {
+        act(app, action, effect);
+    }
+    if let Some(deadline) = deadline {
+        arm(app, key, deadline);
+    }
+}
+
+/// The actions a machine's pulses are, by the way each was pressed.
+fn done_by(carried: &Carried, pulses: Vec<Pulse>) -> Vec<(Action, Effect)> {
+    pulses.into_iter().filter_map(|(trigger, effect)| carried.action(trigger).map(|action| (action, effect))).collect()
+}
+
+/// Looks at `key`'s machine when its clock is up: a hold that has lasted, a tap no second press followed. Until the machine has
+/// nothing more to wait for.
+fn arm(app: &AppHandle, key: SingleKey, deadline: Instant) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("single-key-clock".into()).spawn(move || {
+        let mut next = Some(deadline);
+        while let Some(at) = next {
+            let now = Instant::now();
+            if at > now {
+                std::thread::sleep(at - now);
+            }
+            next = poll_key(&app, key);
+        }
+    });
+}
+
+/// What the clock alone decides for `key` now; when it decides next.
+fn poll_key(app: &AppHandle, key: SingleKey) -> Option<Instant> {
+    let (done, deadline) = {
+        let runtime = app.state::<Shortcuts>();
+        let mut current = runtime.current.lock().unwrap();
+        let slot = current.keys.iter_mut().find(|slot| slot.key == key)?;
+        (done_by(&slot.carried, slot.machine.poll(Instant::now())), slot.machine.deadline())
+    };
+    for (action, effect) in done {
+        act(app, action, effect);
+    }
+    deadline
 }
 
 fn act(app: &AppHandle, action: Action, effect: Effect) {
@@ -510,6 +663,9 @@ fn release(app: &AppHandle, why: Release) {
         let mut current = runtime.current.lock().unwrap();
         if let Some(machine) = current.machines[Action::HoldToTalk.index()].as_mut() {
             machine.cancel();
+        }
+        for slot in current.keys.iter_mut().filter(|slot| slot.carried.hold.is_some()) {
+            slot.machine.cancel();
         }
         current.hold.end()
     };
@@ -550,7 +706,7 @@ fn watch(app: &AppHandle, generation: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sidevoice_desktop_core::shortcuts::{Gesture, STUCK_HOLD};
+    use sidevoice_desktop_core::shortcuts::{Gesture, Trigger, STUCK_HOLD};
 
     #[test]
     fn a_kept_shortcut_that_cannot_be_registered_is_none_not_an_error() {
@@ -566,9 +722,26 @@ mod tests {
     #[test]
     fn the_gesture_of_each_action_is_what_the_person_chose() {
         let of = |action, text: &str| shortcuts::gesture(action, &shortcuts::parse(text).unwrap().unwrap());
-        assert_eq!(of(Action::HoldToTalk, "Ctrl+Alt+H"), Gesture::Hold);
-        assert_eq!(of(Action::Mute, "Ctrl+Alt+M"), Gesture::Press);
-        assert_eq!(of(Action::OneTurn, "RightControl:double"), Gesture::Double);
+        assert_eq!(of(Action::HoldToTalk, "Ctrl+Alt+H"), Some(Gesture::Hold));
+        assert_eq!(of(Action::Mute, "Ctrl+Alt+M"), Some(Gesture::Press));
+        assert_eq!(of(Action::OneTurn, "RightControl:double"), None, "a single key is a KeyMachine's");
         assert_eq!(STUCK_HOLD, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_machines_pulses_are_the_actions_that_carry_each_way() {
+        let carried = Carried { hold: Some(Action::HoldToTalk), tap: None, double: Some(Action::OneTurn) };
+        let pulses =
+            vec![(Trigger::Hold, Effect::HoldStart), (Trigger::Tap, Effect::Fire), (Trigger::Double, Effect::Fire)];
+        assert_eq!(
+            done_by(&carried, pulses),
+            [(Action::HoldToTalk, Effect::HoldStart), (Action::OneTurn, Effect::Fire)],
+            "a way nothing carries does nothing"
+        );
+    }
+
+    #[test]
+    fn a_recording_waits_fifteen_seconds() {
+        assert_eq!(RECORD_WAIT, Duration::from_secs(15));
     }
 }

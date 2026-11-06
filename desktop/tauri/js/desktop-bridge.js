@@ -9,6 +9,7 @@
 //                window.__sidevoiceHost.voiceEvent(event) is where each one is handed to the page
 //                window.__sidevoiceHost.updaterEvent(status)  the updates' status changed (host.updater)
 //                window.__sidevoiceHost.shortcutsEvent(status)  a global shortcut or the headset changed (host.shortcuts, host.muteShortcut)
+//                window.__sidevoiceHost.recordHint(hint)  a key was ignored while a shortcut is recorded (host.shortcuts.record's onHint)
 // It only reads the web UI's public seams (window.sidevoiceUI.store, .micLevel, .playbackLevel and .openSettings,
 // window.sidevoiceActions) and
 // never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
@@ -262,6 +263,8 @@
   function shortcuts(captures) {
     const everyone = listened();
     const mute = listened();
+    /** The hint callback of the recording on (a second `record` ends the first, so there is one). */
+    let hinting = null;
     const ACTIONS = ["mute", "holdToTalk", "oneTurn"];
     const refusal = (key, message) => Promise.reject({ key, message });
     const action = (name) => (ACTIONS.includes(name) ? null : { key: "bad_request", message: "no such shortcut action: " + name });
@@ -279,6 +282,12 @@
        *  `alternatives`); rejects `{key: "shortcut_invalid"}` for one that is not a shortcut, or that the action cannot be
        *  done with. */
       set: setting,
+      /** Puts `action` back on this system's default, as if the person never chose: the default is the app's state, not a value
+       *  `set` could be given. Answers the shortcut. */
+      restore: (target) => {
+        const wrong = action(target);
+        return wrong ? Promise.reject(wrong) : call("global_shortcuts", { action: "restore", target });
+      },
       /** `listener(status)` on every change: set here, refused, or a permission given. Returns `stop`. */
       subscribe: everyone.subscribe,
       /** The person's own Allow for single keys (macOS: Input Monitoring); the system asks only now. */
@@ -294,9 +303,13 @@
       /** The app captures the next key itself, Fn included, which a page cannot see: the accelerator, or `null` for Escape. Only
        *  where the system lets the app hear keys with no permission. */
       ...(captures === true ? {
-        record: (target) => {
+        record: (target, onHint) => {
           const wrong = action(target);
-          return wrong ? Promise.reject(wrong) : call("global_shortcuts", { action: "record", target });
+          if (wrong) return Promise.reject(wrong);
+          const mine = typeof onHint === "function" ? onHint : null;
+          hinting = mine;
+          const done = () => { if (hinting === mine) hinting = null; };
+          return call("global_shortcuts", { action: "record", target }).then((accelerator) => { done(); return accelerator; }, (failure) => { done(); throw failure; });
         },
       } : {}),
     };
@@ -309,6 +322,12 @@
     return {
       host: Object.freeze(host),
       muteHost: Object.freeze(muteHost),
+      /** The app ignored a key while recording (`leftModifier`, `loneModifier`): to the recording's `onHint`. */
+      hint(reason) {
+        if (hinting && (reason === "leftModifier" || reason === "loneModifier")) {
+          try { hinting(reason); } catch (_) { /* the page's own */ }
+        }
+      },
       changed(status) {
         everyone.tell(status);
         if (status && status.shortcuts) mute.tell(status.shortcuts.mute);
@@ -558,6 +577,10 @@
      *  and the mute one to `host.muteShortcut.subscribe`'s. */
     shortcutsEvent(status) {
       shortcut.changed(status);
+    },
+    /** A key was ignored while a shortcut is recorded, from the app (`webview.eval`): to the recording's `onHint`. */
+    recordHint(hint) {
+      shortcut.hint(hint);
     },
     snapshot: reporting.snapshot,
     /** Runs one command from the app (tray, shortcut, headset, call controls card) through the web UI's own actions:

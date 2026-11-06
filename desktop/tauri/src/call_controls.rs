@@ -473,13 +473,8 @@ pub fn playback(app: &AppHandle, level: f64, thread_id: Option<String>) {
 }
 
 fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
-    let settings = app
-        .state::<AppState>()
-        .settings
-        .lock()
-        .unwrap()
-        .clone()
-        .unwrap_or_else(|| settings::Settings::first_run(crate::platform::shortcut_access::default_mute()));
+    let settings =
+        app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(settings::Settings::first_run);
     let (level, pointer, clicks, place, size) = card(app)
         .map(|card| {
             let inner = card.0.lock().unwrap();
@@ -609,14 +604,8 @@ pub async fn call_controls_settings(
         stage_seen_by_page(&app, visible, rect);
         return Ok(serde_json::Value::Null);
     }
-    let stored = || {
-        app.state::<AppState>()
-            .settings
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap_or_else(|| settings::Settings::first_run(crate::platform::shortcut_access::default_mute()))
-    };
+    let stored =
+        || app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(settings::Settings::first_run);
     match (action.as_str(), enabled, corner) {
         ("settings", _, _) => {
             let s = stored();

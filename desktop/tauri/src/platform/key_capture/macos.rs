@@ -191,7 +191,11 @@ fn monitor(sink: CaptureSink) -> Option<Retained<AnyObject>> {
         let heard = match event_ref.r#type() {
             NSEventType::FlagsChanged => match SingleKey::from_macos_modifier(event_ref.keyCode()) {
                 Some(key) => Heard::Modifier { key, down: key.macos_down(flags) },
-                None => return event.as_ptr(),
+                // A left-hand modifier cannot be a key on its own: the recorder says so, and goes on.
+                None => match SingleKey::left_macos_down(event_ref.keyCode(), flags) {
+                    Some(down) => Heard::LeftModifier { down },
+                    None => return event.as_ptr(),
+                },
             },
             NSEventType::KeyDown => {
                 if event_ref.isARepeat() {

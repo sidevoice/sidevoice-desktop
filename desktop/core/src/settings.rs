@@ -15,19 +15,22 @@ pub const FILE_NAME: &str = "settings.json";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
-    /// The mute shortcut as [`crate::shortcuts::parse`] writes it; empty disables it. A file that has none is from before
-    /// the shortcut could be set from the page, and holds the shortcut every system registered then.
-    #[serde(default = "legacy_shortcut")]
-    pub mute_shortcut: String,
-    /// The hold to talk shortcut (`host.shortcuts`); empty: none, the default.
-    #[serde(default)]
-    pub hold_to_talk_shortcut: String,
-    /// The say one thing shortcut (`host.shortcuts`); empty: none, the default.
-    #[serde(default)]
-    pub one_turn_shortcut: String,
+    /// The mute shortcut as [`crate::shortcuts::parse`] writes it; empty disables it; absent: the default, whatever this system's
+    /// is now (`host.shortcuts.restore`). A key the person chose is kept as itself, even when it is the default's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mute_shortcut: Option<String>,
+    /// The hold to talk shortcut (`host.shortcuts`); absent: the default, which is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_to_talk_shortcut: Option<String>,
+    /// The say one thing shortcut (`host.shortcuts`); absent: the default, which is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_turn_shortcut: Option<String>,
     /// Whether the mute shortcut has been through the move off its old default ([`crate::shortcuts::migrated_mute`]): once.
     #[serde(default)]
     pub shortcuts_migrated: bool,
+    /// Whether the shortcuts have been through the move to "absent is the default": once ([`Settings::migrate_shortcuts`]).
+    #[serde(default)]
+    pub shortcuts_defaults_migrated: bool,
     /// What a headset's single press does where the app answers one (`host.shortcuts.setHeadset`).
     #[serde(default)]
     pub headset_press: crate::shortcuts::HeadsetPress,
@@ -73,10 +76,6 @@ fn default_true() -> bool {
 
 fn default_double_press() -> crate::shortcuts::HeadsetPress {
     crate::shortcuts::HeadsetPress::None
-}
-
-fn legacy_shortcut() -> String {
-    crate::shortcuts::LEGACY_MUTE_SHORTCUT.to_string()
 }
 
 /// Whether two accelerators are the same keys, however each is written.
@@ -325,6 +324,22 @@ pub struct GlobalShortcut {
     pub layout_bound: bool,
     /// The system owns the keys and the label is its text (a Wayland portal): never here, the keys are the app's.
     pub managed_by_system: bool,
+    /// Never chosen (or restored): it follows this system's default, and moves with it.
+    pub is_default: bool,
+    /// This system's default for the action; `None` when it has none.
+    pub default: Option<String>,
+    /// Refused: what holds the keys. `None` in any other state.
+    pub refusal: Option<Refusal>,
+}
+
+/// Who holds the keys of a refused shortcut (docs/BRIDGE.md → "The shortcuts").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "reason", rename_all = "camelCase")]
+pub enum Refusal {
+    /// Another action of ours.
+    Duplicate { action: crate::shortcuts::Action },
+    /// The system, or another app.
+    Taken,
 }
 
 impl GlobalShortcut {
@@ -347,6 +362,9 @@ impl GlobalShortcut {
             voice_over: false,
             layout_bound: false,
             managed_by_system: false,
+            is_default: false,
+            default: None,
+            refusal: None,
         }
     }
 }
@@ -354,24 +372,74 @@ impl GlobalShortcut {
 impl Settings {
     /// Moves a person still on the old mute default to `default_mute`, once ([`crate::shortcuts::migrated_mute`]).
     /// Whether anything changed, for the caller to keep it.
+    ///
+    /// And, once more, a stored value equal to this system's default becomes absent (the default itself, not the keys it maps to),
+    /// and a hold to talk or say one thing cleared (their default is none) too.
     pub fn migrate_shortcuts(&mut self, default_mute: &str) -> bool {
-        if self.shortcuts_migrated {
-            return false;
+        let mut changed = false;
+        if !self.shortcuts_migrated {
+            if let Some(moved) = self
+                .mute_shortcut
+                .as_deref()
+                .and_then(|kept| crate::shortcuts::migrated_mute(kept, false, default_mute))
+            {
+                self.mute_shortcut = Some(moved);
+            }
+            self.shortcuts_migrated = true;
+            changed = true;
         }
-        if let Some(moved) = crate::shortcuts::migrated_mute(&self.mute_shortcut, false, default_mute) {
-            self.mute_shortcut = moved;
+        if !self.shortcuts_defaults_migrated {
+            if self.mute_shortcut.as_deref().is_some_and(|kept| same_shortcut(kept, default_mute)) {
+                self.mute_shortcut = None;
+            }
+            for none_by_default in [&mut self.hold_to_talk_shortcut, &mut self.one_turn_shortcut] {
+                if none_by_default.as_deref().is_some_and(|kept| kept.trim().is_empty()) {
+                    *none_by_default = None;
+                }
+            }
+            self.shortcuts_defaults_migrated = true;
+            changed = true;
         }
-        self.shortcuts_migrated = true;
-        true
+        changed
     }
 
-    /// First run: `default_mute`, this system's default mute shortcut (`shortcut_access::default_mute`), and no other.
-    pub fn first_run(default_mute: &str) -> Self {
+    /// What is kept for `action`: `None` is the default.
+    pub fn shortcut(&self, action: crate::shortcuts::Action) -> Option<&str> {
+        use crate::shortcuts::Action;
+        match action {
+            Action::Mute => &self.mute_shortcut,
+            Action::HoldToTalk => &self.hold_to_talk_shortcut,
+            Action::OneTurn => &self.one_turn_shortcut,
+        }
+        .as_deref()
+    }
+
+    /// What `action` is bound to now: what was chosen, else this system's default (`default_mute` is the mute one).
+    pub fn shortcut_or_default(&self, action: crate::shortcuts::Action, default_mute: &str) -> String {
+        self.shortcut(action).unwrap_or_else(|| crate::shortcuts::default_of(action, default_mute)).to_owned()
+    }
+
+    /// Keeps `kept` for `action` as chosen (empty: cleared), or `None` to put it back on the default. Clearing an action whose
+    /// default is none is being on the default.
+    pub fn choose_shortcut(&mut self, action: crate::shortcuts::Action, kept: Option<String>, default_mute: &str) {
+        use crate::shortcuts::Action;
+        let kept =
+            kept.filter(|text| !(text.is_empty() && crate::shortcuts::default_of(action, default_mute).is_empty()));
+        match action {
+            Action::Mute => self.mute_shortcut = kept,
+            Action::HoldToTalk => self.hold_to_talk_shortcut = kept,
+            Action::OneTurn => self.one_turn_shortcut = kept,
+        }
+    }
+
+    /// First run: every shortcut on its default, and nothing to move.
+    pub fn first_run() -> Self {
         Settings {
-            mute_shortcut: default_mute.to_owned(),
-            hold_to_talk_shortcut: String::new(),
-            one_turn_shortcut: String::new(),
+            mute_shortcut: None,
+            hold_to_talk_shortcut: None,
+            one_turn_shortcut: None,
             shortcuts_migrated: true,
+            shortcuts_defaults_migrated: true,
             headset_press: crate::shortcuts::HeadsetPress::Mute,
             headset_double_press: crate::shortcuts::HeadsetPress::None,
             input_monitoring_asked: false,
@@ -572,18 +640,18 @@ mod tests {
     fn the_mute_shortcut_reads_as_the_seam_says() {
         assert_eq!(
             serde_json::to_value(GlobalShortcut::new("", Registration::On, vec![], true, "en")).unwrap(),
-            json!({"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
+            json!({"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false, "isDefault": false, "default": null, "refusal": null})
         );
         assert_eq!(
             serde_json::to_value(GlobalShortcut::new("Ctrl+Alt+M", Registration::On, vec![], true, "en")).unwrap(),
-            json!({"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
+            json!({"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false, "isDefault": false, "default": null, "refusal": null})
         );
         let refused =
             GlobalShortcut::new("Cmd+Shift+M", Registration::Refused, vec!["Ctrl+Alt+Shift+M".into()], false, "en");
         assert_eq!(
             serde_json::to_value(refused).unwrap(),
             json!({"accelerator": "Cmd+Shift+M", "label": "Super+Shift+M", "state": "refused",
-                   "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
+                   "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false, "layoutBound": false, "managedBySystem": false, "isDefault": false, "default": null, "refusal": null})
         );
     }
 
@@ -600,7 +668,7 @@ mod tests {
 
     #[test]
     fn the_floating_card_shows_unless_switched_off() {
-        assert!(Settings::first_run(crate::shortcuts::DEFAULT_MUTE_MACOS).call_controls_enabled);
+        assert!(Settings::first_run().call_controls_enabled);
         let stored: Settings = serde_json::from_str("{}").unwrap();
         assert!(stored.call_controls_enabled, "a settings file from before the switch keeps the card on");
         let off: Settings = serde_json::from_str(r#"{"callControlsEnabled":false}"#).unwrap();
@@ -614,10 +682,11 @@ mod tests {
         assert_eq!(load(&dir), None, "first run: nothing stored");
 
         let s = Settings {
-            mute_shortcut: "Alt+M".into(),
-            hold_to_talk_shortcut: "Fn:hold".into(),
-            one_turn_shortcut: "RightControl:double".into(),
+            mute_shortcut: Some("Alt+M".into()),
+            hold_to_talk_shortcut: Some("Fn:hold".into()),
+            one_turn_shortcut: None,
             shortcuts_migrated: true,
+            shortcuts_defaults_migrated: true,
             headset_press: crate::shortcuts::HeadsetPress::OneTurn,
             headset_double_press: crate::shortcuts::HeadsetPress::Skip,
             input_monitoring_asked: true,
@@ -641,35 +710,97 @@ mod tests {
 
         fs::write(dir.join(FILE_NAME), "{}").unwrap();
         let bare = load(&dir).unwrap();
-        assert_eq!(
-            bare.mute_shortcut, "Ctrl+Alt+M",
-            "a file from before the shortcut could be set holds what every system had"
-        );
-        assert!(!bare.shortcuts_migrated && bare.hold_to_talk_shortcut.is_empty() && bare.one_turn_shortcut.is_empty());
+        assert_eq!(bare.mute_shortcut, None, "a file from before the shortcut could be set is on the default");
+        assert!(!bare.shortcuts_migrated && !bare.shortcuts_defaults_migrated);
+        assert!(bare.hold_to_talk_shortcut.is_none() && bare.one_turn_shortcut.is_none());
         fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn the_old_mute_default_moves_once_where_the_default_changed() {
         use crate::shortcuts::{DEFAULT_MUTE_MACOS as MAC, DEFAULT_MUTE_OTHER as OTHER};
-        assert_eq!(Settings::first_run(OTHER).mute_shortcut, OTHER);
-        assert!(Settings::first_run(OTHER).shortcuts_migrated, "a new install has nothing to move");
-        let old = |mute: &str| Settings { mute_shortcut: mute.into(), ..serde_json::from_str("{}").unwrap() };
+        let first = Settings::first_run();
+        assert_eq!(first.mute_shortcut, None, "a new install is on the default");
+        assert!(first.shortcuts_migrated && first.shortcuts_defaults_migrated, "and has nothing to move");
+        let old = |mute: &str| Settings { mute_shortcut: Some(mute.into()), ..serde_json::from_str("{}").unwrap() };
         let mut stored = old("Ctrl+Alt+M");
         assert!(stored.migrate_shortcuts(OTHER));
-        assert_eq!((stored.mute_shortcut.as_str(), stored.shortcuts_migrated), (OTHER, true));
-        // Chosen again afterwards: kept, the move does not run twice.
-        stored.mute_shortcut = "Ctrl+Alt+M".into();
+        assert_eq!(
+            (stored.mute_shortcut.as_deref(), stored.shortcuts_migrated),
+            (None, true),
+            "moved to this system's default, which is the state of being on it"
+        );
+        // Chosen again afterwards: kept as itself, the move does not run twice.
+        stored.mute_shortcut = Some("Ctrl+Alt+M".into());
         assert!(!stored.migrate_shortcuts(OTHER));
-        assert_eq!(stored.mute_shortcut, "Ctrl+Alt+M");
+        assert_eq!(stored.mute_shortcut.as_deref(), Some("Ctrl+Alt+M"));
         let mut chosen = old("Cmd+Shift+M");
         assert!(chosen.migrate_shortcuts(OTHER));
-        assert_eq!(chosen.mute_shortcut, "Cmd+Shift+M", "an explicit choice stays");
+        assert_eq!(chosen.mute_shortcut.as_deref(), Some("Cmd+Shift+M"), "an explicit choice stays");
         let mut off = old("");
         off.migrate_shortcuts(OTHER);
-        assert_eq!(off.mute_shortcut, "", "off stays off");
+        assert_eq!(off.mute_shortcut.as_deref(), Some(""), "off stays off");
         let mut mac = old("Ctrl+Alt+M");
         assert!(mac.migrate_shortcuts(MAC));
-        assert_eq!(mac.mute_shortcut, MAC, "macOS keeps ⌃⌥M, and is marked so");
+        assert_eq!(mac.mute_shortcut, None, "macOS keeps ⌃⌥M, now as the default");
+    }
+
+    /// R18: a stored value equal to the platform default becomes "the default", once; a different one stays as chosen.
+    #[test]
+    fn a_stored_value_equal_to_the_default_becomes_the_default_once() {
+        use crate::shortcuts::{Action, DEFAULT_MUTE_MACOS as MAC, DEFAULT_MUTE_OTHER as OTHER};
+        let from = |json: &str| -> Settings { serde_json::from_str(json).unwrap() };
+        // Written by the build before this one, which stored what it mapped to.
+        let before = r#"{"muteShortcut":"Ctrl+Alt+Shift+M","holdToTalkShortcut":"","oneTurnShortcut":"","shortcutsMigrated":true}"#;
+        let mut windows = from(before);
+        assert_eq!(windows.mute_shortcut.as_deref(), Some(OTHER), "read as stored");
+        assert!(windows.migrate_shortcuts(OTHER));
+        assert_eq!(windows.shortcut(Action::Mute), None, "equal to this system's default: the default");
+        assert_eq!(windows.shortcut(Action::HoldToTalk), None, "none by default: the default");
+        assert_eq!(windows.shortcut(Action::OneTurn), None);
+        assert!(windows.shortcuts_defaults_migrated);
+        // The same keys on a system where they are not the default are a choice.
+        let mut mac = from(before);
+        mac.migrate_shortcuts(MAC);
+        assert_eq!(mac.shortcut(Action::Mute), Some(OTHER), "a choice");
+        // Written however the keys are spelled.
+        let mut spelled = from(r#"{"muteShortcut":"shift+alt+control+m","shortcutsMigrated":true}"#);
+        spelled.migrate_shortcuts(OTHER);
+        assert_eq!(spelled.shortcut(Action::Mute), None);
+        // Cleared stays cleared; one chosen for hold to talk stays.
+        let mut kept = from(r#"{"muteShortcut":"","holdToTalkShortcut":"Fn:hold","shortcutsMigrated":true}"#);
+        kept.migrate_shortcuts(OTHER);
+        assert_eq!((kept.shortcut(Action::Mute), kept.shortcut(Action::HoldToTalk)), (Some(""), Some("Fn:hold")));
+        // Once: a key chosen after the move, equal to the default, stays as chosen.
+        windows.choose_shortcut(Action::Mute, Some(OTHER.into()), OTHER);
+        assert!(!windows.migrate_shortcuts(OTHER));
+        assert_eq!(windows.shortcut(Action::Mute), Some(OTHER), "chosen, even though it equals the default");
+        assert_eq!(windows.shortcut_or_default(Action::Mute, OTHER), OTHER);
+        // And what is stored reads back the same, with the default absent from the file.
+        let json = serde_json::to_value(Settings::first_run()).unwrap();
+        for key in ["muteShortcut", "holdToTalkShortcut", "oneTurnShortcut"] {
+            assert!(json.get(key).is_none(), "{key}: the default is absent");
+        }
+        assert_eq!(serde_json::to_value(&windows).unwrap()["muteShortcut"], OTHER);
+    }
+
+    #[test]
+    fn choosing_restoring_and_clearing_a_shortcut() {
+        use crate::shortcuts::{Action, DEFAULT_MUTE_OTHER as OTHER};
+        let mut s = Settings::first_run();
+        assert_eq!(s.shortcut_or_default(Action::Mute, OTHER), OTHER);
+        assert_eq!(s.shortcut_or_default(Action::OneTurn, OTHER), "");
+        s.choose_shortcut(Action::Mute, Some(String::new()), OTHER);
+        assert_eq!(
+            (s.shortcut(Action::Mute), s.shortcut_or_default(Action::Mute, OTHER).as_str()),
+            (Some(""), ""),
+            "cleared is a choice"
+        );
+        s.choose_shortcut(Action::Mute, None, OTHER);
+        assert_eq!(s.shortcut(Action::Mute), None, "restored");
+        s.choose_shortcut(Action::OneTurn, Some("RightShift:double".into()), OTHER);
+        assert_eq!(s.shortcut(Action::OneTurn), Some("RightShift:double"));
+        s.choose_shortcut(Action::OneTurn, Some(String::new()), OTHER);
+        assert_eq!(s.shortcut(Action::OneTurn), None, "clearing what has no default is being on the default");
     }
 }
