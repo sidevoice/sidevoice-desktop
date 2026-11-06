@@ -38,7 +38,7 @@ the app holds the session it triggers the double press's action too. Outside a c
 The phones answer the same two presses with the same choices (below, and docs/MOBILE.md → "The bridge", `shortcuts`).
 
 On a phone the same rule holds for the native commands: play unmutes, pause toggles, and the single press does what the person chose
-(`mobile/tauri/src/headset.rs`, kept in `headset.json`). On Android a headset's single press arrives as pause while the session
+(`mobile/tauri/src/bridge.rs` (`headset`), kept in `headset.json`). On Android a headset's single press arrives as pause while the session
 plays (the microphone is open) and as play while it is paused (muted). The double press is the next-track command too:
 
 - **iOS** registers `nextTrackCommand` (`apple.rs`, `Os::NEXT_TRACK_ON_DEMAND`) only while the double press has an action

@@ -999,7 +999,7 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
 `host.shortcuts` is there on iOS and Android with `get`, `subscribe` and `setHeadset`, and no `set`, `restore`, `request` or `record`: a phone
 has no key to set. `get()` answers `{shortcuts: {}, permission: null, inApp: false, headset: {press, doublePress, outsideCall: "leave"}}`:
 `press` is `mute` and `doublePress` `none` until chosen, as on the desktop (the same `HeadsetPress` values and defaults,
-`sidevoice-shared-headset`). The choice is kept in the app's own files (`headset.json`, mobile `src/headset.rs`), the way the desktop keeps
+`sidevoice-shared-headset`). The choice is kept in the app's own files (`headset.json`, mobile `src/bridge.rs`, `headset`), the way the desktop keeps
 its settings, and acts through the room's commands (`toggle-mute`, `one-turn`, `skip-reply`). It is delivered as the desktop's is: the single
 press is the system's play/pause (and the AirPods stem), the double press the system's next track (docs/MEDIA_CONTROLS.md).
 

@@ -882,7 +882,7 @@ impl Room {
         // the Live Activity, which is a second card on the lock screen that the person asked for by choosing one.
         let wanted = self
             .app
-            .try_state::<crate::headset::HeadsetSettings>()
+            .try_state::<crate::bridge::headset::HeadsetSettings>()
             .is_some_and(|settings| settings.double_press_wanted(false));
         let state = if self.holding.is_some() && self.system && call_replaces_media_controls(true) {
             CallState {

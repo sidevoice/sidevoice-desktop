@@ -10,10 +10,10 @@
 #[cfg(test)]
 mod acl_tests;
 mod bridge;
+use bridge::headset;
 mod call;
 mod developer_options;
 mod downloads;
-mod headset;
 mod hold;
 mod i18n;
 pub mod pairings;
