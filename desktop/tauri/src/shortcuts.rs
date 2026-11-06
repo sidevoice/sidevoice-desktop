@@ -167,8 +167,8 @@ fn apply_locked(app: &AppHandle, runtime: &Shortcuts) {
             PermissionState::NotAsked
         },
     });
-    let headset =
-        sidevoice_shared_tauri::platform::media_controls::available().then(|| Headset::new(settings.headset_press));
+    let headset = sidevoice_shared_tauri::platform::media_controls::available()
+        .then(|| Headset::new(settings.headset_press, settings.headset_double_press));
 
     // What each does: a binding that did not change keeps its machine (a hold in progress goes on), one that did starts over.
     let mut let_go = false;
@@ -308,8 +308,8 @@ fn watch_for_permission(app: &AppHandle) {
     });
 }
 
-/// `host.shortcuts.setHeadset`: what a headset's single press does. The path the app has (the system's play/pause) cannot
-/// send a double press, and the app leaves a headset's buttons to other apps outside a call, so those are refused.
+/// `host.shortcuts.setHeadset`: what a headset's single press and double press do. The app leaves a headset's buttons to
+/// other apps outside a call, so `outsideCall: "join"` is refused.
 pub(crate) fn set_headset(
     app: &AppHandle,
     press: Option<&str>,
@@ -319,18 +319,31 @@ pub(crate) fn set_headset(
     if !sidevoice_shared_tauri::platform::media_controls::available() {
         return Err(refusal("unsupported", "this system has no headset path the app owns"));
     }
-    if double.is_some_and(|value| !value.is_null()) {
-        return Err(refusal("bad_request", "this headset path cannot send a double press"));
-    }
+    let double = match double.filter(|value| !value.is_null()) {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .and_then(HeadsetPress::parse)
+                .ok_or_else(|| refusal("bad_request", format!("no such press: {value}")))?,
+        ),
+    };
     if outside.is_some_and(|value| value != "leave") {
         return Err(refusal("bad_request", "the app leaves a headset's buttons to other apps outside a call"));
     }
-    if let Some(press) = press {
-        let press =
-            HeadsetPress::parse(press).ok_or_else(|| refusal("bad_request", format!("no such press: {press}")))?;
+    let press = press
+        .map(|press| {
+            HeadsetPress::parse(press).ok_or_else(|| refusal("bad_request", format!("no such press: {press}")))
+        })
+        .transpose()?;
+    if press.is_some() || double.is_some() {
         let runtime = app.state::<Shortcuts>();
         let _one_at_a_time = runtime.change.lock().unwrap();
-        crate::change_settings(app, |s| s.headset_press = press).map_err(|e| refusal("internal", e))?;
+        crate::change_settings(app, |s| {
+            s.headset_press = press.unwrap_or(s.headset_press);
+            s.headset_double_press = double.unwrap_or(s.headset_double_press);
+        })
+        .map_err(|e| refusal("internal", e))?;
         apply_locked(app, &runtime);
     }
     Ok(status(app))
@@ -338,7 +351,16 @@ pub(crate) fn set_headset(
 
 /// The headset's single press (the system's play/pause, or the AirPods gesture) does what the person chose.
 pub(crate) fn headset_press(app: &AppHandle) {
-    match stored(app).headset_press {
+    headset_does(app, stored(app).headset_press);
+}
+
+/// The headset's double press (the system's next track) does what the person chose.
+pub(crate) fn headset_double_press(app: &AppHandle) {
+    headset_does(app, stored(app).headset_double_press);
+}
+
+fn headset_does(app: &AppHandle, press: HeadsetPress) {
+    match press {
         HeadsetPress::Mute => crate::send(app, Command::ToggleMute),
         HeadsetPress::OneTurn => crate::send(app, Command::OneTurn),
         HeadsetPress::Skip => crate::send(app, Command::SkipReply),

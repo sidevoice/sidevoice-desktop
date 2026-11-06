@@ -34,6 +34,8 @@ pub struct CallState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaCommand {
     ToggleMute,
+    /// macOS's `nextTrackCommand`: what a headset's or AirPods' double press of play/pause arrives as. Only macOS sends it.
+    NextTrack,
 }
 
 /// Delivers a media action to the call. Implementations preserve main-thread dispatch.

@@ -485,6 +485,8 @@ pub fn run() {
                 Arc::new(move |command| match command {
                     // A headset's single press (and the AirPods gesture): what the person chose for it.
                     MediaCommand::ToggleMute => shortcuts::headset_press(&media_app),
+                    // A headset's double press arrives as the next-track command.
+                    MediaCommand::NextTrack => shortcuts::headset_double_press(&media_app),
                 }),
             );
             // The model root is shared per OS user on this machine (docs/ENGINES.md).

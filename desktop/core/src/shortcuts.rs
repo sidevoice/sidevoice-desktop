@@ -625,7 +625,7 @@ pub struct Permission {
     pub state: PermissionState,
 }
 
-/// What a headset's single press does, and the press it cannot send.
+/// What a headset's press does: the single press (play/pause) or the double press (the system's next track).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum HeadsetPress {
@@ -653,15 +653,16 @@ impl HeadsetPress {
 #[serde(rename_all = "camelCase")]
 pub struct Headset {
     pub press: HeadsetPress,
-    /// `null`: this path (the system's play/pause) cannot send a double press.
+    /// A double press arrives as the system's next-track command, which the app answers while it holds the media session.
+    /// Always there where the app owns the headset; `Option` is the page's `null`: a path that cannot send one.
     pub double_press: Option<HeadsetPress>,
     /// The headset only acts in a call: the app leaves the buttons to other apps outside one.
     pub outside_call: &'static str,
 }
 
 impl Headset {
-    pub fn new(press: HeadsetPress) -> Headset {
-        Headset { press, double_press: None, outside_call: "leave" }
+    pub fn new(press: HeadsetPress, double_press: HeadsetPress) -> Headset {
+        Headset { press, double_press: Some(double_press), outside_call: "leave" }
     }
 }
 
@@ -854,10 +855,76 @@ impl Recorder {
 
 const KEY_ESCAPE: u16 = 53;
 
-/// The key's name in an accelerator, from a macOS virtual key code and the character it types: the keys with no character of
-/// their own by code, the others by their character.
+/// The key's name in an accelerator, from a macOS virtual key code: the key itself, never the character it types. A
+/// character does not say which key it came from (keypad `-` and the main row's are both `-`, `+` is the accelerator's own
+/// separator) and moves with the layout; the code does not. Only a key this table has no code for (an ISO section key, say)
+/// is named by its character, when that is one the accelerator can carry.
 fn key_name(code: u16, character: Option<&str>) -> Option<String> {
     let named = match code {
+        0 => "A",
+        11 => "B",
+        8 => "C",
+        2 => "D",
+        14 => "E",
+        3 => "F",
+        5 => "G",
+        4 => "H",
+        34 => "I",
+        38 => "J",
+        40 => "K",
+        37 => "L",
+        46 => "M",
+        45 => "N",
+        31 => "O",
+        35 => "P",
+        12 => "Q",
+        15 => "R",
+        1 => "S",
+        17 => "T",
+        32 => "U",
+        9 => "V",
+        13 => "W",
+        7 => "X",
+        16 => "Y",
+        6 => "Z",
+        29 => "0",
+        18 => "1",
+        19 => "2",
+        20 => "3",
+        21 => "4",
+        23 => "5",
+        22 => "6",
+        26 => "7",
+        28 => "8",
+        25 => "9",
+        27 => "Minus",
+        24 => "Equal",
+        43 => "Comma",
+        47 => "Period",
+        44 => "Slash",
+        42 => "Backslash",
+        41 => "Semicolon",
+        39 => "Quote",
+        33 => "BracketLeft",
+        30 => "BracketRight",
+        50 => "Backquote",
+        69 => "NumpadAdd",
+        78 => "NumpadSubtract",
+        67 => "NumpadMultiply",
+        75 => "NumpadDivide",
+        65 => "NumpadDecimal",
+        81 => "NumpadEqual",
+        76 => "NumpadEnter",
+        82 => "Numpad0",
+        83 => "Numpad1",
+        84 => "Numpad2",
+        85 => "Numpad3",
+        86 => "Numpad4",
+        87 => "Numpad5",
+        88 => "Numpad6",
+        89 => "Numpad7",
+        91 => "Numpad8",
+        92 => "Numpad9",
         122 => "F1",
         120 => "F2",
         99 => "F3",
@@ -879,7 +946,7 @@ fn key_name(code: u16, character: Option<&str>) -> Option<String> {
         80 => "F19",
         90 => "F20",
         49 => "Space",
-        36 | 76 => "Enter",
+        36 => "Enter",
         48 => "Tab",
         51 => "Backspace",
         117 => "Delete",
@@ -898,7 +965,8 @@ fn key_name(code: u16, character: Option<&str>) -> Option<String> {
     }
     let mut chars = character?.chars();
     let first = chars.next()?;
-    (chars.next().is_none() && !first.is_control()).then(|| first.to_uppercase().collect())
+    (chars.next().is_none() && !first.is_control() && !matches!(first, '+' | ':'))
+        .then(|| first.to_uppercase().collect())
 }
 
 #[cfg(test)]
@@ -1256,6 +1324,62 @@ mod tests {
         );
     }
 
+    /// The four keypad operators a mechanical keyboard sends with Cmd+Alt (macOS key codes 69, 78, 67 and 75): four
+    /// shortcuts, each registered as its own physical key, none of them reported as another's duplicate.
+    #[test]
+    fn the_keypad_operators_are_four_different_shortcuts() {
+        use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+        let cmd_alt = mods(true, false, true, false);
+        let operators = [
+            (69, "+", "Cmd+Alt+NumpadAdd", Code::NumpadAdd),
+            (78, "-", "Cmd+Alt+NumpadSubtract", Code::NumpadSubtract),
+            (67, "*", "Cmd+Alt+NumpadMultiply", Code::NumpadMultiply),
+            (75, "/", "Cmd+Alt+NumpadDivide", Code::NumpadDivide),
+        ];
+        let mut recorded = Vec::new();
+        for (code, character, accelerator, key) in operators {
+            let done = Recorder::new(Action::Mute).hear(self::key(code, character, cmd_alt), at(0));
+            assert_eq!(done, Recorded::Done(Some(accelerator.into())), "{character}");
+            let hotkey: HotKey = accelerator.parse().unwrap();
+            assert_eq!((hotkey.mods, hotkey.key), (Modifiers::SUPER | Modifiers::ALT, key), "{accelerator}");
+            let parsed = parse(accelerator).unwrap().unwrap();
+            assert_eq!(parsed.accelerator(), accelerator, "parses back");
+            assert_eq!(parsed.hot_key().as_deref(), Some(accelerator));
+            assert_eq!(label(accelerator, true, "en"), format!("⌘⌥Num {character}"));
+            recorded.push(accelerator);
+        }
+        for (i, a) in recorded.iter().enumerate() {
+            for (j, b) in recorded.iter().enumerate() {
+                assert_eq!(settings::same_shortcut(a, b), i == j, "{a} / {b}");
+            }
+        }
+        // The main row's keys with the same characters are other keys.
+        for (code, character, accelerator) in
+            [(24, "=", "Cmd+Alt+Equal"), (27, "-", "Cmd+Alt+Minus"), (44, "/", "Cmd+Alt+Slash")]
+        {
+            let done = Recorder::new(Action::Mute).hear(self::key(code, character, cmd_alt), at(0));
+            assert_eq!(done, Recorded::Done(Some(accelerator.into())));
+            assert!(!recorded.contains(&accelerator));
+        }
+    }
+
+    /// A key is named by its code, whatever the layout types on it: a Spanish layout's `+` is on BracketRight.
+    #[test]
+    fn a_key_is_named_by_its_code_and_not_by_its_character() {
+        assert_eq!(key_name(30, Some("+")).as_deref(), Some("BracketRight"));
+        assert_eq!(key_name(46, Some("ñ")).as_deref(), Some("M"));
+        assert_eq!(key_name(41, Some("ñ")).as_deref(), Some("Semicolon"));
+        assert_eq!(key_name(82, Some("0")).as_deref(), Some("Numpad0"));
+        assert_eq!(key_name(29, Some("0")).as_deref(), Some("0"));
+        assert_eq!(key_name(76, Some("\r")).as_deref(), Some("NumpadEnter"));
+        assert_eq!(key_name(36, Some("\r")).as_deref(), Some("Enter"));
+        // A key with no code here is named by its character, but never by one the accelerator cannot carry.
+        assert_eq!(key_name(10, Some("<")).as_deref(), Some("<"));
+        assert_eq!(key_name(10, Some("+")), None);
+        assert_eq!(key_name(10, Some(":")), None);
+        assert_eq!(key_name(10, None), None);
+    }
+
     #[test]
     fn the_recorder_captures_a_lone_key_the_way_its_action_allows() {
         let down = |key| Heard::Modifier { key, down: true };
@@ -1329,7 +1453,7 @@ mod tests {
         let status = Status {
             shortcuts: Shortcuts { mute, ..Shortcuts::default() },
             permission: Some(Permission { kind: PermissionKind::InputMonitoring, state: PermissionState::NotAsked }),
-            headset: Some(Headset::new(HeadsetPress::OneTurn)),
+            headset: Some(Headset::new(HeadsetPress::OneTurn, HeadsetPress::Skip)),
         };
         assert_eq!(
             serde_json::to_value(status).unwrap(),
@@ -1340,7 +1464,7 @@ mod tests {
                     "oneTurn": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "managedBySystem": false},
                 },
                 "permission": {"kind": "inputMonitoring", "state": "notAsked"},
-                "headset": {"press": "oneTurn", "doublePress": null, "outsideCall": "leave"},
+                "headset": {"press": "oneTurn", "doublePress": "skip", "outsideCall": "leave"},
             })
         );
     }

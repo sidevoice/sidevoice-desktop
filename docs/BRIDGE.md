@@ -871,7 +871,7 @@ interface GlobalShortcut {
 }
 interface HeadsetStatus {
   press: "mute" | "oneTurn" | "skip" | "none";
-  doublePress: "mute" | "oneTurn" | "skip" | "none" | null;   // null: this path cannot send one (always, today)
+  doublePress: "mute" | "oneTurn" | "skip" | "none" | null;   // the system's next track; null: this path cannot send one (not on macOS)
   outsideCall: "leave" | "join";                               // "leave" (always, today)
 }
 interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
@@ -883,8 +883,11 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
 
 - **An accelerator** is keys pressed together, or a single key with how it is pressed.
   - Keys together are the web's form as it is: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`,
-    `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key as the browser names it (`event.key`: `M`, `7`, `F5`,
-    `Space`, `ArrowUp`, `;`, `+`), or an F-key on its own (`F9`). With Shift, a character Shift makes on a US keyboard is read
+    `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key, named by the physical key and never by the character it types: `M`, `7`, `F5`, `Space`, `ArrowUp`, the
+    main row's punctuation (`Minus`, `Equal`, `Comma`, `Period`, `Slash`, `Backslash`, `Semicolon`, `Quote`, `BracketLeft`, `BracketRight`,
+    `Backquote`) and the keypad (`NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`, `NumpadEqual`,
+    `NumpadEnter`, `Numpad0` to `Numpad9`): the names `global-hotkey` registers, so the keypad's `-` and the main row's are two
+    keys and `+` is never a key. Written the old way (`;`, `-`, `+` or `*` alone for the keypad's) they are read as those keys, or an F-key on its own (`F9`). With Shift, a character Shift makes on a US keyboard is read
     as its key (`Ctrl+Shift+?` is Ctrl+Shift+/, `Cmd+Shift++` is Cmd+Shift+=). The app keeps them in one form, modifiers in the order
     `Cmd+Ctrl+Alt+Shift` and the key's first letter upper case (`shift+cmd+m` → `Cmd+Shift+M`; core
     `settings::normalize_shortcut`). `Cmd` is the Command key (Super elsewhere). A key with no modifier that is not an F-key,
@@ -909,11 +912,11 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
   lone Fn or modifier as the action allows: hold to talk when it is let go, mute once, say one thing once or twice),
   or `null` for Escape or no key for a minute. The keys are swallowed meanwhile, and the app's hot keys are let go of so the
   chord being recorded does not fire what it is bound to. A second `record` ends the first with `null`.
-- `setHeadset({press})` is the one writer of the headset's choice, kept with the app's settings. It is offered where the
+- `setHeadset({press, doublePress})` is the one writer of the headset's choice, kept with the app's settings. It is offered where the
   app owns the headset's buttons (macOS: `host.presence`): the single press (the system's play/pause, and the AirPods gesture)
-  does what it says. `doublePress` and `outsideCall: "join"` are refused `bad_request`: the path sends no double press, and the app
+  and the double press (the system's next track) do what they say; the double press is `none` until chosen. `outsideCall: "join"` is refused `bad_request`: the app
   leaves the buttons to other apps outside a call.
-- Kept with the app's settings (`muteShortcut`, `holdToTalkShortcut`, `oneTurnShortcut`, `headsetPress`), set only from the
+- Kept with the app's settings (`muteShortcut`, `holdToTalkShortcut`, `oneTurnShortcut`, `headsetPress`, `headsetDoublePress`), set only from the
   page. A person still on the old mute default (Ctrl+Alt+M) is moved once to this system's (core
   `shortcuts::migrated_mute`).
 - App → page: `window.__sidevoiceHost.shortcutsEvent(status)` (`webview.eval`) whenever the app registers a shortcut (set from the

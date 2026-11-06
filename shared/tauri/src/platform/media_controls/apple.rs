@@ -7,6 +7,9 @@
 //!   microphone: play → unmute, pause → toggle (a click may arrive as pause while muted), toggle → toggle. On iOS the
 //!   same commands come from the lock screen and Control Center, where the call is shown, and the app is the Now Playing
 //!   app while its audio session is active (the mobile app's host activates it).
+//! - **Double press**: a headset's or AirPods' double press of play/pause arrives as `nextTrackCommand`, registered on macOS
+//!   only (`Os::NEXT_TRACK`), under the same condition as the single press: while the app shows the call as Now Playing.
+//!   The app sends it as `MediaCommand::NextTrack`; a keyboard's next-track key arrives the same way.
 //! - **Extra, AirPods / Beats** (macOS 14+, iOS 17+): the stem-press mute gesture arrives through
 //!   `AVAudioApplication.setInputMuteStateChangeHandler`; the app keeps that state in step with its own mute.
 //! - No CallKit: neither needs it.
@@ -37,6 +40,10 @@ pub(super) trait Os {
     /// Says whether the app plays (`MPNowPlayingInfoCenter.playbackState`). Only macOS reads it, and requires it whenever
     /// playback starts or stops; iOS takes it from the app's audio session.
     fn set_playback_state(_center: &MPNowPlayingInfoCenter, _state: MPNowPlayingPlaybackState) {}
+
+    /// Whether the next-track command is registered too: a headset's or AirPods' double press of play/pause arrives as it
+    /// (macOS). iOS leaves it alone, so that the lock screen shows no next-track button. False by default.
+    const NEXT_TRACK: bool = false;
 
     /// Starts hearing the AirPods / Beats mute gesture, each one handed to [`heard`]; whether it does. Called on the main
     /// thread, with `AVAudioApplication` present. None by default.
@@ -74,6 +81,15 @@ fn on_media_command(app: &AppHandle, command: &str) {
     let headset = app.state::<Headset>();
     let snapshot = headset.call.lock().unwrap().clone();
     let in_call = snapshot.ready && snapshot.joined;
+    if command == "next" {
+        if in_call {
+            (headset.sink)(MediaCommand::NextTrack);
+            headset.record("remote:next", "double press");
+        } else {
+            headset.record("remote:next", "sin llamada: solo registrado");
+        }
+        return;
+    }
     let action = if in_call { media_command_action(command, snapshot.mic_enabled) } else { None };
     match action {
         Some(what) => {
@@ -159,12 +175,22 @@ fn set_muted(shared: &AVAudioApplication, muted: bool) {
     }
 }
 
-fn commands() -> [(Retained<MPRemoteCommand>, &'static str); 3] {
+/// The commands the app answers: the single press's, and on macOS the double press's (`nextTrackCommand`).
+fn commands<N: Os>() -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
     // SAFETY: the shared command center exists for the process's lifetime.
     let center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };
-    unsafe {
-        [(center.playCommand(), "play"), (center.pauseCommand(), "pause"), (center.togglePlayPauseCommand(), "toggle")]
+    let mut answered = unsafe {
+        vec![
+            (center.playCommand(), "play"),
+            (center.pauseCommand(), "pause"),
+            (center.togglePlayPauseCommand(), "toggle"),
+        ]
+    };
+    if N::NEXT_TRACK {
+        // SAFETY: as above.
+        answered.push((unsafe { center.nextTrackCommand() }, "next"));
     }
+    answered
 }
 
 fn gesture_api() -> bool {
@@ -236,8 +262,8 @@ fn census(when: &str) {
 }
 
 /// Registers the handlers of the commands, enabled, once.
-fn register(app: &AppHandle) {
-    for (command, name) in commands() {
+fn register<N: Os>(app: &AppHandle) {
+    for (command, name) in commands::<N>() {
         let app = app.clone();
         let handler = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
             on_media_command(&app, name);
@@ -288,9 +314,9 @@ fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool,
         }
     }
     if now_playing && !*REGISTERED.lock().unwrap() {
-        register(app);
+        register::<N>(app);
         *REGISTERED.lock().unwrap() = true;
-        for (command, _) in commands() {
+        for (command, _) in commands::<N>() {
             // SAFETY: main thread; plain property set.
             unsafe { command.setEnabled(true) };
         }

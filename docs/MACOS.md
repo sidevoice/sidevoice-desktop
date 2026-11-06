@@ -52,7 +52,7 @@ What macOS offers a plain app, checked against Apple's documentation (2026-09-30
 
 | Mechanism | What it is | Availability | Used |
 |---|---|---|---|
-| `MPRemoteCommandCenter` + `MPNowPlayingInfoCenter` | Play/pause from **any** headset (Bluetooth AVRCP, wired, media keys) goes to the "Now Playing" app. On macOS the app must set `playbackState` whenever playback starts or stops, "otherwise remote control functionality may not work as expected". | macOS 10.12.2+ | **Yes, primary.** During a call the app is Now Playing; play → unmute, pause/toggle → toggle (the web interface's rule). |
+| `MPRemoteCommandCenter` + `MPNowPlayingInfoCenter` | Play/pause from **any** headset (Bluetooth AVRCP, wired, media keys) goes to the "Now Playing" app. On macOS the app must set `playbackState` whenever playback starts or stops, "otherwise remote control functionality may not work as expected". | macOS 10.12.2+ | **Yes, primary.** During a call the app is Now Playing; play → unmute, pause/toggle → toggle (the web interface's rule); next track (a headset's double press) → what the person chose for the double press, nothing by default. |
 | `AVAudioApplication.setInputMuteStateChangeHandler` | The system calls it "due to a Bluetooth audio accessory gesture (certain AirPods / Beats headphones)". macOS only. | macOS 14+ | **Yes, extra.** Installed during a call; the app keeps `isInputMuted` in step with its own mute. |
 | CallKit | System calling UI for VoIP apps. | macOS 13+ (per Apple's metadata) | **No.** Neither mechanism above needs it on macOS. |
 | Mic-in-use indicator | The orange dot in the menu bar. | always | Nothing to do: macOS shows it by itself whenever the app captures. |

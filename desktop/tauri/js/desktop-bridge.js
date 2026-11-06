@@ -286,7 +286,7 @@
         permission === undefined || typeof permission === "string"
           ? call("global_shortcuts", { action: "request", ...(permission === undefined ? {} : { permission }) })
           : refusal("bad_request", "request(permission) takes a string."),
-      /** What a headset's press does: `{press: "mute" | "oneTurn" | "skip" | "none"}`. */
+      /** What a headset's presses do: `{press?, doublePress?}`, each `"mute" | "oneTurn" | "skip" | "none"`. */
       setHeadset: (change) =>
         change && typeof change === "object"
           ? call("global_shortcuts", { action: "headset", headset: change })

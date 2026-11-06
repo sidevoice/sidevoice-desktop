@@ -343,6 +343,8 @@ fn run_app() {
                             room.toggle_mute();
                         }
                     }
+                    // Sent by macOS only: the phone's session does not register the next-track command.
+                    MediaCommand::NextTrack => {}
                 }),
             );
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
