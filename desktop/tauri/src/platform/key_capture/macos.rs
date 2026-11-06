@@ -4,6 +4,8 @@
 
 use super::{CaptureSink, Os, Sink};
 use block2::RcBlock;
+use core_foundation::base::TCFType;
+use core_foundation::mach_port::CFMachPortRef;
 use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult};
 use core_graphics::event::{
     CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType, CallbackResult, EventField,
@@ -22,6 +24,12 @@ use tauri::{AppHandle, Runtime};
 extern "C" {
     fn CGPreflightListenEventAccess() -> bool;
     fn CGRequestListenEventAccess() -> bool;
+    fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFMachPortInvalidate(port: CFMachPortRef);
 }
 
 pub(super) struct Native;
@@ -45,9 +53,14 @@ impl Os for Native {
     fn listen(sink: Sink) -> Option<Box<dyn Send>> {
         let stop = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
         let flag = stop.clone();
-        std::thread::Builder::new().name("single-key-listener".into()).spawn(move || run(sink, flag, ready_tx)).ok()?;
-        ready_rx.recv().ok()?.then(|| Box::new(Stop(stop)) as Box<dyn Send>)
+        std::thread::Builder::new()
+            .name("single-key-listener".into())
+            .spawn(move || run(sink, flag, ready_tx, done_tx))
+            .ok()?;
+        let run_loop = ready_rx.recv().ok()??;
+        Some(Box::new(Stop { stop, run_loop, done }))
     }
 
     fn capture<R: Runtime>(app: &AppHandle<R>, sink: CaptureSink) -> Option<Box<dyn Send>> {
@@ -61,17 +74,29 @@ impl Os for Native {
     }
 }
 
-/// Stops the listener's thread, which then lets go of the tap.
-struct Stop(Arc<AtomicBool>);
+/// Stops the listener: the tap is off, invalidated and its thread gone when this is dropped (clearing the last single key
+/// must not leave the keyboard listened to for the rest of an iteration of the run loop).
+struct Stop {
+    stop: Arc<AtomicBool>,
+    /// The listener thread's run loop, to wake it at once.
+    run_loop: CFRunLoop,
+    /// Tells that the thread has torn the tap down.
+    done: mpsc::Receiver<()>,
+}
 
 impl Drop for Stop {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
+        // `CFRunLoopStop` may be called from any thread.
+        self.run_loop.stop();
+        // Bounded: a sink stuck in a callback must not hold the caller for good.
+        let _ = self.done.recv_timeout(Duration::from_secs(2));
     }
 }
 
-/// The listener's thread: the tap, on this thread's run loop, until told to stop. Whether it started goes to `ready`.
-fn run(sink: Sink, stop: Arc<AtomicBool>, ready: mpsc::Sender<bool>) {
+/// The listener's thread: the tap, on this thread's run loop, until told to stop, then torn down here (disabled,
+/// invalidated, its source removed) before `done` is told. Its run loop, once started, goes to `ready` (`None`: it could not).
+fn run(sink: Sink, stop: Arc<AtomicBool>, ready: mpsc::Sender<Option<CFRunLoop>>, done: mpsc::Sender<()>) {
     let disabled = Arc::new(AtomicBool::new(false));
     let (was_disabled, stopped) = (disabled.clone(), stop.clone());
     let tap = CGEventTap::new(
@@ -102,18 +127,18 @@ fn run(sink: Sink, stop: Arc<AtomicBool>, ready: mpsc::Sender<bool>) {
         },
     );
     let Ok(tap) = tap else {
-        let _ = ready.send(false);
+        let _ = ready.send(None);
         return;
     };
     let Ok(source) = tap.mach_port().create_runloop_source(0) else {
-        let _ = ready.send(false);
+        let _ = ready.send(None);
         return;
     };
     // SAFETY: the run loop mode constants are the system's own, valid for the life of the process.
     let (common, default) = unsafe { (kCFRunLoopCommonModes, kCFRunLoopDefaultMode) };
     CFRunLoop::get_current().add_source(&source, common);
     tap.enable();
-    let _ = ready.send(true);
+    let _ = ready.send(Some(CFRunLoop::get_current()));
     while !stop.load(Ordering::SeqCst) {
         if CFRunLoop::run_in_mode(default, Duration::from_secs(1), false) == CFRunLoopRunResult::Finished {
             std::thread::sleep(Duration::from_millis(100));
@@ -122,7 +147,14 @@ fn run(sink: Sink, stop: Arc<AtomicBool>, ready: mpsc::Sender<bool>) {
             tap.enable();
         }
     }
+    // SAFETY: the port is the tap's own, alive until `tap` drops below; both calls are safe on any thread.
+    unsafe {
+        CGEventTapEnable(tap.mach_port().as_concrete_TypeRef(), false);
+        CFMachPortInvalidate(tap.mach_port().as_concrete_TypeRef());
+    }
     CFRunLoop::get_current().remove_source(&source, common);
+    drop(tap);
+    let _ = done.send(());
 }
 
 /// A local monitor of the app's own keyboard events: the token to take it off again.

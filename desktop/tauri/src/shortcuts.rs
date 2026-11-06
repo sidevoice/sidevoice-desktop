@@ -108,16 +108,14 @@ fn apply_locked(app: &AppHandle, runtime: &Shortcuts) {
     let settings = stored(app);
     let language = app.state::<AppState>().language;
     let parsed: [Option<Parsed>; 3] = Action::ALL.map(|action| parse_kept(action, setting(&settings, action)));
-    // The same single key and way of pressing it, set for two actions: the first holds it. (Hot keys are told apart by the
-    // diff itself, which sees the same keys however they are written.)
-    let duplicate: [bool; 3] = std::array::from_fn(|i| {
-        parsed[i]
-            .as_ref()
-            .is_some_and(|p| p.listened().is_some() && parsed[..i].iter().flatten().any(|earlier| earlier == p))
-    });
+    // The same physical single key, set for two actions in any way of pressing it: the first holds it. (Hot keys are told
+    // apart by the diff itself, which sees the same keys however they are written.)
+    let duplicate = shortcuts::shared_keys(&parsed);
     let wanted: [Option<String>; 3] =
         std::array::from_fn(|i| if duplicate[i] { None } else { parsed[i].as_ref().and_then(Parsed::hot_key) });
     let taken = shortcut_access::replace(app, &mut runtime.held.lock().unwrap(), &wanted);
+    // What a refused single key is offered instead, as a refused hot key is.
+    let offered = if duplicate.contains(&true) { shortcut_access::alternatives(app, &wanted) } else { Vec::new() };
 
     // The listener: only while a single key that needs it is set and the system allows it (macOS: Input Monitoring, which is
     // asked for only on the person's Allow). Nothing is created, and nothing asked, while only combinations are set.
@@ -142,7 +140,7 @@ fn apply_locked(app: &AppHandle, runtime: &Shortcuts) {
         let i = action.index();
         let Some(binding) = &parsed[i] else { continue };
         let (state, alternatives) = if duplicate[i] {
-            (Registration::Refused, vec![])
+            (Registration::Refused, offered.clone())
         } else if binding.listened().is_some() {
             let state = if !key_capture::listens() {
                 Registration::Unavailable

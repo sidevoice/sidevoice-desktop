@@ -511,6 +511,27 @@ pub struct Taken {
 /// holds (checked against the systems' default lists: docs/SHORTCUTS.md).
 pub const ALTERNATIVES: [&str; 2] = ["Ctrl+Alt+Shift+M", "Ctrl+Alt+Shift+K"];
 
+/// What the app offers in place of `asked`: not what anything is asking for, and only what the system takes.
+pub fn alternatives_for<R: Registrar>(registrar: &mut R, wanted: &[Option<String>; 3], asked: &str) -> Vec<String> {
+    ALTERNATIVES
+        .into_iter()
+        .filter(|a| !settings::same_shortcut(a, asked))
+        .filter(|a| !wanted.iter().flatten().any(|w| settings::same_shortcut(w, a)))
+        .filter(|a| registrar.register(a) && registrar.unregister(a))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Which actions are refused for sharing a physical key a listener carries (Fn, a right-hand modifier) with an earlier
+/// action, whatever the trigger: routing sends a key's edges to every action bound to it, so `RightControl:tap` and
+/// `RightControl:double` would both act on one double tap. The first of [`Action::ALL`] owns the key.
+pub fn shared_keys(parsed: &[Option<Parsed>; 3]) -> [bool; 3] {
+    std::array::from_fn(|i| {
+        let Some(key) = parsed[i].as_ref().and_then(Parsed::listened) else { return false };
+        parsed[..i].iter().flatten().any(|earlier| earlier.listened() == Some(key))
+    })
+}
+
 /// Brings the system's hot keys to what `wanted` says, one entry per action: only what changed is touched (a diff, never
 /// everything off and on again), and what is asked is told how the system took it. `None` is an action with no hot key
 /// (none set, or a key a listener carries). `backend` is whether this session has hot keys at all.
@@ -570,13 +591,7 @@ pub fn reconcile<R: Registrar>(
             continue;
         }
         let asked = wanted[i].as_deref().unwrap_or_default();
-        let alternatives = ALTERNATIVES
-            .into_iter()
-            .filter(|a| !settings::same_shortcut(a, asked))
-            .filter(|a| !wanted.iter().flatten().any(|w| settings::same_shortcut(w, a)))
-            .filter(|a| registrar.register(a) && registrar.unregister(a))
-            .map(str::to_owned)
-            .collect();
+        let alternatives = alternatives_for(registrar, wanted, asked);
         taken[i] = Some(Taken { state: Registration::Refused, alternatives });
     }
     taken
@@ -1032,6 +1047,26 @@ mod tests {
         assert!(
             route(&bound("Ctrl+Alt+M", "", "F13:tap"), Listened::Other).is_empty(),
             "a hot key's action hears no keys"
+        );
+    }
+
+    #[test]
+    fn one_physical_key_serves_one_action_whatever_the_trigger() {
+        let bound = |mute: &str, hold: &str, one: &str| [mute, hold, one].map(|text| parse(text).unwrap());
+        // Mute on RightControl:tap and say one thing on RightControl:double would both act on one double tap.
+        let same = bound("RightControl:tap", "", "RightControl:double");
+        assert_eq!(shared_keys(&same), [false, false, true], "the first owns the key, the other is refused");
+        assert_eq!(shared_keys(&bound("Fn:hold", "", "Fn:tap")), [false, false, true]);
+        assert_eq!(shared_keys(&bound("RightAlt:tap", "RightAlt:hold", "RightAlt:double")), [false, true, true]);
+        // Other keys, combinations and F-keys (the registration diff sees those) are not this one's business.
+        assert_eq!(shared_keys(&bound("RightControl:tap", "Fn:hold", "RightAlt:double")), [false; 3]);
+        assert_eq!(shared_keys(&bound("Ctrl+Alt+M", "", "Ctrl+Alt+M")), [false; 3]);
+        assert_eq!(shared_keys(&bound("F13:tap", "", "F13:double")), [false; 3]);
+        // And the refused one is offered what the system takes, as a refused hot key is.
+        let mut fake = Fake::default();
+        assert_eq!(
+            alternatives_for(&mut fake, &wanted(None, None, None), ""),
+            ["Ctrl+Alt+Shift+M", "Ctrl+Alt+Shift+K"]
         );
     }
 
