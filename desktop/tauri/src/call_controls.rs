@@ -245,6 +245,7 @@ fn watch_view(app: AppHandle) {
             if closed(&app) {
                 return;
             }
+            watch_display(&app);
             let Some((now, shown, page)) = stage_in_view(&app) else { return };
             if was.replace(now).is_some_and(|before| before != now) {
                 debug(&format!("call-controls stage in view={now}: {shown:?} page={page:?}"));
@@ -252,6 +253,38 @@ fn watch_view(app: AppHandle) {
             }
         }
     });
+}
+
+/// Whether the display the card rests on is no longer what it was (its work area, its scale, its place on the desktop, or it
+/// is gone), which no window event Tauri forwards says reliably (a taskbar moved, a monitor plugged in): looked at with the
+/// stage, and the card placed again. Not while the person drags or resizes it, which place it themselves.
+fn watch_display(app: &AppHandle) {
+    let Some(card) = card(app) else { return };
+    let (key, before) = {
+        let inner = card.0.lock().unwrap();
+        if !inner.shown || inner.drag.is_some() || inner.resize.is_some() {
+            return;
+        }
+        match &inner.rest {
+            Some((display, _)) => (display.key.clone(), display.clone()),
+            None => return,
+        }
+    };
+    if !desktop_geometry::positions_available() {
+        return;
+    }
+    // Asked with the lock released (#170). The same display as `place` finds it by (its key, else the room's or the primary).
+    let Some(now) = desktop_geometry::display(app, crate::room_window(app).as_ref(), Some(&key), None) else { return };
+    if now != before {
+        debug(&format!("call-controls display changed: {} -> {}", before.key, now.key));
+        place(app);
+    }
+}
+
+/// The card's window moved to a monitor of another scale, or the scale itself changed (a window event of the platform): placed
+/// again at once, which tells the card its room there.
+pub fn scale_changed(app: &AppHandle) {
+    watch_display(app);
 }
 
 /// Shows or hides the card for the call as it is now, and tells it what changed. Called on every change of the call,
@@ -857,6 +890,23 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
                 let to = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
                 let decision = card.0.lock().unwrap().moves.advance();
                 move_when_latest(&app, to, decision);
+                // The room moves with the card: told again as it changes, so a balloon never waits for the drop to fit.
+                if let Some(display) = desktop_geometry::display(&app, crate::room_window(&app).as_ref(), None, Some(p))
+                {
+                    let patch = {
+                        let mut inner = card.0.lock().unwrap();
+                        let size = inner.size.unwrap_or(FIRST_SIZE);
+                        let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
+                        let room = logic::room_dragging(display.to_local(to), anchor, display.work);
+                        (inner.told_room != Some(room)).then(|| {
+                            inner.told_room = Some(room);
+                            serde_json::json!({ "room": room.json() })
+                        })
+                    };
+                    if let Some(patch) = patch {
+                        push(&app, patch);
+                    }
+                }
             }
         }
         DragPhase::End => {
