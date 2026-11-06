@@ -1574,7 +1574,7 @@ test("host.shortcuts and host.callControls are exactly the web's seams, host.mut
   const install = loadFactory();
   const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
   assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
-  assert.deepEqual(Object.keys(host.shortcuts).sort(), ["get", "request", "set", "setHeadset", "subscribe"], "no record where the app cannot capture a key");
+  assert.deepEqual(Object.keys(host.shortcuts).sort(), ["get", "request", "restore", "set", "setHeadset", "subscribe"], "no record where the app cannot capture a key");
   assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "endPreview", "preview", "resetPlace", "setAlwaysShown", "setCorner", "setEnabled", "setStageVisible", "settings"]);
   assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.shortcuts) && Object.isFrozen(host.callControls));
 });
@@ -1583,12 +1583,46 @@ test("host.shortcuts.record is there only where the app captures the next key it
   const install = loadFactory();
   const withCapture = (captures) => install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "⌘", captures).host.shortcuts;
   for (const captures of [false, undefined, "true", 1]) assert.ok(!("record" in withCapture(captures)), String(captures));
-  assert.deepEqual(Object.keys(withCapture(true)).sort(), ["get", "record", "request", "set", "setHeadset", "subscribe"]);
+  assert.deepEqual(Object.keys(withCapture(true)).sort(), ["get", "record", "request", "restore", "set", "setHeadset", "subscribe"]);
   const { win, calls } = settingsWindow({ global_shortcuts: ({ action }) => (action === "record" ? "Fn:hold" : undefined) });
   const { host } = install(win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "⌘", true);
   assert.equal(await host.shortcuts.record("holdToTalk"), "Fn:hold");
   await assert.rejects(host.shortcuts.record("nope"), (e) => e.key === "bad_request");
   assert.deepEqual(calls.filter(([cmd]) => cmd === "global_shortcuts").map(([, args]) => args), [{ action: "record", target: "holdToTalk" }]);
+});
+
+test("a key the recording ignores reaches the page's onHint, only while that recording is on", async () => {
+  const install = loadFactory();
+  let finish;
+  const { win } = settingsWindow({ global_shortcuts: ({ action }) => (action === "record" ? new Promise((resolve) => { finish = resolve; }) : undefined) });
+  const api = install(win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "⌘", true);
+  const heard = [];
+  const recording = api.host.shortcuts.record("mute", (hint) => heard.push(hint));
+  await new Promise((resolve) => setImmediate(resolve));
+  api.recordHint("leftModifier");
+  api.recordHint("loneModifier");
+  api.recordHint("somethingElse");
+  assert.deepEqual(heard, ["leftModifier", "loneModifier"], "only the hints the contract names");
+  finish("Ctrl+Alt+M");
+  assert.equal(await recording, "Ctrl+Alt+M");
+  api.recordHint("leftModifier");
+  assert.deepEqual(heard, ["leftModifier", "loneModifier"], "nothing after it ended");
+  api.recordHint("leftModifier"); // and with no recording at all
+  // A record without a callback, and one that fails, are fine and forget their callback.
+  const failing = settingsWindow({ global_shortcuts: () => Promise.reject({ key: "record_timeout", message: "no key" }) });
+  const other = install(failing.win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "⌘", true);
+  await assert.rejects(other.host.shortcuts.record("mute", (hint) => heard.push(hint)), (e) => e.key === "record_timeout");
+  other.recordHint("leftModifier");
+  assert.equal(heard.length, 2);
+});
+
+test("host.shortcuts.restore puts an action back on its default through the same command", async () => {
+  const install = loadFactory();
+  const { win, calls } = settingsWindow({ global_shortcuts: ({ action }) => (action === "restore" ? shortcutOf("Ctrl+Alt+Shift+M", "on") : undefined) });
+  const { host } = install(win, ORIGIN);
+  assert.equal((await host.shortcuts.restore("mute")).accelerator, "Ctrl+Alt+Shift+M");
+  await assert.rejects(host.shortcuts.restore("nope"), (e) => e.key === "bad_request");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "global_shortcuts").map(([, args]) => args), [{ action: "restore", target: "mute" }]);
 });
 
 test("host.shortcuts gets, sets, asks and sets the headset through the global_shortcuts command", async () => {

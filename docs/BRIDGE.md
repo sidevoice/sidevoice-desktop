@@ -584,6 +584,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `engine_unavailable` | — | the engine did not start with the app |
 | `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
 | `shortcut_invalid` | — | `host.shortcuts.set(action, accelerator)` or `host.muteShortcut.set(accelerator)` with one that is not a shortcut, or that the action cannot be done with (below) |
+| `record_timeout` | — | `host.shortcuts.record(action)` heard no key for 15 seconds |
 | `shortcut_unsupported` | — | `host.shortcuts.set(action, accelerator)` with a key this system cannot register as itself: the ISO `<>` key (`IntlBackslash`) everywhere, and `NumpadEqual` and `NumpadEnter` on Windows and Linux (Windows would register E and Enter in their place). The accelerator is not kept |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
@@ -858,11 +859,13 @@ type ShortcutAction = "mute" | "holdToTalk" | "oneTurn";   // oneTurn: "Say one 
 interface ShortcutsBridge {
   get(): Promise<ShortcutsStatus>;
   set(action: ShortcutAction, accelerator: string | null): Promise<GlobalShortcut>;   // null: none
+  restore?(action: ShortcutAction): Promise<GlobalShortcut>;              // back to this system's default, as if never chosen
   subscribe?(listener: (status: ShortcutsStatus) => void): () => void;
   request?(permission?: "inputMonitoring"): Promise<ShortcutsStatus>;     // the person's own Allow
   setHeadset?(change: Partial<HeadsetStatus>): Promise<ShortcutsStatus>;
-  record?(action: ShortcutAction): Promise<string | null>;               // only where the app captures keys itself
+  record?(action: ShortcutAction, onHint?: (hint: RecordHint) => void): Promise<string | null>;   // only where the app captures keys itself
 }
+type RecordHint = "leftModifier" | "loneModifier";   // why a key just pressed was not taken; the recording goes on
 interface ShortcutsStatus {
   shortcuts: Record<ShortcutAction, GlobalShortcut>;
   permission: { kind: "inputMonitoring"; state: "granted" | "notAsked" | "denied" } | null;
@@ -876,6 +879,11 @@ interface GlobalShortcut {
   voiceOver: boolean;           // macOS: VoiceOver is on and the shortcut holds Control and Option together
   layoutBound: boolean;         // Linux (X11): the key registers by the character the layout types on it, so under a non-US layout it may be another key, or none
   managedBySystem: boolean;     // always false here: the keys are the app's (a Wayland portal's would be true)
+  isDefault: boolean;           // never chosen (or restored): it follows this system's default, and moves with it
+  default: string | null;       // this system's default accelerator for the action; null: it has none
+  refusal: { reason: "duplicate"; action: ShortcutAction }   // state "refused": another Sidevoice action holds these keys
+         | { reason: "taken" }                               // ... or the system, or another app, does
+         | null;                                             // any other state
 }
 interface HeadsetStatus {
   press: "mute" | "oneTurn" | "skip" | "none";
@@ -911,22 +919,57 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
   (including native Wayland), or a single key the system gives the app no way to hear (Windows and Linux: Fn and the
   modifiers; F-keys work). `needsPermission` is a single key waiting for Input Monitoring. `off` is none set; a rejection
   changes nothing. The accelerator and label stay present, and disabling still returns `off`.
+- **Defaults are a state, not a value (`isDefault`, `default`, `restore`).** Every shortcut reports the default this system has for
+  it (`default`: mute ⌃⌥M on macOS and Ctrl+Alt+Shift+M elsewhere; hold to talk and say one thing have none, `null`) and whether
+  it is on that default (`isDefault`). A shortcut is on its default until a person chooses one: the app keeps that as its own
+  state, not as the keys it maps to, so a default that changes later moves only people who never chose. A key the person chose
+  is kept as itself and `isDefault` is `false`, even when it equals the default, until `restore(action)` puts the action back on
+  the default (`set(action, null)` on an action with no default is the same state: there, cleared and on the default are one thing).
+  `set` and `restore` answer the shortcut as `get` would. The choice of a separate `restore` over a value of `set` is that
+  nothing a person can type could ever mean "default". A host without `restore` or `isDefault` (an older app) reports none of
+  this, and the page falls back to the mute default it knew. The page keeps no table of defaults of its own for a host that reports
+  them, and no platform check for them.
+- **A refusal says what holds the keys (`refusal`).** `state: "refused"` comes with `refusal`: `{reason: "duplicate", action}` when the keys
+  are another Sidevoice action's (the page says "Already used by <that action>"), `{reason: "taken"}` when the system or another app holds
+  them. Two actions may share one physical single key (`RightShift`, `F9`) when they use it in different ways; only the same key
+  with the same way (`RightShift:double` twice), or the same combination, is a duplicate, and the first of mute, hold to talk and say one
+  thing holds it.
+- **One key, several ways (timing).** When one physical single key carries more than one of hold, tap and double, the app tells them
+  apart by time, and only then; a key with one way acts as it always did.
+  - **hold**: down for 200 ms or more; hold to talk starts at that moment, the key still down, and ends when it comes up. A key whose only
+    way is hold starts at once.
+  - **tap**: let go within 200 ms (400 ms when the key has no hold) with no second press within 400 ms after. With a double on the same key,
+    the tap acts when those 400 ms go by; without one, when the key comes up.
+  - **double**: a second press within 400 ms of the first one's release, let go within the same limit as a tap; it acts when it comes up,
+    and nothing opened on the way (no flash of the microphone). A second press that goes on to be a hold is a hold.
+  - Another key pressed while this one is down makes it a modifier of that key: no way acts.
+  - At most one action per way of one key (`RightShift:hold` for hold to talk and `RightShift:double` for say one thing coexist; two
+    actions on `RightShift:double` do not).
 - `permission` is `null` unless a single key is set on a system that listens for them (macOS). With an F-key alone nothing
   is needed and it says `granted`; with Fn or a modifier it is the system's: `notAsked` until the person chooses Allow,
   `denied` after the system did not grant it. Asking is only ever `request()`; reading never asks, and nothing is asked
   at launch. The status is read again when `get` is called, so a permission turned on in System Settings is found.
-- `record(action)` is there only where the app can hear keys itself with no permission (macOS: a local monitor of the
+- `record(action, onHint?)` is there only where the app can hear keys itself with no permission (macOS: a local monitor of the
   app's own windows): it answers the accelerator of the next shortcut (a combination with a modifier or an F-key, or a
-  lone Fn or modifier as the action allows: hold to talk when it is let go, mute once, say one thing once or twice),
-  or `null` for Escape or no key for a minute. The keys are swallowed meanwhile, and the app's hot keys are let go of so the
+  lone Fn or right-hand modifier as the action allows: hold to talk when it is let go, mute once, say one thing once or twice),
+  or `null` for Escape. The keys are swallowed meanwhile, and the app's hot keys are let go of so the
   chord being recorded does not fire what it is bound to. A second `record` ends the first with `null`.
+  - It waits 15 seconds, then rejects `{key: "record_timeout"}`: the page shows it, it is not a cancel. Waiting holds none of the
+    app's worker threads, and a page that goes away ends the recording and gives the keys back.
+  - A key the recording cannot take is ignored and the recording goes on; `onHint` says why, once for each press, so the page can show a
+    warning: `leftModifier` (macOS: a left-hand ⌘ ⌥ ⌃ ⇧ pressed alone; only the right-hand ones work on their own) or `loneModifier`
+    (a modifier or Fn pressed alone where the system gives the app no way to hear one: Windows and Linux). Where there is no
+    `record`, the page records itself and ignores a lone modifier the same way, with the same two hints.
 - `setHeadset({press, doublePress})` is the one writer of the headset's choice, kept with the app's settings. It is offered where the
   app owns the headset's buttons (macOS: `host.presence`): the single press (the system's play/pause, and the AirPods gesture)
   and the double press (the system's next track) do what they say; the double press is `none` until chosen. `outsideCall: "join"` is refused `bad_request`: the app
   leaves the buttons to other apps outside a call.
 - Kept with the app's settings (`muteShortcut`, `holdToTalkShortcut`, `oneTurnShortcut`, `headsetPress`, `headsetDoublePress`), set only from the
-  page. A person still on the old mute default (Ctrl+Alt+M) is moved once to this system's (core
-  `shortcuts::migrated_mute`).
+  page. Each is absent while it is on its default, and the keys as a string (empty: cleared) once chosen. A person still on the old
+  mute default (Ctrl+Alt+M) is moved once to this system's (core `shortcuts::migrated_mute`); and once, a stored value equal to this
+  system's default becomes absent (`shortcutsDefaultsMigrated`; core `Settings::migrate_shortcuts`).
+- What the app suggests when keys are refused (`alternatives`): one for each action, common keys no system shortcut uses: Ctrl+Shift+F9 (mute),
+  Ctrl+Shift+F10 (say one thing) and Ctrl+Shift+F11 (hold to talk), the same on every system (docs/SHORTCUTS.md → "What the app offers instead").
 - App → page: `window.__sidevoiceHost.shortcutsEvent(status)` (`webview.eval`) whenever the app registers a shortcut (set from the
   page), to `shortcuts.subscribe`'s listeners and, with the mute one, `muteShortcut.subscribe`'s. `voiceOver` is read when
   asked: VoiceOver turned on or off tells no one.
@@ -937,7 +980,8 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
 - A hold with no release is let go by the app: after 60 seconds, after the machine sleeps, behind a locked screen (macOS
   and Windows), when the call ends or when its keys are changed; the page is told `hold-end`.
 - Commands behind it: `global_shortcuts {action, target?, accelerator?, permission?, headset?}`, `action` `get`, `set`
-  (with `target` the shortcut's action and `accelerator`), `request`, `headset` or `record` (with `target`).
+  (with `target` the shortcut's action and `accelerator`), `restore` (with `target`), `request`, `headset` or `record` (with `target`).
+  A hint of `record` comes back to the page as `window.__sidevoiceHost.recordHint(hint)`.
 - Everything the page is told is English or a key; the app's own texts for it (a right-hand key's "Right" in the card's tooltip)
   are core `i18n` keys.
 

@@ -158,10 +158,10 @@ pub fn replace<R: Runtime>(app: &AppHandle<R>, held: &mut Held, wanted: &[Option
     taken
 }
 
-/// What is offered in place of a key a listener carries that another action owns: the system's keys no action asks for.
-pub fn alternatives<R: Runtime>(app: &AppHandle<R>, wanted: &[Option<String>; 3]) -> Vec<String> {
+/// What is offered `action` in place of a single key another action owns: its own suggestion, if no action asks for it.
+pub fn alternatives<R: Runtime>(app: &AppHandle<R>, wanted: &[Option<String>; 3], action: Action) -> Vec<String> {
     match app.try_state::<GlobalShortcut<R>>() {
-        Some(plugin) => shortcuts::alternatives_for(&mut Plugin(&plugin), wanted, ""),
+        Some(plugin) => shortcuts::alternatives_for(&mut Plugin(&plugin), wanted, action, ""),
         None => Vec::new(),
     }
 }

@@ -10,6 +10,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// A tap, and the gap between the two taps of a double tap: under this.
 pub const TAP_WINDOW: Duration = Duration::from_millis(400);
+/// On a key that also carries a tap or a double, a press is a hold once it has lasted this long (and a tap is shorter).
+pub const HOLD_AFTER: Duration = Duration::from_millis(200);
 /// A hold with no release for this long is let go (the safety net: a missed `Released` must not leave the microphone open).
 pub const STUCK_HOLD: Duration = Duration::from_secs(60);
 /// How often a hold is looked at while it lasts.
@@ -23,6 +25,14 @@ pub const DEFAULT_MUTE_MACOS: &str = "Ctrl+Alt+M";
 pub const DEFAULT_MUTE_OTHER: &str = "Ctrl+Alt+Shift+M";
 /// The mute shortcut every build before this one registered on every system. A person still on it was never asked.
 pub const LEGACY_MUTE_SHORTCUT: &str = "Ctrl+Alt+M";
+
+/// The default of `action` on a system whose default mute shortcut is `mute`: hold to talk and say one thing have none (empty).
+pub fn default_of(action: Action, mute: &str) -> &str {
+    match action {
+        Action::Mute => mute,
+        Action::HoldToTalk | Action::OneTurn => "",
+    }
+}
 
 /// What a global shortcut does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -142,6 +152,19 @@ impl SingleKey {
         flags & mask != 0
     }
 
+    /// Whether the left-hand modifier a macOS virtual key code is (`kVK_Command`, `kVK_Shift`, `kVK_Option`, `kVK_Control`) is down
+    /// in the flags a `flagsChanged` event carries, by the device-side bit of that side; `None` for any other key.
+    pub fn left_macos_down(code: u16, flags: u64) -> Option<bool> {
+        let mask = match code {
+            55 => 0x0000_0008,
+            56 => 0x0000_0002,
+            58 => 0x0000_0020,
+            59 => 0x0000_0001,
+            _ => return None,
+        };
+        Some(flags & mask != 0)
+    }
+
     /// The single key a macOS virtual key code is, as a `flagsChanged` event reports it (`kVK_Function`, the right-hand modifiers).
     pub fn from_macos_modifier(code: u16) -> Option<SingleKey> {
         match code {
@@ -258,25 +281,20 @@ pub fn label(accelerator: &str, macos: bool, language: &str) -> String {
 // What a gesture does
 // ---------------------------------------------------------------------------------------------------------------------
 
-/// What one key does when it is pressed, whichever way it is bound.
+/// What a combination does when it is pressed. A single key is a [`KeyMachine]'s, not a gesture of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gesture {
     /// At once, when it goes down: a combination of mute or one turn.
     Press,
     Hold,
-    Tap,
-    Double,
 }
 
-/// The gesture a binding makes of `action`: a combination of hold to talk is held, any other acts when pressed.
-pub fn gesture(action: Action, parsed: &Parsed) -> Gesture {
+/// The gesture a combination makes of `action`: hold to talk is held, any other acts when pressed. `None` for a single key.
+pub fn gesture(action: Action, parsed: &Parsed) -> Option<Gesture> {
     match (action, parsed) {
-        (Action::HoldToTalk, Parsed::Combo(_)) => Gesture::Hold,
-        (_, Parsed::Combo(_)) => Gesture::Press,
-        (_, Parsed::Single { trigger: Trigger::Hold, .. }) if action == Action::HoldToTalk => Gesture::Hold,
-        (_, Parsed::Single { trigger: Trigger::Hold, .. }) => Gesture::Press,
-        (_, Parsed::Single { trigger: Trigger::Tap, .. }) => Gesture::Tap,
-        (_, Parsed::Single { trigger: Trigger::Double, .. }) => Gesture::Double,
+        (Action::HoldToTalk, Parsed::Combo(_)) => Some(Gesture::Hold),
+        (_, Parsed::Combo(_)) => Some(Gesture::Press),
+        (_, Parsed::Single { .. }) => None,
     }
 }
 
@@ -297,19 +315,45 @@ pub enum Listened {
     Other,
 }
 
-/// What a listener's event means to each action: the edges to feed their machines. A single key's own edges go to the action bound
-/// to it; another key goes to every action bound to a key a listener carries, to make what is pending not a tap.
-pub fn route(bindings: &[Option<Parsed>; 3], heard: Listened) -> Vec<(Action, Edge)> {
-    Action::ALL
-        .into_iter()
-        .filter_map(|action| match (&bindings[action.index()], heard) {
-            (Some(Parsed::Single { key, .. }), Listened::Single { key: pressed, down }) if *key == pressed => {
-                Some((action, if down { Edge::Down } else { Edge::Up }))
+/// What a listener's event means to each single key: the edges to feed their machines. A key's own edges go to it. Another key
+/// (a key that is none of the bound ones counts, a bound one's `Down` is fed to the others by the shell, see [`others`]) goes to
+/// every bound single key, an F-key too, to make what is pending not a lone key. Only what the listener hears cancels: with no
+/// modifier or Fn bound there is no listener, and typing is not observed for the sake of a pending F-key tap (the app listens to the
+/// keyboard only for the keys it needs, docs/SHORTCUTS.md).
+pub fn route(bindings: &[Option<Parsed>; 3], heard: Listened) -> Vec<(SingleKey, Edge)> {
+    let mut bound: Vec<SingleKey> = Vec::new();
+    for binding in bindings.iter().flatten() {
+        if let Parsed::Single { key, .. } = binding {
+            if !bound.contains(key) {
+                bound.push(*key);
             }
-            (Some(binding), Listened::Other) if binding.listened().is_some() => Some((action, Edge::Other)),
-            _ => None,
+        }
+    }
+    let heard = match heard {
+        Listened::Single { key, down } if !bound.contains(&key) => {
+            if !down {
+                return Vec::new();
+            }
+            Listened::Other
+        }
+        heard => heard,
+    };
+    bound
+        .into_iter()
+        .filter_map(|key| match heard {
+            Listened::Single { key: pressed, down } if pressed == key => {
+                Some((key, if down { Edge::Down } else { Edge::Up }))
+            }
+            Listened::Single { .. } => None,
+            Listened::Other => Some((key, Edge::Other)),
         })
         .collect()
+}
+
+/// The keys that a press of `pressed` is foreign input to: every other single key in use. Their machines get `Other`, so a hold
+/// that has not started never starts, and a pending tap or double is dropped.
+pub fn others(keys: &[SingleKey], pressed: SingleKey) -> Vec<SingleKey> {
+    keys.iter().copied().filter(|key| *key != pressed).collect()
 }
 
 /// What the machine answers.
@@ -321,23 +365,138 @@ pub enum Effect {
     HoldEnd,
 }
 
-/// One key's gesture over time: edges in, an effect out. The key's own repeat (a second `Down` while it is down) is ignored.
+/// A combination's gesture over time: edges in, an effect out. The key's own repeat (a second `Down` while it is down) is ignored.
 #[derive(Debug, Clone)]
 pub struct Machine {
     gesture: Gesture,
-    down_at: Option<Instant>,
-    /// Another key came while this one was down: it is a modifier of that key, not a key of its own.
-    tainted: bool,
-    last_tap: Option<Instant>,
+    down: bool,
 }
 
 impl Machine {
     pub fn new(gesture: Gesture) -> Machine {
-        Machine { gesture, down_at: None, tainted: false, last_tap: None }
+        Machine { gesture, down: false }
     }
 
     pub fn gesture(&self) -> Gesture {
         self.gesture
+    }
+
+    pub fn is_down(&self) -> bool {
+        self.down
+    }
+
+    /// Forgets a press that is on, when the app let go of it (the safety net): a release that comes late is nothing.
+    pub fn cancel(&mut self) {
+        self.down = false;
+    }
+
+    pub fn on(&mut self, edge: Edge) -> Option<Effect> {
+        match edge {
+            Edge::Down => {
+                if self.down {
+                    return None;
+                }
+                self.down = true;
+                match self.gesture {
+                    Gesture::Press => Some(Effect::Fire),
+                    Gesture::Hold => Some(Effect::HoldStart),
+                }
+            }
+            Edge::Other => None,
+            Edge::Up => {
+                if !std::mem::take(&mut self.down) {
+                    return None;
+                }
+                (self.gesture == Gesture::Hold).then_some(Effect::HoldEnd)
+            }
+        }
+    }
+}
+
+/// The ways one physical single key is used: which action each of hold, tap and double does (at most one per way).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Carried {
+    pub hold: Option<Action>,
+    pub tap: Option<Action>,
+    pub double: Option<Action>,
+}
+
+impl Carried {
+    pub fn ways(&self) -> Ways {
+        Ways { hold: self.hold.is_some(), tap: self.tap.is_some(), double: self.double.is_some() }
+    }
+
+    pub fn action(&self, trigger: Trigger) -> Option<Action> {
+        match trigger {
+            Trigger::Hold => self.hold,
+            Trigger::Tap => self.tap,
+            Trigger::Double => self.double,
+        }
+    }
+}
+
+/// Which ways a key carries: what its machine tells apart by time (only when it is more than one).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ways {
+    pub hold: bool,
+    pub tap: bool,
+    pub double: bool,
+}
+
+/// The single keys in use and what each carries, in the order they first appear. `skip` is the actions left out (those
+/// refused, or not on): an action left out carries nothing.
+pub fn single_keys(parsed: &[Option<Parsed>; 3], skip: &[bool; 3]) -> Vec<(SingleKey, Carried)> {
+    let mut keys: Vec<(SingleKey, Carried)> = Vec::new();
+    for action in Action::ALL {
+        let Some(Parsed::Single { key, trigger }) = &parsed[action.index()] else { continue };
+        if skip[action.index()] {
+            continue;
+        }
+        let at = keys.iter().position(|(seen, _)| seen == key).unwrap_or_else(|| {
+            keys.push((*key, Carried::default()));
+            keys.len() - 1
+        });
+        let carried = &mut keys[at].1;
+        let slot = match trigger {
+            Trigger::Hold => &mut carried.hold,
+            Trigger::Tap => &mut carried.tap,
+            Trigger::Double => &mut carried.double,
+        };
+        slot.get_or_insert(action);
+    }
+    keys
+}
+
+/// What a single key's machine does, by the way it was pressed.
+pub type Pulse = (Trigger, Effect);
+
+/// One physical single key over time: edges and the clock in, what to do out. Time is passed in, so every path is a plain test.
+///
+/// With more than one way on the key, the ways are told apart by time and only then (`docs/BRIDGE.md` → "One key, several ways"):
+/// **hold** starts after [`HOLD_AFTER`] down; a **tap** is a press shorter than that (than [`TAP_WINDOW`] when the key has no hold)
+/// with no second press within [`TAP_WINDOW`] after it, and acts when that time is up if the key also has a double; a **double** is
+/// a second press within [`TAP_WINDOW`] of the first one's release, acting when it comes up. A key with one way acts as it always did:
+/// hold at once, a tap when it comes up, a double when its second tap does. Another key pressed while it is down makes it a
+/// modifier of that key and no way acts.
+#[derive(Debug, Clone)]
+pub struct KeyMachine {
+    ways: Ways,
+    down_at: Option<Instant>,
+    tainted: bool,
+    holding: bool,
+    /// A first tap that ended at this time, waiting to be a tap or the first of a double.
+    pending: Option<Instant>,
+    /// The press now down is the second of a pair.
+    second: bool,
+}
+
+impl KeyMachine {
+    pub fn new(ways: Ways) -> KeyMachine {
+        KeyMachine { ways, down_at: None, tainted: false, holding: false, pending: None, second: false }
+    }
+
+    pub fn ways(&self) -> Ways {
+        self.ways
     }
 
     pub fn is_down(&self) -> bool {
@@ -346,56 +505,94 @@ impl Machine {
 
     /// Forgets a press that is on, when the app let go of it (the safety net): a release that comes late is nothing.
     pub fn cancel(&mut self) {
-        self.down_at = None;
-        self.tainted = false;
-        self.last_tap = None;
+        *self = KeyMachine::new(self.ways);
     }
 
-    pub fn on(&mut self, edge: Edge, now: Instant) -> Option<Effect> {
+    /// Whether this key waits to tell a hold from a tap: more than one way on it.
+    fn timed(&self) -> bool {
+        let Ways { hold, tap, double } = self.ways;
+        hold && (tap || double)
+    }
+
+    /// The longest a press may be and still be a tap.
+    fn tap_limit(&self) -> Duration {
+        if self.ways.hold {
+            HOLD_AFTER
+        } else {
+            TAP_WINDOW
+        }
+    }
+
+    /// When the clock next decides something (`poll` then answers it), if it does.
+    pub fn deadline(&self) -> Option<Instant> {
+        let hold = self.down_at.filter(|_| self.timed() && !self.holding && !self.tainted).map(|at| at + HOLD_AFTER);
+        let tap = self.pending.filter(|_| self.ways.tap).map(|ended| ended + TAP_WINDOW);
+        [hold, tap].into_iter().flatten().min()
+    }
+
+    /// What the clock alone decides at `now`: a hold that has lasted, a tap no second press followed.
+    pub fn poll(&mut self, now: Instant) -> Vec<Pulse> {
+        let mut out = Vec::new();
+        if let Some(down_at) = self.down_at {
+            if self.timed() && !self.holding && !self.tainted && now.saturating_duration_since(down_at) >= HOLD_AFTER {
+                self.holding = true;
+                self.second = false;
+                out.push((Trigger::Hold, Effect::HoldStart));
+            }
+        }
+        if let Some(ended) = self.pending {
+            if now.saturating_duration_since(ended) >= TAP_WINDOW {
+                self.pending = None;
+                if self.ways.tap {
+                    out.push((Trigger::Tap, Effect::Fire));
+                }
+            }
+        }
+        out
+    }
+
+    pub fn on(&mut self, edge: Edge, now: Instant) -> Vec<Pulse> {
+        let mut out = self.poll(now);
         match edge {
             Edge::Down => {
                 if self.down_at.is_some() {
-                    return None;
+                    return out;
                 }
                 self.down_at = Some(now);
                 self.tainted = false;
-                match self.gesture {
-                    Gesture::Press => Some(Effect::Fire),
-                    Gesture::Hold => Some(Effect::HoldStart),
-                    Gesture::Tap | Gesture::Double => None,
+                self.holding = false;
+                self.second =
+                    self.pending.take().is_some_and(|ended| now.saturating_duration_since(ended) < TAP_WINDOW);
+                if self.ways.hold && !self.timed() {
+                    self.holding = true;
+                    out.push((Trigger::Hold, Effect::HoldStart));
                 }
             }
             Edge::Other => {
                 if self.down_at.is_some() {
                     self.tainted = true;
                 }
-                self.last_tap = None;
-                None
+                self.pending = None;
+                self.second = false;
             }
             Edge::Up => {
-                let down_at = self.down_at.take()?;
-                match self.gesture {
-                    Gesture::Press => None,
-                    Gesture::Hold => Some(Effect::HoldEnd),
-                    Gesture::Tap => {
-                        (!self.tainted && now.saturating_duration_since(down_at) < TAP_WINDOW).then_some(Effect::Fire)
-                    }
-                    Gesture::Double => {
-                        if self.tainted || now.saturating_duration_since(down_at) >= TAP_WINDOW {
-                            self.last_tap = None;
-                            return None;
-                        }
-                        match self.last_tap.take() {
-                            Some(first) if now.saturating_duration_since(first) < TAP_WINDOW => Some(Effect::Fire),
-                            _ => {
-                                self.last_tap = Some(now);
-                                None
-                            }
-                        }
+                let Some(down_at) = self.down_at.take() else { return out };
+                let second = std::mem::take(&mut self.second);
+                if self.holding {
+                    self.holding = false;
+                    out.push((Trigger::Hold, Effect::HoldEnd));
+                } else if !self.tainted && now.saturating_duration_since(down_at) < self.tap_limit() {
+                    if second && self.ways.double {
+                        out.push((Trigger::Double, Effect::Fire));
+                    } else if self.ways.double {
+                        self.pending = Some(now);
+                    } else if self.ways.tap {
+                        out.push((Trigger::Tap, Effect::Fire));
                     }
                 }
             }
         }
+        out
     }
 }
 
@@ -416,6 +613,14 @@ pub enum Release {
     CallEnded,
     /// The shortcut was changed or cleared while it was held.
     Rebound,
+}
+
+impl Release {
+    /// Whether the app was not there to see a key come up (asleep, or the screen locked): what a key machine waits on is then forgotten,
+    /// not acted on late.
+    pub fn loses_the_keyboard(self) -> bool {
+        matches!(self, Release::Slept | Release::Locked)
+    }
 }
 
 /// One hold being watched: the shell looks at it every [`WATCH_TICK`] while it lasts.
@@ -549,15 +754,28 @@ impl Held {
 pub struct Taken {
     pub state: Registration,
     pub alternatives: Vec<String>,
+    /// Refused because this other action of ours holds the keys.
+    pub holder: Option<Action>,
 }
 
-/// What the app offers, in this order, when the keys are taken: those of these the system takes and nothing else of ours
-/// holds (checked against the systems' default lists: docs/SHORTCUTS.md).
-pub const ALTERNATIVES: [&str; 2] = ["Ctrl+Alt+Shift+M", "Ctrl+Alt+Shift+K"];
+/// What the app offers an action when its keys are taken, one for each action in [`Action::ALL`] order, if the system takes it
+/// and nothing else of ours holds it: the operator's row (R17), Control and Shift with F9 to F11, the same keys as Ctrl+Shift on
+/// Windows and Linux; common keys, no F13 to F19. mute Ctrl+Shift+F9, say one thing Ctrl+Shift+F10, hold to talk Ctrl+Shift+F11.
+///
+/// Checked against the systems' lists (docs/SHORTCUTS.md → "What the app offers instead"), none clashes on any of the three:
+/// not Option+Shift, which with F10 to F12 adjusts the volume finely on a Mac; not Control with F2 to F8, keyboard navigation;
+/// F10 and Shift+F10 alone are Windows' menu bar and context menu, and Ctrl+Shift+F10 is in neither list. Ctrl+Shift+F12 is the
+/// one to use for an action should any of these ever clash on a platform.
+pub const ALTERNATIVES: [&str; 3] = ["Ctrl+Shift+F9", "Ctrl+Shift+F11", "Ctrl+Shift+F10"];
 
-/// What the app offers in place of `asked`: not what anything is asking for, and only what the system takes.
-pub fn alternatives_for<R: Registrar>(registrar: &mut R, wanted: &[Option<String>; 3], asked: &str) -> Vec<String> {
-    ALTERNATIVES
+/// What the app offers `action` in place of `asked`: not what anything is asking for, and only if the system takes it.
+pub fn alternatives_for<R: Registrar>(
+    registrar: &mut R,
+    wanted: &[Option<String>; 3],
+    action: Action,
+    asked: &str,
+) -> Vec<String> {
+    [ALTERNATIVES[action.index()]]
         .into_iter()
         .filter(|a| !settings::same_shortcut(a, asked))
         .filter(|a| !wanted.iter().flatten().any(|w| settings::same_shortcut(w, a)))
@@ -566,13 +784,29 @@ pub fn alternatives_for<R: Registrar>(registrar: &mut R, wanted: &[Option<String
         .collect()
 }
 
-/// Which actions are refused for sharing a physical key a listener carries (Fn, a right-hand modifier) with an earlier
-/// action, whatever the trigger: routing sends a key's edges to every action bound to it, so `RightControl:tap` and
-/// `RightControl:double` would both act on one double tap. The first of [`Action::ALL`] owns the key.
-pub fn shared_keys(parsed: &[Option<Parsed>; 3]) -> [bool; 3] {
+/// Which actions are refused for using a single key in the same way as an earlier action (`RightShift:double` twice, `F9:tap`
+/// twice): the earlier one holds it, and is named. Different ways of one key (`RightShift:hold`, `RightShift:double`) coexist: a
+/// [`KeyMachine`] tells them apart. The first of [`Action::ALL`] holds a key.
+pub fn duplicates(parsed: &[Option<Parsed>; 3]) -> [Option<Action>; 3] {
     std::array::from_fn(|i| {
-        let Some(key) = parsed[i].as_ref().and_then(Parsed::listened) else { return false };
-        parsed[..i].iter().flatten().any(|earlier| earlier.listened() == Some(key))
+        let Some(binding @ Parsed::Single { .. }) = &parsed[i] else { return None };
+        Action::ALL[..i].iter().copied().find(|earlier| parsed[earlier.index()].as_ref() == Some(binding))
+    })
+}
+
+/// Which actions use an F-key in another way than an earlier action does: the system has one hot key for the F-key, the
+/// earlier action's, and the later one rides on it (its state is that action's, and a [`KeyMachine`] tells the ways apart).
+/// `duplicates` are left out.
+pub fn rides(parsed: &[Option<Parsed>; 3], duplicate: &[Option<Action>; 3]) -> [Option<Action>; 3] {
+    std::array::from_fn(|i| {
+        let Some(Parsed::Single { key: key @ SingleKey::Function(_), .. }) = &parsed[i] else { return None };
+        if duplicate[i].is_some() {
+            return None;
+        }
+        Action::ALL[..i].iter().copied().find(|earlier| {
+            duplicate[earlier.index()].is_none()
+                && matches!(&parsed[earlier.index()], Some(Parsed::Single { key: other, .. }) if other == key)
+        })
     })
 }
 
@@ -592,10 +826,12 @@ pub fn reconcile<R: Registrar>(
 ) -> [Option<Taken>; 3] {
     // Let go of what is no longer wanted, or is wanted by another action that comes first.
     let mut owner: [Option<usize>; 3] = [None; 3];
+    let mut holder: [Option<Action>; 3] = [None; 3];
     for (i, want) in wanted.iter().enumerate() {
         if let Some(keys) = want {
-            if !wanted[..i].iter().flatten().any(|earlier| earlier == keys) {
-                owner[i] = Some(i);
+            match wanted[..i].iter().position(|earlier| earlier.as_ref() == Some(keys)) {
+                None => owner[i] = Some(i),
+                Some(first) => holder[i] = Some(Action::ALL[first]),
             }
         }
     }
@@ -613,20 +849,20 @@ pub fn reconcile<R: Registrar>(
     for i in 0..3 {
         let Some(keys) = &wanted[i] else { continue };
         if owner[i].is_none() {
-            taken[i] = Some(Taken { state: Registration::Refused, alternatives: vec![] });
+            taken[i] = Some(Taken { state: Registration::Refused, alternatives: vec![], holder: holder[i] });
         } else if !backend {
-            taken[i] = Some(Taken { state: Registration::Unavailable, alternatives: vec![] });
+            taken[i] = Some(Taken { state: Registration::Unavailable, alternatives: vec![], holder: None });
         } else if held.0[i].is_some() {
-            taken[i] = Some(Taken { state: Registration::On, alternatives: vec![] });
+            taken[i] = Some(Taken { state: Registration::On, alternatives: vec![], holder: None });
         } else if registrar.register(keys) || {
             let _ = registrar.unregister(keys);
             registrar.register(keys)
         } {
             held.0[i] = Some(keys.clone());
-            taken[i] = Some(Taken { state: Registration::On, alternatives: vec![] });
+            taken[i] = Some(Taken { state: Registration::On, alternatives: vec![], holder: None });
         } else {
             log::debug!("shortcut {keys} refused");
-            taken[i] = Some(Taken { state: Registration::Refused, alternatives: vec![] });
+            taken[i] = Some(Taken { state: Registration::Refused, alternatives: vec![], holder: None });
         }
     }
     // The alternatives, once everything wanted is placed: not what anything is asking for, and only what the system takes.
@@ -635,8 +871,8 @@ pub fn reconcile<R: Registrar>(
             continue;
         }
         let asked = wanted[i].as_deref().unwrap_or_default();
-        let alternatives = alternatives_for(registrar, wanted, asked);
-        taken[i] = Some(Taken { state: Registration::Refused, alternatives });
+        let alternatives = alternatives_for(registrar, wanted, Action::ALL[i], asked);
+        taken[i] = Some(Taken { state: Registration::Refused, alternatives, holder: holder[i] });
     }
     taken
 }
@@ -788,8 +1024,20 @@ impl Mods {
 pub enum Heard {
     /// A single-key modifier (or Fn) goes down or up.
     Modifier { key: SingleKey, down: bool },
+    /// A left-hand modifier goes down or up: one that cannot be a key on its own.
+    LeftModifier { down: bool },
     /// Another key goes down, with the modifiers held: its macOS virtual key code, and the character it types with none.
     Key { code: u16, character: Option<String>, mods: Mods },
+}
+
+/// Why a key pressed while recording was not taken (`docs/BRIDGE.md` → `record`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Hint {
+    /// A left-hand modifier on its own, where only the right-hand ones can be a key (macOS).
+    LeftModifier,
+    /// A modifier or Fn on its own, where the system gives the app no way to hear one (Windows, Linux).
+    LoneModifier,
 }
 
 /// The recorder's answer so far.
@@ -797,6 +1045,8 @@ pub enum Heard {
 pub enum Recorded {
     /// Keep listening.
     Pending,
+    /// A key was ignored and the recording goes on: the page says why.
+    Hint(Hint),
     /// Done: the accelerator, or `None` for Escape.
     Done(Option<String>),
 }
@@ -811,11 +1061,26 @@ pub struct Recorder {
     /// A tap that may become a double one: the key and when it ended.
     tapped: Option<(SingleKey, Instant)>,
     down_at: Option<Instant>,
+    /// Whether this system lets a modifier or Fn be a key on its own (macOS: the right-hand ones and Fn). Where not, one
+    /// pressed alone is ignored and the recording goes on for a real key.
+    lone_keys: bool,
+    /// A left-hand modifier is down, and no other key has been pressed meanwhile.
+    left: Option<bool>,
 }
 
 impl Recorder {
+    /// A recorder on a system that takes the right-hand modifiers and Fn on their own (macOS).
     pub fn new(action: Action) -> Recorder {
-        Recorder { action, down: None, tainted: false, tapped: None, down_at: None }
+        Recorder::on(action, true)
+    }
+
+    /// A recorder for `action`; `lone_keys`: whether this system can have a modifier or Fn on its own as a key.
+    pub fn on(action: Action, lone_keys: bool) -> Recorder {
+        Recorder { action, down: None, tainted: false, tapped: None, down_at: None, lone_keys, left: None }
+    }
+
+    fn ignored(&self) -> Recorded {
+        Recorded::Hint(if self.lone_keys { Hint::LeftModifier } else { Hint::LoneModifier })
     }
 
     fn done_single(&self, key: SingleKey, trigger: Trigger) -> Recorded {
@@ -834,6 +1099,9 @@ impl Recorder {
                 let (Some(held), Some(at)) = (self.down.take(), self.down_at.take()) else { return Recorded::Pending };
                 if held != key || self.tainted {
                     return Recorded::Pending;
+                }
+                if !self.lone_keys {
+                    return Recorded::Hint(Hint::LoneModifier);
                 }
                 match self.action {
                     Action::HoldToTalk => self.done_single(key, Trigger::Hold),
@@ -856,8 +1124,17 @@ impl Recorder {
                     }
                 }
             }
+            Heard::LeftModifier { down: true } => {
+                self.left = Some(true);
+                Recorded::Pending
+            }
+            Heard::LeftModifier { down: false } => match self.left.take() {
+                Some(true) => self.ignored(),
+                _ => Recorded::Pending,
+            },
             Heard::Key { code, character, mods } => {
                 self.tainted = true;
+                self.left = self.left.map(|_| false);
                 self.tapped = None;
                 let none = !(mods.command || mods.control || mods.alt || mods.shift);
                 if code == KEY_ESCAPE && none {
@@ -1087,100 +1364,390 @@ mod tests {
     #[test]
     fn a_combination_acts_when_pressed_and_hold_to_talk_while_held() {
         let combo = parse("Ctrl+Alt+M").unwrap().unwrap();
-        assert_eq!(gesture(Action::Mute, &combo), Gesture::Press);
-        assert_eq!(gesture(Action::OneTurn, &combo), Gesture::Press);
-        assert_eq!(gesture(Action::HoldToTalk, &combo), Gesture::Hold);
+        assert_eq!(gesture(Action::Mute, &combo), Some(Gesture::Press));
+        assert_eq!(gesture(Action::OneTurn, &combo), Some(Gesture::Press));
+        assert_eq!(gesture(Action::HoldToTalk, &combo), Some(Gesture::Hold));
+        assert_eq!(
+            gesture(Action::Mute, &parse("RightShift:tap").unwrap().unwrap()),
+            None,
+            "a single key has a KeyMachine"
+        );
         let mut press = Machine::new(Gesture::Press);
-        assert_eq!(press.on(Edge::Down, at(0)), Some(Effect::Fire));
-        assert_eq!(press.on(Edge::Down, at(10)), None, "its own repeat");
-        assert_eq!(press.on(Edge::Up, at(20)), None);
-        assert_eq!(press.on(Edge::Down, at(30)), Some(Effect::Fire));
+        assert_eq!(press.on(Edge::Down), Some(Effect::Fire));
+        assert_eq!(press.on(Edge::Down), None, "its own repeat");
+        assert_eq!(press.on(Edge::Up), None);
+        assert_eq!(press.on(Edge::Down), Some(Effect::Fire));
         let mut hold = Machine::new(Gesture::Hold);
-        assert_eq!(hold.on(Edge::Down, at(0)), Some(Effect::HoldStart));
+        assert_eq!(hold.on(Edge::Down), Some(Effect::HoldStart));
         hold.cancel();
-        assert_eq!(hold.on(Edge::Up, at(1)), None, "a release after the app let go is nothing");
-        assert_eq!(hold.on(Edge::Down, at(2)), Some(Effect::HoldStart));
-        assert_eq!(hold.on(Edge::Down, at(50)), None);
-        assert_eq!(hold.on(Edge::Other, at(60)), None, "other keys do not end a hold");
-        assert_eq!(hold.on(Edge::Up, at(5000)), Some(Effect::HoldEnd));
-        assert_eq!(hold.on(Edge::Up, at(5001)), None, "a release without a press is nothing");
+        assert_eq!(hold.on(Edge::Up), None, "a release after the app let go is nothing");
+        assert_eq!(hold.on(Edge::Down), Some(Effect::HoldStart));
+        assert_eq!(hold.on(Edge::Down), None);
+        assert_eq!(hold.on(Edge::Other), None, "other keys do not end a hold");
+        assert_eq!(hold.on(Edge::Up), Some(Effect::HoldEnd));
+        assert_eq!(hold.on(Edge::Up), None, "a release without a press is nothing");
+    }
+
+    // ----- one physical key, several ways (R10) -----
+
+    use Edge::{Down, Other, Up};
+    use Effect::{Fire, HoldEnd, HoldStart};
+    use Trigger::{Double, Tap};
+    const HOLD: Trigger = Trigger::Hold;
+
+    fn ways(hold: bool, tap: bool, double: bool) -> KeyMachine {
+        KeyMachine::new(Ways { hold, tap, double })
+    }
+
+    /// What `key` does for these edges `(edge, ms)`, polling the clock at each of `polls` too: everything it said, in order.
+    fn run(key: &mut KeyMachine, steps: &[(Edge, u64)], polls: &[u64]) -> Vec<(u64, Pulse)> {
+        let mut at_ms: Vec<(u64, Option<Edge>)> =
+            steps.iter().map(|(edge, ms)| (*ms, Some(*edge))).chain(polls.iter().map(|ms| (*ms, None))).collect();
+        at_ms.sort_by_key(|(ms, edge)| (*ms, edge.is_some()));
+        let mut said = Vec::new();
+        for (ms, edge) in at_ms {
+            let pulses = match edge {
+                Some(edge) => key.on(edge, at(ms)),
+                None => key.poll(at(ms)),
+            };
+            said.extend(pulses.into_iter().map(|pulse| (ms, pulse)));
+        }
+        said
     }
 
     #[test]
-    fn a_tap_is_a_quick_press_with_no_other_key_between() {
-        let mut tap = Machine::new(Gesture::Tap);
-        assert_eq!(tap.on(Edge::Down, at(0)), None);
-        assert_eq!(tap.on(Edge::Up, at(399)), Some(Effect::Fire));
-        assert_eq!(tap.on(Edge::Down, at(1000)), None);
-        assert_eq!(tap.on(Edge::Up, at(1400)), None, "400 ms is a hold, not a tap");
+    fn a_hold_on_its_own_opens_at_once_and_ends_when_let_go() {
+        let mut key = ways(true, false, false);
+        assert_eq!(run(&mut key, &[(Down, 0), (Up, 3000)], &[]), [(0, (HOLD, HoldStart)), (3000, (HOLD, HoldEnd))]);
+        assert_eq!(key.deadline(), None, "no clock to wait for");
+        // A tap of it is a short hold, nothing more.
+        assert_eq!(
+            run(&mut key, &[(Down, 5000), (Up, 5050)], &[]),
+            [(5000, (HOLD, HoldStart)), (5050, (HOLD, HoldEnd))]
+        );
+        // Another key typed meanwhile does not end it (as it never did): the key is held for typing capitals.
+        assert_eq!(
+            run(&mut key, &[(Down, 6000), (Other, 6100), (Up, 6200)], &[]),
+            [(6000, (HOLD, HoldStart)), (6200, (HOLD, HoldEnd))]
+        );
+    }
+
+    #[test]
+    fn a_tap_on_its_own_acts_when_it_comes_up() {
+        let mut key = ways(false, true, false);
+        assert_eq!(run(&mut key, &[(Down, 0), (Up, 399)], &[]), [(399, (Tap, Fire))]);
+        assert_eq!(run(&mut key, &[(Down, 1000), (Up, 1400)], &[]), [], "400 ms is a hold, not a tap");
         // Cmd+C: the key was a modifier of another.
-        assert_eq!(tap.on(Edge::Down, at(2000)), None);
-        assert_eq!(tap.on(Edge::Other, at(2050)), None);
-        assert_eq!(tap.on(Edge::Up, at(2100)), None);
-        assert_eq!(tap.on(Edge::Down, at(3000)), None);
-        assert_eq!(tap.on(Edge::Up, at(3100)), Some(Effect::Fire), "and the next lone tap is a tap again");
+        assert_eq!(run(&mut key, &[(Down, 2000), (Other, 2050), (Up, 2100)], &[]), []);
+        assert_eq!(
+            run(&mut key, &[(Down, 3000), (Up, 3100)], &[]),
+            [(3100, (Tap, Fire))],
+            "and the next lone tap is a tap again"
+        );
+        assert_eq!(key.deadline(), None);
     }
 
     #[test]
-    fn a_double_tap_is_two_taps_close_together() {
-        let mut double = Machine::new(Gesture::Double);
-        assert_eq!(double.on(Edge::Down, at(0)), None);
-        assert_eq!(double.on(Edge::Up, at(80)), None, "the first tap only waits");
-        assert_eq!(double.on(Edge::Down, at(200)), None);
-        assert_eq!(double.on(Edge::Up, at(280)), Some(Effect::Fire));
+    fn a_double_on_its_own_is_two_taps_close_together() {
+        let mut key = ways(false, false, true);
+        assert_eq!(run(&mut key, &[(Down, 0), (Up, 80)], &[]), [], "the first tap only waits");
+        assert_eq!(run(&mut key, &[(Down, 200), (Up, 280)], &[]), [(280, (Double, Fire))]);
         // The pair is spent: a third tap starts over.
-        assert_eq!(double.on(Edge::Down, at(300)), None);
-        assert_eq!(double.on(Edge::Up, at(360)), None);
-        // Too far apart.
-        assert_eq!(double.on(Edge::Down, at(900)), None);
-        assert_eq!(double.on(Edge::Up, at(960)), None);
+        assert_eq!(run(&mut key, &[(Down, 300), (Up, 360)], &[]), []);
+        // Too far apart: 400 ms or more from the first one's release.
+        assert_eq!(run(&mut key, &[(Down, 760), (Up, 800)], &[]), []);
+        assert_eq!(
+            run(&mut key, &[(Down, 900), (Up, 960)], &[]),
+            [(960, (Double, Fire))],
+            "99 ms after the last release"
+        );
+        assert_eq!(
+            run(&mut key, &[(Down, 1000), (Up, 1040), (Down, 1440), (Up, 1480)], &[]),
+            [],
+            "exactly 400 ms is too far"
+        );
         // A key typed between the two taps breaks the pair.
-        assert_eq!(double.on(Edge::Down, at(1000)), None);
-        assert_eq!(double.on(Edge::Other, at(1010)), None);
-        assert_eq!(double.on(Edge::Up, at(1040)), None);
-        assert_eq!(double.on(Edge::Down, at(1100)), None);
-        assert_eq!(double.on(Edge::Up, at(1150)), None);
+        assert_eq!(run(&mut key, &[(Down, 3000), (Up, 3040), (Other, 3050), (Down, 3100), (Up, 3150)], &[]), []);
+        // A second press that goes on is not a tap.
+        assert_eq!(run(&mut key, &[(Down, 4000), (Up, 4040), (Down, 4100), (Up, 4600)], &[]), []);
     }
 
     #[test]
-    fn what_a_listener_hears_reaches_only_the_actions_bound_to_it() {
+    fn hold_and_double_on_one_key_a_double_does_not_flash_the_microphone() {
+        let mut key = ways(true, false, true);
+        // A hold alone: nothing at once, it opens after 200 ms with the key still down.
+        assert_eq!(key.deadline(), None);
+        assert_eq!(key.on(Down, at(0)), []);
+        assert_eq!(key.deadline(), Some(at(200)));
+        assert_eq!(key.poll(at(199)), []);
+        assert_eq!(key.poll(at(200)), [(HOLD, HoldStart)]);
+        assert_eq!(key.deadline(), None);
+        assert_eq!(key.on(Up, at(2500)), [(HOLD, HoldEnd)]);
+        // A double: two quick presses, no HoldStart anywhere in between.
+        assert_eq!(
+            run(&mut key, &[(Down, 5000), (Up, 5100), (Down, 5300), (Up, 5400)], &[5150, 5350, 5500, 6000]),
+            [(5400, (Double, Fire))]
+        );
+        // One quick press alone is neither (there is no tap here), and nothing opened.
+        assert_eq!(run(&mut key, &[(Down, 8000), (Up, 8100)], &[8300, 9000]), []);
+        // A second press that is held is a hold, 200 ms into it.
+        assert_eq!(
+            run(&mut key, &[(Down, 10_000), (Up, 10_100), (Down, 10_300), (Up, 11_000)], &[10_500]),
+            [(10_500, (HOLD, HoldStart)), (11_000, (HOLD, HoldEnd))]
+        );
+        // A press polled late: the hold still starts before its release.
+        assert_eq!(
+            run(&mut key, &[(Down, 12_000), (Up, 12_900)], &[]),
+            [(12_900, (HOLD, HoldStart)), (12_900, (HOLD, HoldEnd))]
+        );
+        // Typing a capital with the key: a modifier, no way acts.
+        assert_eq!(run(&mut key, &[(Down, 14_000), (Other, 14_050), (Up, 14_100)], &[14_300]), []);
+        assert_eq!(run(&mut key, &[(Down, 15_000), (Other, 15_050)], &[15_300]), [], "and no hold opens behind it");
+    }
+
+    #[test]
+    fn tap_and_double_on_one_key_the_tap_waits_to_see_whether_a_second_follows() {
+        let mut key = ways(false, true, true);
+        // A tap alone acts when the double's time is up, not before.
+        assert_eq!(key.on(Down, at(0)), []);
+        assert_eq!(key.on(Up, at(80)), []);
+        assert_eq!(key.deadline(), Some(at(480)));
+        assert_eq!(key.poll(at(479)), []);
+        assert_eq!(key.poll(at(480)), [(Tap, Fire)]);
+        assert_eq!(key.deadline(), None);
+        // A double acts when its second press comes up, and the tap does not.
+        assert_eq!(
+            run(&mut key, &[(Down, 1000), (Up, 1080), (Down, 1300), (Up, 1380)], &[1500, 2000]),
+            [(1380, (Double, Fire))]
+        );
+        // The second press at 399 ms is still a double, at 400 ms it is the next tap's first.
+        assert_eq!(
+            run(&mut key, &[(Down, 3000), (Up, 3050), (Down, 3449), (Up, 3500)], &[4000]),
+            [(3500, (Double, Fire))]
+        );
+        assert_eq!(
+            run(&mut key, &[(Down, 5000), (Up, 5050), (Down, 5450), (Up, 5500)], &[5450, 6000]),
+            [(5450, (Tap, Fire)), (6000, (Tap, Fire))],
+            "400 ms after the release: the first is a tap on its own, the second a tap on its own"
+        );
+        // Without a hold a tap may last up to 400 ms.
+        assert_eq!(run(&mut key, &[(Down, 8000), (Up, 8399)], &[9000]), [(8800, (Tap, Fire))].map(|(_, p)| (9000, p)));
+        // A press that goes on is nothing; another key makes it a modifier.
+        assert_eq!(run(&mut key, &[(Down, 10_000), (Up, 10_400)], &[11_000]), []);
+        assert_eq!(run(&mut key, &[(Down, 12_000), (Other, 12_010), (Up, 12_050)], &[13_000]), []);
+        // Another key between the two taps: the first stays a tap? No: it was broken by a key typed, so it is nothing.
+        assert_eq!(run(&mut key, &[(Down, 14_000), (Up, 14_040), (Other, 14_100)], &[15_000]), []);
+    }
+
+    /// A press of another bound key, or a key typed, is foreign input: delivered as `Other`, it drops what is pending.
+    #[test]
+    fn foreign_input_cancels_what_is_pending_on_every_key() {
+        // F9:tap + F9:double: F9, then A within 400 ms. The tap does not fire.
+        let mut f9 = ways(false, true, true);
+        assert_eq!(run(&mut f9, &[(Down, 0), (Up, 50), (Other, 100)], &[500, 900]), []);
+        // Fn:hold (+ a double) then Right Shift pressed: Fn never opens the mic.
+        let mut fn_key = ways(true, false, true);
+        assert_eq!(run(&mut fn_key, &[(Down, 0), (Other, 100), (Up, 300)], &[200, 300]), []);
+        // But a hold that already started goes on.
+        let mut started = ways(true, false, true);
+        assert_eq!(
+            run(&mut started, &[(Down, 0), (Other, 300), (Up, 400)], &[200]),
+            [(200, (HOLD, HoldStart)), (400, (HOLD, HoldEnd))]
+        );
+    }
+
+    #[test]
+    fn hold_and_tap_on_one_key() {
+        let mut key = ways(true, true, false);
+        assert_eq!(
+            run(&mut key, &[(Down, 0), (Up, 150)], &[]),
+            [(150, (Tap, Fire))],
+            "a tap acts when it comes up: no double to wait for"
+        );
+        assert_eq!(
+            run(&mut key, &[(Down, 1000), (Up, 1300)], &[1200]),
+            [(1200, (HOLD, HoldStart)), (1300, (HOLD, HoldEnd))]
+        );
+        // 199 ms is a tap, 200 ms is a hold.
+        assert_eq!(run(&mut key, &[(Down, 2000), (Up, 2199)], &[]), [(2199, (Tap, Fire))]);
+        assert_eq!(
+            run(&mut key, &[(Down, 3000), (Up, 3200)], &[]),
+            [(3200, (HOLD, HoldStart)), (3200, (HOLD, HoldEnd))]
+        );
+    }
+
+    #[test]
+    fn all_three_on_one_key() {
+        let mut key = ways(true, true, true);
+        // Hold.
+        assert_eq!(
+            run(&mut key, &[(Down, 0), (Up, 1000)], &[200]),
+            [(200, (HOLD, HoldStart)), (1000, (HOLD, HoldEnd))]
+        );
+        // Tap: when the double's time is up.
+        assert_eq!(run(&mut key, &[(Down, 2000), (Up, 2100)], &[2200, 2499, 2500, 2501]), [(2500, (Tap, Fire))]);
+        // Double.
+        assert_eq!(
+            run(&mut key, &[(Down, 4000), (Up, 4100), (Down, 4300), (Up, 4400)], &[4200, 4350, 5000]),
+            [(4400, (Double, Fire))]
+        );
+        // A tap and then a hold: the tap acts when the hold starts is not a thing; the hold wins the second press.
+        assert_eq!(
+            run(&mut key, &[(Down, 6000), (Up, 6100), (Down, 6300), (Up, 7000)], &[6500]),
+            [(6500, (HOLD, HoldStart)), (7000, (HOLD, HoldEnd))]
+        );
+    }
+
+    #[test]
+    fn a_machine_that_is_let_go_forgets_everything() {
+        let mut key = ways(true, true, true);
+        key.on(Down, at(0));
+        key.poll(at(300));
+        key.cancel();
+        assert_eq!(key.on(Up, at(500)), [], "a release after the app let go is nothing");
+        assert_eq!(key.deadline(), None);
+        assert!(!key.is_down());
+        key.on(Down, at(1000));
+        key.on(Up, at(1050));
+        assert!(key.deadline().is_some());
+        key.cancel();
+        assert_eq!(key.deadline(), None, "a pending tap is forgotten too");
+    }
+
+    #[test]
+    fn the_ways_of_a_key_are_what_the_actions_carry() {
+        let parsed = |mute: &str, hold: &str, one: &str| [mute, hold, one].map(|text| parse(text).unwrap());
+        let keys = single_keys(&parsed("RightShift:tap", "RightShift:hold", "RightShift:double"), &[false; 3]);
+        assert_eq!(
+            keys,
+            [(
+                SingleKey::RightShift,
+                Carried { hold: Some(Action::HoldToTalk), tap: Some(Action::Mute), double: Some(Action::OneTurn) }
+            )]
+        );
+        assert_eq!(keys[0].1.ways(), Ways { hold: true, tap: true, double: true });
+        assert_eq!(keys[0].1.action(Double), Some(Action::OneTurn));
+        let two = single_keys(&parsed("Ctrl+Alt+M", "Fn:hold", "F9:double"), &[false; 3]);
+        assert_eq!(two.len(), 2, "a combination is no single key");
+        assert_eq!(two[0].0, SingleKey::Fn);
+        assert_eq!(two[1].0, SingleKey::Function(9));
+        // What is left out carries nothing.
+        let left_out = single_keys(&parsed("RightShift:tap", "RightShift:hold", ""), &[true, false, false]);
+        assert_eq!(
+            left_out,
+            [(SingleKey::RightShift, Carried { hold: Some(Action::HoldToTalk), ..Carried::default() })]
+        );
+    }
+
+    #[test]
+    fn what_a_listener_hears_reaches_only_the_keys_bound() {
         let bound = |mute: &str, hold: &str, one: &str| [mute, hold, one].map(|text| parse(text).unwrap());
         let bindings = bound("Ctrl+Alt+M", "Fn:hold", "RightControl:double");
         let fn_key = |down| Listened::Single { key: SingleKey::Fn, down };
-        assert_eq!(route(&bindings, fn_key(true)), [(Action::HoldToTalk, Edge::Down)]);
-        assert_eq!(route(&bindings, fn_key(false)), [(Action::HoldToTalk, Edge::Up)]);
+        assert_eq!(route(&bindings, fn_key(true)), [(SingleKey::Fn, Edge::Down)]);
+        assert_eq!(route(&bindings, fn_key(false)), [(SingleKey::Fn, Edge::Up)]);
         let control = Listened::Single { key: SingleKey::RightControl, down: true };
-        assert_eq!(route(&bindings, control), [(Action::OneTurn, Edge::Down)]);
-        assert!(route(&bindings, Listened::Single { key: SingleKey::RightAlt, down: true }).is_empty());
-        // Another key spoils a pending tap of every key a listener carries, not of a combination's action.
+        assert_eq!(route(&bindings, control), [(SingleKey::RightControl, Edge::Down)]);
+        // A single key that is none of the bound ones is foreign input to all of them; its release is nothing.
+        let alt = |down| Listened::Single { key: SingleKey::RightAlt, down };
+        assert_eq!(route(&bindings, alt(true)), [(SingleKey::Fn, Edge::Other), (SingleKey::RightControl, Edge::Other)]);
+        assert!(route(&bindings, alt(false)).is_empty());
+        // Another key spoils a pending tap of every bound single key, an F-key too, not of a combination's action.
         assert_eq!(
             route(&bindings, Listened::Other),
-            [(Action::HoldToTalk, Edge::Other), (Action::OneTurn, Edge::Other)]
+            [(SingleKey::Fn, Edge::Other), (SingleKey::RightControl, Edge::Other)]
         );
-        assert!(
-            route(&bound("Ctrl+Alt+M", "", "F13:tap"), Listened::Other).is_empty(),
-            "a hot key's action hears no keys"
+        assert_eq!(
+            route(&bound("Ctrl+Alt+M", "", "F13:tap"), Listened::Other),
+            [(SingleKey::Function(13), Edge::Other)],
+            "an F-key's pending tap is spoiled by what the listener hears"
         );
+        assert!(route(&bound("Ctrl+Alt+M", "", ""), Listened::Other).is_empty(), "a combination has no machine here");
+        // The press of one bound key is foreign input to the others, and a key is none to itself.
+        let keys = [SingleKey::Fn, SingleKey::RightShift, SingleKey::Function(9)];
+        assert_eq!(others(&keys, SingleKey::Fn), [SingleKey::RightShift, SingleKey::Function(9)]);
+        assert_eq!(others(&keys[..1], SingleKey::Fn), Vec::<SingleKey>::new());
+        assert!(Release::Slept.loses_the_keyboard() && Release::Locked.loses_the_keyboard());
+        assert!(!Release::TooLong.loses_the_keyboard() && !Release::CallEnded.loses_the_keyboard());
+        // One physical key carrying several ways is one key, fed once.
+        let shared = bound("RightShift:tap", "RightShift:hold", "RightShift:double");
+        let shift = |down| Listened::Single { key: SingleKey::RightShift, down };
+        assert_eq!(route(&shared, shift(true)), [(SingleKey::RightShift, Edge::Down)]);
+        assert_eq!(route(&shared, Listened::Other), [(SingleKey::RightShift, Edge::Other)]);
     }
 
     #[test]
-    fn one_physical_key_serves_one_action_whatever_the_trigger() {
+    fn one_physical_key_serves_one_action_in_each_way() {
         let bound = |mute: &str, hold: &str, one: &str| [mute, hold, one].map(|text| parse(text).unwrap());
-        // Mute on RightControl:tap and say one thing on RightControl:double would both act on one double tap.
-        let same = bound("RightControl:tap", "", "RightControl:double");
-        assert_eq!(shared_keys(&same), [false, false, true], "the first owns the key, the other is refused");
-        assert_eq!(shared_keys(&bound("Fn:hold", "", "Fn:tap")), [false, false, true]);
-        assert_eq!(shared_keys(&bound("RightAlt:tap", "RightAlt:hold", "RightAlt:double")), [false, true, true]);
-        // Other keys, combinations and F-keys (the registration diff sees those) are not this one's business.
-        assert_eq!(shared_keys(&bound("RightControl:tap", "Fn:hold", "RightAlt:double")), [false; 3]);
-        assert_eq!(shared_keys(&bound("Ctrl+Alt+M", "", "Ctrl+Alt+M")), [false; 3]);
-        assert_eq!(shared_keys(&bound("F13:tap", "", "F13:double")), [false; 3]);
-        // And the refused one is offered what the system takes, as a refused hot key is.
-        let mut fake = Fake::default();
+        // Hold to talk and say one thing on one key coexist; the same way twice does not, and the first holds it.
+        assert_eq!(duplicates(&bound("", "RightShift:hold", "RightShift:double")), [None; 3]);
+        assert_eq!(duplicates(&bound("RightShift:tap", "RightShift:hold", "RightShift:double")), [None; 3]);
+        assert_eq!(duplicates(&bound("RightControl:tap", "", "RightControl:tap")), [None, None, Some(Action::Mute)]);
         assert_eq!(
-            alternatives_for(&mut fake, &wanted(None, None, None), ""),
-            ["Ctrl+Alt+Shift+M", "Ctrl+Alt+Shift+K"]
+            duplicates(&bound("RightControl:double", "", "RightControl:double")),
+            [None, None, Some(Action::Mute)]
         );
+        assert_eq!(duplicates(&bound("F13:tap", "", "F13:tap")), [None, None, Some(Action::Mute)]);
+        // Other keys are not this one's business, nor are combinations (the registration diff sees those).
+        assert_eq!(duplicates(&bound("RightControl:tap", "Fn:hold", "RightAlt:double")), [None; 3]);
+        assert_eq!(duplicates(&bound("Ctrl+Alt+M", "", "Ctrl+Alt+M")), [None; 3]);
+        // An F-key has one hot key: the later way rides on the earlier action's.
+        let f = bound("F13:tap", "F13:hold", "F13:double");
+        let none = duplicates(&f);
+        assert_eq!(none, [None; 3]);
+        assert_eq!(rides(&f, &none), [None, Some(Action::Mute), Some(Action::Mute)]);
+        let twice = bound("F13:tap", "F14:hold", "F13:tap");
+        let dup = duplicates(&twice);
+        assert_eq!(dup, [None, None, Some(Action::Mute)]);
+        assert_eq!(rides(&twice, &dup), [None; 3], "a duplicate rides on nothing");
+        assert_eq!(
+            rides(&bound("RightShift:tap", "RightShift:hold", ""), &[None; 3]),
+            [None; 3],
+            "a listener has no hot key"
+        );
+        // And the refused one is offered its own suggestion, if the system takes it.
+        let mut fake = Fake::default();
+        assert_eq!(alternatives_for(&mut fake, &wanted(None, None, None), Action::OneTurn, ""), ["Ctrl+Shift+F10"]);
+        assert_eq!(
+            alternatives_for(&mut fake, &wanted(None, None, None), Action::Mute, "Ctrl+Shift+F9"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            alternatives_for(&mut fake, &wanted(None, None, Some("Ctrl+Shift+F11")), Action::HoldToTalk, ""),
+            Vec::<String>::new()
+        );
+    }
+
+    /// R17: the suggestions are common keys a keyboard has, one for each action, and none of them is a system shortcut.
+    #[test]
+    fn the_suggestions_are_common_keys_one_for_each_action() {
+        // The operator's row: mute ⌃⇧F9, say one thing ⌃⇧F10, hold to talk ⌃⇧F11.
+        assert_eq!(ALTERNATIVES[Action::Mute.index()], "Ctrl+Shift+F9");
+        assert_eq!(ALTERNATIVES[Action::OneTurn.index()], "Ctrl+Shift+F10");
+        assert_eq!(ALTERNATIVES[Action::HoldToTalk.index()], "Ctrl+Shift+F11");
+        let mut seen = Vec::new();
+        for (action, suggestion) in Action::ALL.into_iter().zip(ALTERNATIVES) {
+            assert_eq!(ALTERNATIVES[action.index()], suggestion);
+            let parsed = parse(suggestion).unwrap().unwrap();
+            assert_eq!(parsed.accelerator(), suggestion, "already in the kept form");
+            let Parsed::Combo(keys) = &parsed else { panic!("a combination") };
+            let function: u8 = keys.rsplit('+').next().unwrap().trim_start_matches('F').parse().unwrap();
+            assert!((9..=12).contains(&function), "F9 to F12, never F13 to F19: {suggestion}");
+            assert!(
+                keys.starts_with("Ctrl+Shift+") && !keys.contains("Alt"),
+                "{suggestion}: Control and Shift, never with Option on a Mac"
+            );
+            assert!(!seen.contains(&suggestion), "one for each action");
+            seen.push(suggestion);
+        }
+    }
+
+    #[test]
+    fn a_default_is_the_systems_and_only_mute_has_one() {
+        assert_eq!(default_of(Action::Mute, DEFAULT_MUTE_OTHER), DEFAULT_MUTE_OTHER);
+        assert_eq!(default_of(Action::Mute, DEFAULT_MUTE_MACOS), DEFAULT_MUTE_MACOS);
+        assert_eq!(default_of(Action::HoldToTalk, DEFAULT_MUTE_OTHER), "");
+        assert_eq!(default_of(Action::OneTurn, DEFAULT_MUTE_MACOS), "");
     }
 
     #[test]
@@ -1282,8 +1849,8 @@ mod tests {
         assert_eq!(mute.state, Registration::Refused);
         assert_eq!(
             mute.alternatives,
-            ["Ctrl+Alt+Shift+K"],
-            "never the refused one, and nothing is left registered by the probe"
+            ["Ctrl+Shift+F9"],
+            "its own suggestion, never the refused one, and nothing is left registered by the probe"
         );
         assert!(fake.ours.is_empty() && held.of(Action::Mute).is_none());
     }
@@ -1308,7 +1875,8 @@ mod tests {
         assert_eq!(out[0].as_ref().unwrap().state, Registration::On);
         let hold = out[1].as_ref().unwrap();
         assert_eq!(hold.state, Registration::Refused);
-        assert_eq!(hold.alternatives, ["Ctrl+Alt+Shift+K"], "not the keys mute holds");
+        assert_eq!(hold.holder, Some(Action::Mute), "it names who holds the keys");
+        assert_eq!(hold.alternatives, ["Ctrl+Shift+F11"], "hold to talk's own suggestion, not the keys mute holds");
         assert_eq!(fake.ours, ["Ctrl+Alt+Shift+M"]);
         // Mute moves away: the other takes the keys it asked for, with no restart.
         let out = reconcile(&mut fake, &mut held, &wanted(Some("Ctrl+Alt+K"), Some("Ctrl+Alt+Shift+M"), None), true);
@@ -1530,6 +2098,21 @@ mod tests {
     }
 
     #[test]
+    fn a_left_hand_modifier_is_told_from_the_right_one() {
+        // Left Command down (device bit 0x08), then up with the right one still held (0x10).
+        assert_eq!(SingleKey::left_macos_down(55, 0x0010_0000 | 0x08), Some(true));
+        assert_eq!(SingleKey::left_macos_down(55, 0x0010_0000 | 0x10), Some(false), "only the right one is down");
+        assert_eq!(SingleKey::left_macos_down(56, 0x0002_0000 | 0x02), Some(true));
+        assert_eq!(SingleKey::left_macos_down(58, 0x0008_0000 | 0x20), Some(true));
+        assert_eq!(SingleKey::left_macos_down(59, 0x0004_0000 | 0x01), Some(true));
+        for right in [54, 60, 61, 62, 63] {
+            assert_eq!(SingleKey::left_macos_down(right, u64::MAX), None, "{right}: a right-hand key or Fn");
+            assert!(SingleKey::from_macos_modifier(right).is_some());
+        }
+        assert_eq!(SingleKey::left_macos_down(57, u64::MAX), None, "Caps Lock");
+    }
+
+    #[test]
     fn macos_modifier_keycodes_name_the_single_keys() {
         assert_eq!(SingleKey::from_macos_modifier(63), Some(SingleKey::Fn));
         assert_eq!(SingleKey::from_macos_modifier(61), Some(SingleKey::RightAlt));
@@ -1542,9 +2125,14 @@ mod tests {
     #[test]
     fn the_status_reads_as_the_page_expects() {
         use serde_json::json;
-        let mute = GlobalShortcut::new("Ctrl+Alt+M", Registration::On, vec![], true, "en");
+        let mute = GlobalShortcut {
+            is_default: true,
+            default: Some("Ctrl+Alt+M".into()),
+            ..GlobalShortcut::new("Ctrl+Alt+M", Registration::On, vec![], true, "en")
+        };
+        let default_none = GlobalShortcut { is_default: true, ..GlobalShortcut::default() };
         let status = Status {
-            shortcuts: Shortcuts { mute, ..Shortcuts::default() },
+            shortcuts: Shortcuts { mute, hold_to_talk: default_none.clone(), one_turn: default_none },
             permission: Some(Permission { kind: PermissionKind::InputMonitoring, state: PermissionState::NotAsked }),
             headset: Some(Headset::new(HeadsetPress::OneTurn, HeadsetPress::Skip)),
         };
@@ -1552,13 +2140,80 @@ mod tests {
             serde_json::to_value(status).unwrap(),
             json!({
                 "shortcuts": {
-                    "mute": {"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
-                    "holdToTalk": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
-                    "oneTurn": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
+                    "mute": {"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false, "isDefault": true, "default": "Ctrl+Alt+M", "refusal": null},
+                    "holdToTalk": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false, "isDefault": true, "default": null, "refusal": null},
+                    "oneTurn": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false, "isDefault": true, "default": null, "refusal": null},
                 },
                 "permission": {"kind": "inputMonitoring", "state": "notAsked"},
                 "headset": {"press": "oneTurn", "doublePress": "skip", "outsideCall": "leave"},
             })
         );
+    }
+
+    /// R15: a modifier on its own that cannot be a key is ignored, the recording goes on, and the page is told why.
+    #[test]
+    fn a_lone_modifier_that_cannot_be_a_key_is_ignored_with_a_hint_and_the_recording_goes_on() {
+        let left = |down| Heard::LeftModifier { down };
+        let down = |key| Heard::Modifier { key, down: true };
+        let up = |key| Heard::Modifier { key, down: false };
+        // macOS: a left-hand modifier alone.
+        let mut mac = Recorder::new(Action::Mute);
+        assert_eq!(mac.hear(left(true), at(0)), Recorded::Pending);
+        assert_eq!(mac.hear(left(false), at(80)), Recorded::Hint(Hint::LeftModifier));
+        assert_eq!(mac.hear(left(false), at(90)), Recorded::Pending, "one hint for each press");
+        assert_eq!(mac.settle(at(1000)), Recorded::Pending);
+        // ...and then a real key is still taken.
+        assert_eq!(
+            mac.hear(key(46, "m", mods(false, true, true, false)), at(2000)),
+            Recorded::Done(Some("Ctrl+Alt+M".into()))
+        );
+        // The left Command of a Cmd+C is a chord, not a lone key: no hint.
+        let mut chord = Recorder::new(Action::Mute);
+        chord.hear(left(true), at(0));
+        assert_eq!(
+            chord.hear(key(8, "c", mods(true, false, false, false)), at(40)),
+            Recorded::Done(Some("Cmd+C".into()))
+        );
+        assert_eq!(chord.hear(left(false), at(60)), Recorded::Pending);
+        let mut typed = Recorder::new(Action::Mute);
+        typed.hear(left(true), at(0));
+        typed.hear(key(0, "a", mods(false, false, false, true)), at(10));
+        assert_eq!(typed.hear(left(false), at(20)), Recorded::Pending);
+        // The right-hand ones still record on macOS.
+        assert_eq!(
+            {
+                let mut right = Recorder::new(Action::Mute);
+                right.hear(down(SingleKey::RightShift), at(0));
+                right.hear(up(SingleKey::RightShift), at(50))
+            },
+            Recorded::Done(Some("RightShift:tap".into()))
+        );
+        // Windows and Linux: none of them, Fn included, is a key; the recording waits for a real key.
+        for lone in [SingleKey::RightShift, SingleKey::RightControl, SingleKey::Fn] {
+            let mut other = Recorder::on(Action::HoldToTalk, false);
+            assert_eq!(other.hear(down(lone), at(0)), Recorded::Pending);
+            assert_eq!(other.hear(up(lone), at(2000)), Recorded::Hint(Hint::LoneModifier), "{lone:?}");
+            assert_eq!(other.settle(at(3000)), Recorded::Pending);
+        }
+        let mut other = Recorder::on(Action::Mute, false);
+        other.hear(left(true), at(0));
+        assert_eq!(other.hear(left(false), at(50)), Recorded::Hint(Hint::LoneModifier));
+        assert_eq!(
+            other.hear(key(105, "", mods(false, false, false, false)), at(100)),
+            Recorded::Done(Some("F13".into())),
+            "an F-key is a real key"
+        );
+        assert_eq!(serde_json::to_value(Hint::LeftModifier).unwrap(), "leftModifier");
+        assert_eq!(serde_json::to_value(Hint::LoneModifier).unwrap(), "loneModifier");
+    }
+
+    #[test]
+    fn a_refusal_names_who_holds_the_keys() {
+        use serde_json::json;
+        assert_eq!(
+            serde_json::to_value(settings::Refusal::Duplicate { action: Action::OneTurn }).unwrap(),
+            json!({"reason": "duplicate", "action": "oneTurn"})
+        );
+        assert_eq!(serde_json::to_value(settings::Refusal::Taken).unwrap(), json!({"reason": "taken"}));
     }
 }

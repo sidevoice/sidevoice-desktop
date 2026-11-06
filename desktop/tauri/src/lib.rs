@@ -90,7 +90,7 @@ pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings
     let dir = data::desktop_dir(app).map_err(|e| e.to_string())?;
     let state = app.state::<AppState>();
     let mut stored = state.settings.lock().unwrap();
-    let mut changed = stored.clone().unwrap_or_else(|| Settings::first_run(shortcut_access::default_mute()));
+    let mut changed = stored.clone().unwrap_or_else(Settings::first_run);
     change(&mut changed);
     settings::save(&dir, &changed).map_err(|e| e.to_string())?;
     *stored = Some(changed.clone());
@@ -116,7 +116,7 @@ pub(crate) fn refusal(key: &str, message: impl std::fmt::Display) -> Value {
 }
 
 /// `host.shortcuts`' one command (and `host.muteShortcut`'s, which is its mute shortcut): `action` `get`; `set` the
-/// shortcut named by `target` to `accelerator` (`null`: none); `request` the `permission` a single key needs; `headset`
+/// shortcut named by `target` to `accelerator` (`null`: none) or `restore` it to this system's default; `request` the `permission` a single key needs; `headset`
 /// with what to change; or `record` the next key for `target`. Refuses `shortcut_invalid` for an accelerator that is not a
 /// shortcut the system can read, or that its action cannot be done with.
 #[tauri::command]
@@ -139,6 +139,7 @@ async fn global_shortcuts(
     match action.as_str() {
         "get" => Ok(json!(shortcuts::status(&app))),
         "set" => shortcuts::set(&app, named()?, &accelerator.unwrap_or_default()).map(|shortcut| json!(shortcut)),
+        "restore" => shortcuts::restore(&app, named()?).map(|shortcut| json!(shortcut)),
         "request" => shortcuts::request(&app, permission.as_deref()).map(|status| json!(status)),
         "headset" => {
             let change = headset.unwrap_or(Value::Null);
@@ -522,7 +523,7 @@ pub fn run() {
             }
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
-            let current = stored.unwrap_or_else(|| Settings::first_run(shortcut_access::default_mute()));
+            let current = stored.unwrap_or_else(Settings::first_run);
             shortcuts::apply(&handle);
             app.manage(media_duck::MediaDuck::start(
                 current.media_duck,

@@ -13,6 +13,10 @@ Everything below the first two sections was checked on 2026-10-01 and 2026-11-05
 | Hold to talk | While it is held and the microphone is muted, the microphone is open; let go, it is muted again. It does nothing if the microphone was already open | `hold-start` / `hold-end` → `holdStart()` / `holdEnd()`: the Space hold, kept down by the app and **not** let go of when the page loses focus |
 | Say one thing | The microphone opens for one turn and mutes again when it is sent or taken back; a second press ends it | `one-turn` → `oneTurn()` |
 
+A default is a state, not a value (operator, 2026-11-06; docs/BRIDGE.md → "Defaults are a state"): the settings keep a shortcut absent while the
+person never chose, and the keys as chosen otherwise, even when they are the default's; `restore` makes it absent again. A default that changes later moves only
+those who never chose. Once, a stored value equal to this system's default became absent (`shortcutsDefaultsMigrated`).
+
 Defaults (decided by the operator, 2026-11-05): mute is **⌃⌥M on macOS** and **Ctrl+Alt+Shift+M on Windows and Linux**
 (`DEFAULT_MUTE_*`, core `shortcuts.rs`, chosen per system by `platform::shortcut_access::default_mute`); hold to talk and
 say one thing have **none**. The old default on Windows and Linux, Ctrl+Alt+M, is AltGr+M on many layouts, and
@@ -33,8 +37,18 @@ Keys together (`Ctrl+Alt+Shift+M`, `Cmd+Shift+M`, `F9`) or a single key with how
 - A combination of mute or say one thing acts when it goes down. A combination of hold to talk is held: the hot key's `Pressed`
   starts it and its `Released` ends it (`tauri-plugin-global-shortcut` 2.4 / `global-hotkey` 0.8: Carbon's pressed and released events on
   macOS; on Windows `WM_HOTKEY` then a 50 ms poll of `GetAsyncKeyState`, so the release can be up to 50 ms late; X11 `KeyRelease`).
-- A single key is a gesture (core `shortcuts::Machine`, tested): `hold` is down to up; `tap` is down and up in under 400 ms with no
-  other key between, so ⌘C on the right Command is not a tap; `double` is two such taps, the second ending within 400 ms of the first.
+- A single key is a gesture (core `shortcuts::KeyMachine`, pure logic with the time passed in, tested): `hold` is down to up; `tap` is down and
+  up in under 400 ms with no other key between, so ⌘C on the right Command is not a tap; `double` is two such taps, the second press within
+  400 ms of the first one's release.
+- **One key, several ways.** The same physical single key may carry hold, tap and double, one action each (`RightShift:hold` for hold to
+  talk and `RightShift:double` for say one thing). Only then are they told apart by time (a key with one way acts as above):
+  hold starts after 200 ms down (the microphone opens then, the key still down); a tap is a press under 200 ms with no second press within
+  400 ms, and acts when those 400 ms are up if the key also has a double; a double is a second press within 400 ms of the first one's
+  release, under 200 ms (400 ms with no hold on the key), and acts when it comes up, so the microphone never flashes for it. A second press
+  that goes on past 200 ms is a hold. Another key pressed meanwhile makes the key a modifier of it, and nothing acts. That includes another bound single key pressed (Fn held, then Right Shift: Fn never opens the microphone) and, where the listener runs (a modifier or Fn is bound; macOS), any key typed; with only F-keys bound nothing listens to the keyboard, so typing during a pending F-key tap is not seen and the tap still acts. A machine woken from a sleep or a locked screen forgets its press instead of acting late. Two actions on the same
+  key in the same way are the only duplicate (the first of mute, hold to talk and say one thing keeps it; the other is `refused`, and the
+  answer names who holds it). An F-key has one hot key between its ways. Gaps: a pending tap is dropped, not fired, when its second press
+  turns out to be a long one; and a double that hold-to-talk shares a key with cannot be told from two taps of a hold shorter than 200 ms.
 - Which keys each action takes: hold to talk a combination or `:hold`; mute and say one thing a combination, `:tap` or `:double`.
 
 ## Per system
@@ -98,8 +112,20 @@ alternatives and nothing left registered, and two actions on the same keys.
 
 ## What the app offers instead, and clashes
 
-When the system refuses a shortcut the answer is `refused` with those of `ALTERNATIVES` (`Ctrl+Alt+Shift+M`, then `Ctrl+Alt+Shift+K`) that the system
-takes and that nothing else of ours asks for, for the page to offer in one click. The page itself warns on the same keys set for two actions and on
+When the system refuses a shortcut the answer is `refused` with the action's own suggestion from `ALTERNATIVES`, if the system takes it and nothing
+else of ours asks for it, for the page to offer in one click: **Ctrl+Shift+F9** for mute, **Ctrl+Shift+F10** for say one thing and **Ctrl+Shift+F11**
+for hold to talk (⌃⇧F9 to F11 on a Mac), on every system. They are keys every keyboard has (no F13 to F19), and were checked against the systems' lists:
+
+- macOS: Option+Shift with the volume and brightness keys makes fine adjustments (F1, F2 and F10 to F12 when the F-keys act as media keys), so no
+  Option+Shift here; Control+F2 to F8 is keyboard navigation, so none of those. Control+Shift with F9, F10 and F11 appears nowhere in
+  [Mac keyboard shortcuts](https://support.apple.com/en-us/102650) (read 2026-11-06; its only F-key entry is Fn-F11, Show the desktop).
+- Windows: F10 alone opens the menu bar and Shift+F10 is the context menu, but Ctrl+Shift+F10 is in no list; Ctrl+Shift with F9, F10 and F11 appears nowhere in
+  [Keyboard shortcuts in Windows](https://support.microsoft.com/en-us/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec)
+  (read 2026-11-06; plain F11 maximizes a window).
+- Linux: the GNOME and KDE lists in Sources were **not** re-read for these three; Ctrl+Alt+F1 to F12 (virtual terminals) is the one family
+  known to be taken, and none of these has Alt.
+
+Not tried on a machine; a keyboard whose F-keys are media keys by default needs Fn for them, as for any F-key shortcut. The page itself also warns on the same keys set for two actions and on
 Ctrl+Alt+letter on Windows and Linux. On macOS the app also says when VoiceOver is on and the shortcut holds Control and Option together.
 
 ## Decisions (desktop#447, section 8) as they were decided
