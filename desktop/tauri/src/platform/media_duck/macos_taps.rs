@@ -32,7 +32,7 @@ use objc2_core_audio::{
 use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp};
 use objc2_core_foundation::CFDictionary;
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSObject, NSString};
-use sidevoice_desktop_core::media_duck::Access;
+use sidevoice_desktop_core::media_duck::{Access, Recent, CAPTURE_CHECK_FLAG};
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
@@ -150,6 +150,57 @@ pub(super) fn permission() -> Access {
         1 => Access::Denied,
         _ => Access::Undetermined,
     }
+}
+
+/// How long a fresh process's answer is reused by a read of `get` (the page asks again at each focus and visibility change).
+pub(super) const FRESH_READ: Duration = Duration::from_secs(5);
+/// How long the wait for the person's answer reuses one: a little less than its pace, so each round asks again.
+const FRESH_WAIT: Duration = Duration::from_secs(1);
+/// How often the wait for the person's answer asks a fresh process.
+const FRESH_EVERY: Duration = Duration::from_millis(1500);
+/// The longest a fresh process may take; a slower one is killed and counts as no answer.
+const FRESH_LIMIT: Duration = Duration::from_secs(3);
+
+/// What a fresh process of this app says of System Audio Recording, `None` when that could not be had. macOS tells a
+/// process only what the permission was when it started (granting it makes the system offer "Quit & Reopen"), and a
+/// process this one starts is attributed to the app: it is the same check, `permission`, in a process that did not
+/// start before the answer. Only for the page to say a restart is due: no tap relies on it (`permission` alone allows one).
+/// Reads that come close together share one process (core `Recent`), and one at a time.
+pub(super) fn fresh(ttl: Duration) -> Option<Access> {
+    static RECENT: Mutex<Recent> = Mutex::new(Recent::new());
+    static CLOCK: OnceLock<Instant> = OnceLock::new();
+    // Held while the process runs: a storm of reads waits for it and takes its answer.
+    let mut recent = RECENT.lock().unwrap_or_else(|e| e.into_inner());
+    let now = CLOCK.get_or_init(Instant::now).elapsed().as_millis() as u64;
+    recent.get(now, ttl.as_millis() as u64, check)
+}
+
+/// Starts this executable with the check's flag and reads its answer, within [`FRESH_LIMIT`].
+fn check() -> Option<Access> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe().ok()?)
+        .arg(CAPTURE_CHECK_FLAG)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let since = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if since.elapsed() < FRESH_LIMIT => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let mut out = String::new();
+    child.stdout.take()?.take(64).read_to_string(&mut out).ok()?;
+    status.success().then(|| Access::from_word(&out)).flatten()
 }
 
 fn address(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
@@ -797,8 +848,17 @@ pub(super) fn ask() {
     }
     if let Some(mut tap) = Tap::start(api, Of::Nothing, &output, 0.0, 0.0) {
         let since = Instant::now();
+        let mut last_fresh = Instant::now();
         while permission() == Access::Undetermined && since.elapsed() < ASKING {
             std::thread::sleep(Duration::from_millis(250));
+            // The running process is told nothing new once the person answers (macOS 14.4 and later: it offers "Quit &
+            // Reopen"), so a fresh one is asked too: the wait ends as soon as it has an answer.
+            if last_fresh.elapsed() >= FRESH_EVERY {
+                last_fresh = Instant::now();
+                if matches!(fresh(FRESH_WAIT), Some(Access::Granted | Access::Denied)) {
+                    break;
+                }
+            }
         }
         tap.stop(api);
     }
