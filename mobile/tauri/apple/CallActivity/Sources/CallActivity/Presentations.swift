@@ -319,6 +319,7 @@ struct VoicePill: View {
                     .fixedSize()
             } else {
                 PillBars()
+                    .foregroundStyle(Ink.voice(dark: false))
             }
             ActionButton(action: .cancelSend, enabled: state.canCancelSend) {
                 Image(systemName: "xmark")
@@ -338,7 +339,7 @@ struct VoicePill: View {
 }
 
 /// The pill's bars: five, 2.5 wide every 4.5, 5 / 9 / 13 / 8 / 4 tall, centred in a 22 × 14 box; still, since a Live
-/// Activity cannot follow the voice.
+/// Activity cannot follow the voice. Brand purple, on the pill's white (the mic stays the ink).
 @available(iOS 16.1, *)
 struct PillBars: View {
     static let heights: [CGFloat] = [5, 9, 13, 8, 4]

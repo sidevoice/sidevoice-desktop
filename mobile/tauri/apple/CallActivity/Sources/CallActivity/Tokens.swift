@@ -70,6 +70,8 @@ enum Ink {
     static let mutedInk = Color(hex: 0x601410)
     /// The compact island's mic-off glyph: the mic muted's dark ink (scheme E).
     static let micOffGlyph = Color(hex: 0xf2a4a6)
+    /// Your voice's bars: the brand purple, the web's accent (`--sv-accent`: #4a2f6b light, #c9b6ec dark), whatever the phase's tone is.
+    static func voice(dark: Bool) -> Color { dark ? Color(hex: 0xc9b6ec) : Color(hex: 0x4a2f6b) }
     static let disabled = 0.32
 }
 
