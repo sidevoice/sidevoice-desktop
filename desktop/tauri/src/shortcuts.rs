@@ -504,10 +504,10 @@ impl Drop for Recording {
     fn drop(&mut self) {
         let (app, capture) = (self.app.clone(), self.capture.take());
         // Giving the keys back waits for locks and the main thread: not here, which may be an async worker.
-        let _ = tauri::async_runtime::spawn_blocking(move || {
+        drop(tauri::async_runtime::spawn_blocking(move || {
             drop(capture);
             resume(&app);
-        });
+        }));
     }
 }
 
