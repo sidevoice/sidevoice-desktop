@@ -1,0 +1,6 @@
+{
+  "microphone.help_ios": "点下面的按钮打开 Sidevoice 的设置，然后打开“麦克风”。之后请再检查一次。",
+  "microphone.help_android": "打开应用的设置，进入“权限 › 麦克风”，允许访问麦克风。之后请再检查一次。",
+  "microphone.open_settings_ios": "打开设置",
+  "microphone.open_settings_android": "打开应用设置"
+}

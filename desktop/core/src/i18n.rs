@@ -1,33 +1,29 @@
-//! The app's native texts (tray menu, call controls, the microphone's help for the page), keyed, one bundle per language,
-//! English the fallback for a missing key or a language without a bundle (AGENTS.md). The language is the system's when there is a bundle for
-//! it; the shell reads the system's preferred languages once at start and picks with [`language`].
+//! The app's native texts (tray menu, call controls, the microphone's help for the page), keyed, one JSON table per
+//! language (`i18n/<language>.json`, the eight the web offers), English the fallback for a missing key or a language
+//! without a bundle (AGENTS.md). The loader is sidevoice-shared-i18n's; this file keeps the app's tables and its choice
+//! of language. The shell reads the system's preferred languages once at start and picks with [`language`].
 
-/// The languages with a bundle.
-pub const LANGUAGES: [&str; 2] = ["en", "es"];
+use sidevoice_shared_i18n::{Bundles, Texts};
 
-/// The first of `preferred` (BCP 47 tags, the person's order) whose primary subtag has a bundle; English otherwise.
-pub fn language<S: AsRef<str>>(preferred: &[S]) -> &'static str {
-    preferred
-        .iter()
-        .filter_map(|tag| {
-            let primary = tag.as_ref().split(['-', '_']).next()?.to_ascii_lowercase();
-            LANGUAGES.iter().copied().find(|code| *code == primary)
-        })
-        .next()
-        .unwrap_or("en")
-}
+pub use sidevoice_shared_i18n::{language, LANGUAGES};
+
+/// The app's tables, one per language of [`LANGUAGES`].
+const BUNDLES: Bundles = [
+    ("en", include_str!("../i18n/en.json")),
+    ("de", include_str!("../i18n/de.json")),
+    ("es", include_str!("../i18n/es.json")),
+    ("fr", include_str!("../i18n/fr.json")),
+    ("it", include_str!("../i18n/it.json")),
+    ("ja", include_str!("../i18n/ja.json")),
+    ("pl", include_str!("../i18n/pl.json")),
+    ("zh-Hans", include_str!("../i18n/zh-Hans.json")),
+];
+
+static TEXTS: Texts = Texts::new(&BUNDLES);
 
 /// The text for `key` in `language`, falling back to English, then to the key itself.
 pub fn t(language: &str, key: &str) -> &'static str {
-    let bundle: &[(&str, &'static str)] = match language {
-        "es" => ES,
-        _ => EN,
-    };
-    lookup(bundle, key).or_else(|| lookup(EN, key)).unwrap_or_else(|| leak(key))
-}
-
-fn lookup(bundle: &[(&str, &'static str)], key: &str) -> Option<&'static str> {
-    bundle.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+    TEXTS.get(language, key).unwrap_or_else(|| leak(key))
 }
 
 /// An unknown key is a bug that shows the key; never a panic in a menu.
@@ -35,86 +31,54 @@ fn leak(key: &str) -> &'static str {
     Box::leak(key.to_string().into_boxed_str())
 }
 
-const EN: &[(&str, &str)] = &[
-    ("local_host.log_missing", "There is no log on this computer yet."),
-    ("local_host.reveal_failed", "The file manager could not show the log."),
-    ("startup.reset_busy", "Sidevoice could not start: a reset is still finishing, or its lock is unavailable."),
-    ("shortcut.right", "Right"),
-    ("tray.not_loaded", "Sidevoice · room not loaded"),
-    ("tray.no_call", "No call"),
-    ("tray.reconnecting", "Reconnecting…"),
-    ("tray.in_call", "In a call"),
-    ("tray.in_call_muted", "In a call · muted"),
-    ("tray.mute", "Mute microphone"),
-    ("tray.unmute", "Unmute microphone"),
-    ("tray.hang_up", "Hang up"),
-    ("tray.hide_call_controls", "Hide call controls"),
-    ("tray.show_call_controls", "Show call controls"),
-    ("tray.show", "Show Sidevoice"),
-    ("tray.settings", "Settings…"),
-    ("tray.quit", "Quit Sidevoice"),
-    ("microphone.help_macos", "Open System Settings › Privacy & Security › Microphone and turn on Sidevoice. Then check again."),
-    ("microphone.help_windows", "Open Settings › Privacy & security › Microphone and turn on “Microphone access” and “Let desktop apps access your microphone”. Then check again."),
-    ("microphone.help_linux", "Check that your system’s privacy and sound settings let Sidevoice use the microphone. Then check again."),
-    ("microphone.open_settings", "Open System Settings"),
-    ("microphone.open_settings_windows", "Open Windows Settings"),
-];
-
-const ES: &[(&str, &str)] = &[
-    ("local_host.log_missing", "Todavía no hay ningún registro en este equipo."),
-    ("local_host.reveal_failed", "El gestor de archivos no pudo mostrar el registro."),
-    ("startup.reset_busy", "Sidevoice no pudo iniciarse: todavía se está completando un restablecimiento o no se puede acceder a su bloqueo."),
-    ("shortcut.right", "Der."),
-    ("tray.not_loaded", "Sidevoice · sala sin cargar"),
-    ("tray.no_call", "Sin llamada"),
-    ("tray.reconnecting", "Reconectando…"),
-    ("tray.in_call", "En llamada"),
-    ("tray.in_call_muted", "En llamada · silenciado"),
-    ("tray.mute", "Silenciar micrófono"),
-    ("tray.unmute", "Activar micrófono"),
-    ("tray.hang_up", "Colgar"),
-    ("tray.hide_call_controls", "Esconder controles de llamada"),
-    ("tray.show_call_controls", "Mostrar controles de llamada"),
-    ("tray.show", "Mostrar Sidevoice"),
-    ("tray.settings", "Ajustes…"),
-    ("tray.quit", "Salir de Sidevoice"),
-    ("microphone.help_macos", "Abre Ajustes del Sistema › Privacidad y seguridad › Micrófono y activa Sidevoice. Después vuelve a comprobar."),
-    ("microphone.help_windows", "Abre Configuración › Privacidad y seguridad › Micrófono y activa «Acceso al micrófono» y «Permitir que las aplicaciones de escritorio accedan al micrófono». Después vuelve a comprobar."),
-    ("microphone.help_linux", "Comprueba que los ajustes de privacidad y de sonido del sistema dejan a Sidevoice usar el micrófono. Después vuelve a comprobar."),
-    ("microphone.open_settings", "Abrir Ajustes del Sistema"),
-    ("microphone.open_settings_windows", "Abrir Configuración de Windows"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const MICROPHONE_HELP: [&str; 5] = [
+        "microphone.help_macos",
+        "microphone.help_windows",
+        "microphone.help_linux",
+        "microphone.open_settings",
+        "microphone.open_settings_windows",
+    ];
+
     #[test]
     fn the_system_s_first_language_with_a_bundle_wins() {
         assert_eq!(language(&["es-ES", "en-US"]), "es");
-        assert_eq!(language(&["de-DE", "es_419"]), "es");
-        assert_eq!(language(&["de-DE", "fr"]), "en", "English when nothing has a bundle");
+        assert_eq!(language(&["de-DE", "es_419"]), "de");
+        assert_eq!(language(&["ru-RU", "fr"]), "fr");
+        assert_eq!(language(&["ru-RU", "ko"]), "en", "English when nothing has a bundle");
         assert_eq!(language::<&str>(&[]), "en");
     }
 
     #[test]
+    fn chinese_picks_the_simplified_bundle_and_not_the_traditional_one() {
+        assert_eq!(language(&["zh-Hans-CN"]), "zh-Hans");
+        assert_eq!(language(&["zh-CN"]), "zh-Hans");
+        assert_eq!(language(&["zh"]), "zh-Hans");
+        assert_eq!(language(&["zh-TW", "ja-JP"]), "ja");
+    }
+
+    #[test]
+    fn every_language_has_exactly_english_s_keys_as_texts() {
+        assert_eq!(sidevoice_shared_i18n::check(&BUNDLES), Ok(()));
+    }
+
+    #[test]
     fn the_microphone_help_is_worded_in_each_language() {
-        for key in [
-            "microphone.help_macos",
-            "microphone.help_windows",
-            "microphone.help_linux",
-            "microphone.open_settings",
-            "microphone.open_settings_windows",
-        ] {
-            assert!(lookup(EN, key).is_some() && lookup(ES, key).is_some(), "{key}");
-            assert_ne!(t("es", key), t("en", key), "{key}: Spanish is its own words");
+        for key in MICROPHONE_HELP {
+            for language in LANGUAGES.iter().filter(|language| **language != "en") {
+                assert_ne!(t(language, key), t("en", key), "{language} {key}: its own words");
+            }
         }
     }
 
     #[test]
     fn english_is_the_fallback() {
         assert_eq!(t("es", "tray.hang_up"), "Colgar");
-        assert_eq!(t("de", "tray.hang_up"), "Hang up");
+        assert_eq!(t("de", "tray.hang_up"), "Auflegen");
+        assert_eq!(t("ru", "tray.hang_up"), "Hang up", "a language without a bundle");
         assert_eq!(t("es", "no.such.key"), "no.such.key");
     }
 }

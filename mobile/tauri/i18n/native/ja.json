@@ -1,0 +1,6 @@
+{
+  "microphone.help_ios": "下のボタンで Sidevoice の設定を開き、マイクをオンにしてください。そのあと、もう一度確認してください。",
+  "microphone.help_android": "アプリの設定を開き、「権限 › マイク」でマイクへのアクセスを許可してください。そのあと、もう一度確認してください。",
+  "microphone.open_settings_ios": "設定を開く",
+  "microphone.open_settings_android": "アプリの設定を開く"
+}

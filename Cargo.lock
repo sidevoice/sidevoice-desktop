@@ -5029,6 +5029,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "sidevoice-shared-i18n",
  "url",
 ]
 
@@ -5140,6 +5141,7 @@ dependencies = [
  "serde_json",
  "sidevoice-mobile-plugin",
  "sidevoice-shared",
+ "sidevoice-shared-i18n",
  "sidevoice-shared-tauri",
  "tauri",
  "tauri-build",
@@ -5217,6 +5219,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sidevoice-shared-i18n"
+version = "0.3.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "sidevoice-shared-tauri"
 version = "0.3.0"
 dependencies = [
@@ -5230,6 +5239,7 @@ dependencies = [
  "objc2-media-player",
  "serde_json",
  "sidevoice-shared",
+ "sidevoice-shared-i18n",
  "tauri",
  "tauri-plugin",
  "tauri-plugin-opener",
