@@ -306,12 +306,12 @@ pub mod headset {
         fn a_choice_is_kept_across_a_restart_and_what_is_not_named_stays() {
             let (files, settings) = settings();
             let status = settings
-                .set(Some(&json!({"doublePress": "oneTurn"})), false)
+                .set(Some(&json!({"doublePress": "oneTurn"})), false, false)
                 .unwrap();
             assert_eq!(status["headset"]["doublePress"], "oneTurn");
             assert_eq!(status["headset"]["press"], "mute");
             settings
-                .set(Some(&json!({"press": "skip"})), false)
+                .set(Some(&json!({"press": "skip"})), false, false)
                 .unwrap();
             let again = HeadsetSettings::new(files.path());
             assert_eq!(again.command(Presses::Single, false), Some("skip-reply"));
@@ -323,13 +323,13 @@ pub mod headset {
         fn what_is_not_a_press_is_refused_and_an_unreadable_record_is_the_defaults() {
             let (files, settings) = settings();
             assert!(settings
-                .set(Some(&json!({"press": "loud"})), false)
+                .set(Some(&json!({"press": "loud"})), false, false)
                 .is_err());
             assert!(settings
                 .set(Some(&json!({"press": 3})), false, false)
                 .is_err());
             assert!(settings
-                .set(Some(&json!({"outsideCall": "join"})), false)
+                .set(Some(&json!({"outsideCall": "join"})), false, false)
                 .is_err());
             assert!(settings.set(Some(&json!("mute")), false, false).is_err());
             assert!(settings.set(None, false, false).is_err());
