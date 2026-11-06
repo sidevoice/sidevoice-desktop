@@ -123,6 +123,10 @@ pub struct Headset {
     /// Left out when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub managed_by_system: bool,
+    /// Choosing anything but the defaults shows a playback card beside the call's own surface (iOS, with the Live Activity), so the
+    /// page says so. Left out when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub non_default_adds_card: bool,
 }
 
 impl Headset {
@@ -132,13 +136,16 @@ impl Headset {
             double_press: Some(double_press),
             outside_call: "leave",
             managed_by_system: false,
+            non_default_adds_card: false,
         }
     }
 
-    /// The status of a `choice`; `managed_by_system`: the system's call holds the headset.
-    pub fn of(choice: HeadsetChoice, managed_by_system: bool) -> Headset {
+    /// The status of a `choice`; `managed_by_system`: the system's call holds the headset; `adds_card`: a choice other than the
+    /// defaults shows a playback card here ([`now_playing_gives_way`]).
+    pub fn of(choice: HeadsetChoice, managed_by_system: bool, adds_card: bool) -> Headset {
         Headset {
             managed_by_system,
+            non_default_adds_card: adds_card,
             ..Headset::new(choice.press, choice.double_press)
         }
     }
@@ -149,6 +156,21 @@ impl Headset {
 pub enum Presses {
     Single,
     Double,
+}
+
+impl HeadsetChoice {
+    /// Whether this is the defaults (single press mute, double press nothing): what the system's own mute handles, with no remote
+    /// command of the app needed.
+    pub fn is_default(self) -> bool {
+        self == HeadsetChoice::default()
+    }
+}
+
+/// Whether the playback card (Now Playing, and with it the app's remote commands) gives way to the call's own surface (iOS: the
+/// Live Activity), as `replaced` says. Only the defaults give way: mute comes from the system's mute gesture and the surface's
+/// button. A choice of any other action needs the remote commands, so the card stays for it.
+pub fn now_playing_gives_way(replaced: bool, choice: HeadsetChoice) -> bool {
+    replaced && choice.is_default()
 }
 
 impl HeadsetChoice {
@@ -224,13 +246,54 @@ mod tests {
 
     #[test]
     fn the_status_is_the_pages_and_says_so_only_when_the_system_holds_the_headset() {
-        let own = serde_json::to_value(Headset::of(HeadsetChoice::default(), false)).unwrap();
+        let own =
+            serde_json::to_value(Headset::of(HeadsetChoice::default(), false, false)).unwrap();
         assert_eq!(
             own,
             json!({"press": "mute", "doublePress": "none", "outsideCall": "leave"})
         );
-        let system = serde_json::to_value(Headset::of(HeadsetChoice::default(), true)).unwrap();
+        let system =
+            serde_json::to_value(Headset::of(HeadsetChoice::default(), true, false)).unwrap();
         assert_eq!(system["managedBySystem"], json!(true));
+    }
+
+    #[test]
+    fn a_partial_record_keeps_the_defaults_for_what_it_lacks() {
+        let kept = |text: &str| serde_json::from_str::<HeadsetChoice>(text).unwrap();
+        assert_eq!(kept("{}"), HeadsetChoice::default());
+        assert_eq!(kept(r#"{"press":"mute"}"#).double_press, HeadsetPress::None);
+        assert_eq!(kept(r#"{"press":"skip"}"#).double_press, HeadsetPress::None);
+        assert_eq!(kept(r#"{"doublePress":"skip"}"#).press, HeadsetPress::Mute);
+    }
+
+    #[test]
+    fn the_card_gives_way_to_the_call_s_surface_only_for_the_defaults() {
+        let defaults = HeadsetChoice::default();
+        let single = HeadsetChoice {
+            press: HeadsetPress::OneTurn,
+            ..defaults
+        };
+        let double = HeadsetChoice {
+            double_press: HeadsetPress::Skip,
+            ..defaults
+        };
+        assert!(
+            now_playing_gives_way(true, defaults),
+            "the Live Activity alone, as designed"
+        );
+        assert!(
+            !now_playing_gives_way(true, single),
+            "another single press needs the remote commands"
+        );
+        assert!(
+            !now_playing_gives_way(true, double),
+            "and so does a double press"
+        );
+        assert!(
+            !now_playing_gives_way(false, defaults),
+            "no surface of its own: the card stays"
+        );
+        assert!(defaults.is_default() && !single.is_default() && !double.is_default());
     }
 
     #[test]

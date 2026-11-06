@@ -1003,10 +1003,10 @@ has no key to set. `get()` answers `{shortcuts: {}, permission: null, inApp: fal
 its settings, and acts through the room's commands (`toggle-mute`, `one-turn`, `skip-reply`). It is delivered as the desktop's is: the single
 press is the system's play/pause (and the AirPods stem), the double press the system's next track (docs/MEDIA_CONTROLS.md).
 
-When the nightly developer option "Treat calls as system calls" is on, the system's call holds the headset: `get()` adds
+When the call in progress is the system's (CallKit, Telecom; the nightly developer option "Treat calls as system calls" decides what the next call is, and a call the system refused is the app's own, so the option changing mid-call changes nothing of this one), the system's call holds the headset: `get()` adds
 `headset.managedBySystem: true`, the system mutes whatever was chosen, the double press does nothing, and `setHeadset` is refused
 `bad_request`. The page shows the rows disabled with its own note. `subscribe` hears what the page set with `setHeadset` and the
-developer option's change. The command behind it: `global_shortcuts {action: "get"}` or `{action: "headset", headset}`.
+developer option's change. `headset.nonDefaultAddsCard: true` (iOS, where the Live Activity shows the call) says that choosing anything but the defaults adds a playback card to the lock screen, because the chosen actions arrive through Now Playing's remote commands; the page says so. The command behind it: `global_shortcuts {action: "get"}` or `{action: "headset", headset}`.
 
 ## The call controls settings
 

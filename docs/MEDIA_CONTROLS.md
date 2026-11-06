@@ -30,7 +30,7 @@ buttons (`host.shortcuts.setHeadset({press})`, kept with the app's settings): **
 is playing**, or **nothing** (desktop `src/shortcuts.rs` `headset_press`). `HeadsetStatus` is `null` on
 Windows and Linux, where the page owns the media session and the app has nothing to map. The double press (`doublePress`) is there on macOS: a
 headset's or AirPods' double press of play/pause arrives through `MPRemoteCommandCenter` as `nextTrackCommand`, which `apple.rs` registers on
-macOS only (`Os::NEXT_TRACK`; iOS leaves it, so the lock screen shows no next-track button), under the same condition as the single press (while
+macOS always (`Os::NEXT_TRACK`) and on iOS while the double press has an action (`Os::NEXT_TRACK_ON_DEMAND`, below: the lock screen draws a next-track button for it), under the same condition as the single press (while
 the app shows the call as Now Playing; the handler is removed with the others), and sends as `MediaCommand::NextTrack`. It does what the person chose
 (`host.shortcuts.setHeadset({doublePress})`, `headset_double_press`), **nothing** until chosen. A keyboard's next-track key arrives as the same command, so while
 the app holds the session it triggers the double press's action too. Outside a call the app leaves the buttons to other apps
@@ -41,15 +41,19 @@ On a phone the same rule holds for the native commands: play unmutes, pause togg
 (`mobile/tauri/src/bridge.rs` (`headset`), kept in `headset.json`). On Android a headset's single press arrives as pause while the session
 plays (the microphone is open) and as play while it is paused (muted). The double press is the next-track command too:
 
-- **iOS** registers `nextTrackCommand` (`apple.rs`, `Os::NEXT_TRACK_ON_DEMAND`) only while the double press has an action
-  (`CallState::double_press_wanted`), because the lock screen draws a next-track button for it. The Live Activity makes Now Playing give
-  way (`now_playing_off`), so a double press with an action brings Now Playing back, and with it the handlers, for the call; a
-  double press of `none` leaves it as it was. Registered and let go with the other commands (hang-up included), so music apps get their
-  keys back.
-- **Android** has no remote-command center: the call service's `MediaSession` advertises skip-to-next and gets `onSkipToNext` from the
-  framework, which turns PLAY_PAUSE or HEADSETHOOK pressed twice within the system's double-tap time into it (the single press is
-  delivered after that time). It is released with the service at hang-up.
-- With "Treat calls as system calls" on, the system holds the headset: the single press mutes, the double press does nothing, and the
+- **iOS**: the one rule is that the defaults (single press mute, double press nothing) change nothing, and any other choice brings the
+  remote commands. With the defaults the Live Activity makes Now Playing give way (`now_playing_off`, no second card): mute comes
+  from the AirPods/system mute gesture and the Live Activity's button. With any other choice (single press not mute, or a double press
+  with an action) Now Playing stays beside the Live Activity (`headset::now_playing_gives_way`, a second card on the lock screen) and
+  the remote commands are registered, so the chosen actions work; `nextTrackCommand` is registered only while the double press has an
+  action (`Os::NEXT_TRACK_ON_DEMAND`, `CallState::double_press_wanted`). Registered and let go with the other commands (hang-up
+  included), so music apps get their keys back. The page says so in Settings (`nonDefaultAddsCard`).
+- **Android** has no remote-command center: the call service's `MediaSession` advertises skip-to-next, and gets `onSkipToNext`
+  from the framework (PLAY_PAUSE or HEADSETHOOK pressed twice within the system's double-tap time), **only while the double press has
+  an action**: advertising it makes the framework hold a single press for the double-tap time, so with none the single press is
+  immediate. It is released with the service at hang-up.
+- When the call in progress is the system's (the developer option was on when it started and the system took it; a call the system
+  refused is the app's own, and the option changing mid-call applies to the next call), the system holds the headset: the single press mutes, the double press does nothing, and the
   rows say so read-only (`managedBySystem`).
 
 Which of these a given headset sends is the headset's: AirPods can be set to other gestures in iOS settings, and some Bluetooth

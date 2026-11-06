@@ -139,6 +139,9 @@ pub mod headset {
     pub struct HeadsetSettings {
         file: PathBuf,
         choice: Mutex<HeadsetChoice>,
+        /// Who owns the call being held, while one is: `Some(true)` the system's (CallKit, Telecom), `Some(false)` the app's own,
+        /// whatever the developer option says now (the option applies to the next call; a call the system refused is the app's).
+        owner: Mutex<Option<bool>>,
     }
 
     impl HeadsetSettings {
@@ -156,11 +159,23 @@ pub mod headset {
             Self {
                 file,
                 choice: Mutex::new(choice),
+                owner: Mutex::new(None),
             }
         }
 
         pub fn choice(&self) -> HeadsetChoice {
             *self.choice.lock().unwrap()
+        }
+
+        /// The room says who owns its call now: `Some(system)` while it holds one, `None` when there is none.
+        pub fn call_owner(&self, owner: Option<bool>) {
+            *self.owner.lock().unwrap() = owner;
+        }
+
+        /// Whether the system's call holds the headset: the owner of the call in progress, else (between calls) what the next call
+        /// will be, the developer option `option`.
+        pub fn managed(&self, option: bool) -> bool {
+            self.owner.lock().unwrap().unwrap_or(option)
         }
 
         /// Applies the page's `change` and keeps it. Whether anything changed is the caller's to ask of the change.
@@ -182,19 +197,25 @@ pub mod headset {
 
         /// `host.shortcuts.get()` on a phone: only the headset group. No global shortcut is offered (`shortcuts` is empty), none
         /// needs a permission, and the page has no keys of its own to offer (`inApp: false`). While the system's call holds the
-        /// headset (`system_call`), the rows say so.
-        pub fn status(&self, system_call: bool) -> Value {
+        /// headset (`option`, see [`Self::managed`]), the rows say so; `adds_card`: a choice other than the defaults shows a playback
+        /// card beside the call's own surface here (iOS with the Live Activity).
+        pub fn status(&self, option: bool, adds_card: bool) -> Value {
             json!({
                 "shortcuts": {},
                 "permission": null,
                 "inApp": false,
-                "headset": Headset::of(self.choice(), system_call),
+                "headset": Headset::of(self.choice(), self.managed(option), adds_card),
             })
         }
 
         /// `host.shortcuts.setHeadset(change)`: keeps it and answers the status. Refused while the system's call holds the
         /// headset (the system mutes; the choice is not the app's to change then).
-        pub fn set(&self, headset: Option<&Value>, system_call: bool) -> Result<Value, String> {
+        pub fn set(
+            &self,
+            headset: Option<&Value>,
+            option: bool,
+            adds_card: bool,
+        ) -> Result<Value, String> {
             let object = headset
                 .and_then(Value::as_object)
                 .ok_or("setHeadset(change) takes an object.")?;
@@ -206,22 +227,26 @@ pub mod headset {
             if object.get("press").is_some_and(|value| !value.is_string()) {
                 return Err(format!("no such press: {}", object["press"]));
             }
-            if system_call && !change.is_empty() {
+            if self.managed(option) && !change.is_empty() {
                 return Err("the system's call holds the headset's buttons".into());
             }
             self.change(change).map_err(|error| error.to_string())?;
-            Ok(self.status(system_call))
+            Ok(self.status(option, adds_card))
         }
 
         /// The command of the room a press of the headset asks for (`run({command})`), or none. The single press is the mute of
         /// the native path (`call::RoomCall::toggle_mute`) when it mutes.
-        pub fn command(&self, which: Presses, system_call: bool) -> Option<&'static str> {
-            self.choice().for_press(which, system_call).command()
+        pub fn command(&self, which: Presses, option: bool) -> Option<&'static str> {
+            self.choice()
+                .for_press(which, self.managed(option))
+                .command()
         }
 
         /// Whether the double press has an action: iOS registers the next-track command only then (`CallState::double_press_wanted`).
-        pub fn double_press_wanted(&self, system_call: bool) -> bool {
-            self.choice().for_press(Presses::Double, system_call) != HeadsetPress::None
+        pub fn double_press_wanted(&self, option: bool) -> bool {
+            self.choice()
+                .for_press(Presses::Double, self.managed(option))
+                != HeadsetPress::None
         }
     }
 
@@ -261,7 +286,7 @@ pub mod headset {
         fn a_phone_reports_only_the_headset_and_mutes_on_one_press_by_default() {
             let (_files, settings) = settings();
             assert_eq!(
-                settings.status(false),
+                settings.status(false, false),
                 json!({
                     "shortcuts": {},
                     "permission": null,
@@ -300,12 +325,14 @@ pub mod headset {
             assert!(settings
                 .set(Some(&json!({"press": "loud"})), false)
                 .is_err());
-            assert!(settings.set(Some(&json!({"press": 3})), false).is_err());
+            assert!(settings
+                .set(Some(&json!({"press": 3})), false, false)
+                .is_err());
             assert!(settings
                 .set(Some(&json!({"outsideCall": "join"})), false)
                 .is_err());
-            assert!(settings.set(Some(&json!("mute")), false).is_err());
-            assert!(settings.set(None, false).is_err());
+            assert!(settings.set(Some(&json!("mute")), false, false).is_err());
+            assert!(settings.set(None, false, false).is_err());
             fs::write(files.path().join(FILE), b"not json").unwrap();
             assert_eq!(
                 HeadsetSettings::new(files.path()).choice(),
@@ -320,9 +347,10 @@ pub mod headset {
                 .set(
                     Some(&json!({"press": "skip", "doublePress": "oneTurn"})),
                     false,
+                    false,
                 )
                 .unwrap();
-            let status = settings.status(true);
+            let status = settings.status(true, false);
             assert_eq!(status["headset"]["managedBySystem"], true);
             assert_eq!(
                 status["headset"]["press"], "skip",
@@ -331,12 +359,56 @@ pub mod headset {
             assert_eq!(settings.command(Presses::Single, true), Some("toggle-mute"));
             assert_eq!(settings.command(Presses::Double, true), None);
             assert!(!settings.double_press_wanted(true));
-            assert!(settings.set(Some(&json!({"press": "mute"})), true).is_err());
+            assert!(settings
+                .set(Some(&json!({"press": "mute"})), true, false)
+                .is_err());
             assert_eq!(
                 settings.command(Presses::Single, false),
                 Some("skip-reply"),
                 "kept for when the call is the app's own"
             );
+        }
+
+        #[test]
+        fn the_owner_of_the_call_in_progress_decides_not_the_option() {
+            let (_files, settings) = settings();
+            settings
+                .set(Some(&json!({"press": "skip"})), false, false)
+                .unwrap();
+            // The option is on, but the system refused the call and it went on as the app's own: the rows are the app's.
+            settings.call_owner(Some(false));
+            assert!(!settings.managed(true));
+            assert!(settings.status(true, false)["headset"]
+                .get("managedBySystem")
+                .is_none());
+            assert_eq!(settings.command(Presses::Single, true), Some("skip-reply"));
+            assert!(settings
+                .set(Some(&json!({"press": "mute"})), true, false)
+                .is_ok());
+            // The option is turned off in a system's call: it applies to the next call, this one stays the system's.
+            settings.call_owner(Some(true));
+            assert!(settings.managed(false));
+            assert_eq!(
+                settings.command(Presses::Single, false),
+                Some("toggle-mute")
+            );
+            assert!(settings
+                .set(Some(&json!({"press": "skip"})), false, false)
+                .is_err());
+            // Between calls, the option says what the next one will be.
+            settings.call_owner(None);
+            assert!(settings.managed(true));
+            assert!(!settings.managed(false));
+        }
+
+        #[test]
+        fn the_status_says_when_another_choice_adds_a_card() {
+            let (_files, settings) = settings();
+            let status = settings.status(false, true);
+            assert_eq!(status["headset"]["nonDefaultAddsCard"], true);
+            assert!(settings.status(false, false)["headset"]
+                .get("nonDefaultAddsCard")
+                .is_none());
         }
     }
 }

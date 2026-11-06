@@ -3,7 +3,7 @@
 //! media session is the call's foreground service's (the mobile app's `CallService`), which exists only during the call:
 //! it says the call as playing or paused, Android hands it a headset's play/pause, and its notification and the lock
 //! screen show it. The commands are mapped as on macOS and iOS (`crate::headset`): play → unmute, pause → toggle (the single press)
-//! and next → the double press: the session advertises skip-to-next, and the framework turns a headset's two presses within the
+//! and next → the double press: the session advertises skip-to-next only while the double press has an action (it makes the framework hold a single press for the double-tap time), and the framework turns a headset's two presses within the
 //! system's double-tap time into `onSkipToNext` (`CallService.kt`).
 //!
 //! Every command that arrives is recorded in the app log (`headset …` lines), as on the Apple systems.
@@ -54,6 +54,7 @@ fn session_state(call: &CallState) -> Value {
         "active": call.ready && call.joined,
         "playing": call.mic_enabled,
         "title": call.title.trim(),
+        "next": call.double_press_wanted,
     })
 }
 
@@ -102,7 +103,13 @@ mod tests {
             now_playing_off: false,
             double_press_wanted: false,
         };
-        assert_eq!(session_state(&call), json!({"active": true, "playing": false, "title": "Repo"}));
+        assert_eq!(session_state(&call), json!({"active": true, "playing": false, "title": "Repo", "next": false}));
+        let wanted = CallState { double_press_wanted: true, ..call.clone() };
+        assert_eq!(
+            session_state(&wanted)["next"],
+            true,
+            "skip-to-next is advertised only while the double press has an action"
+        );
         let idle = CallState { ready: true, ..Default::default() };
         assert_eq!(session_state(&idle)["active"], false);
     }
@@ -117,7 +124,7 @@ mod tests {
         let controls = include_str!("../../../android/src/main/java/ai/sidevoice/app/MediaControls.kt");
         assert!(
             controls.contains("fun command(name: String)")
-                && controls.contains("fun update(active: Boolean, playing: Boolean, title: String)")
+                && controls.contains("fun update(active: Boolean, playing: Boolean, title: String, next: Boolean)")
         );
     }
 }
