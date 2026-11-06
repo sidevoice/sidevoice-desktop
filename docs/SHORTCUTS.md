@@ -45,7 +45,7 @@ Keys together (`Ctrl+Alt+Shift+M`, `Cmd+Shift+M`, `F9`) or a single key with how
   hold starts after 200 ms down (the microphone opens then, the key still down); a tap is a press under 200 ms with no second press within
   400 ms, and acts when those 400 ms are up if the key also has a double; a double is a second press within 400 ms of the first one's
   release, under 200 ms (400 ms with no hold on the key), and acts when it comes up, so the microphone never flashes for it. A second press
-  that goes on past 200 ms is a hold. Another key pressed meanwhile makes the key a modifier of it, and nothing acts. Two actions on the same
+  that goes on past 200 ms is a hold. Another key pressed meanwhile makes the key a modifier of it, and nothing acts. That includes another bound single key pressed (Fn held, then Right Shift: Fn never opens the microphone) and, where the listener runs (a modifier or Fn is bound; macOS), any key typed; with only F-keys bound nothing listens to the keyboard, so typing during a pending F-key tap is not seen and the tap still acts. A machine woken from a sleep or a locked screen forgets its press instead of acting late. Two actions on the same
   key in the same way are the only duplicate (the first of mute, hold to talk and say one thing keeps it; the other is `refused`, and the
   answer names who holds it). An F-key has one hot key between its ways. Gaps: a pending tap is dropped, not fired, when its second press
   turns out to be a long one; and a double that hold-to-talk shares a key with cannot be told from two taps of a hold shorter than 200 ms.

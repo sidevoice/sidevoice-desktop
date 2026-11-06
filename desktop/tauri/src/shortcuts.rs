@@ -456,14 +456,17 @@ pub(crate) async fn record(app: AppHandle, action: Action) -> Result<Option<Stri
             Recorded::Pending => {}
         })
     };
+    // One deadline for the whole recording, startup included: a stalled main thread must not hang Settings.
+    let deadline = tokio::time::Instant::now() + RECORD_WAIT;
     let starting = app.clone();
-    let session = tauri::async_runtime::spawn_blocking(move || Recording::start(&starting, heard))
-        .await
-        .map_err(|e| refusal("internal", e))?;
+    let session = match within(deadline, move || Recording::start(&starting, heard)).await {
+        Ok(session) => session,
+        Err(Late::Timeout) => return Err(refusal("record_timeout", "the recording did not start in time")),
+        Err(Late::Failed(why)) => return Err(refusal("internal", why)),
+    };
     let Some(_session) = session else {
         return Err(refusal("unsupported", "this system cannot capture a key for the page"));
     };
-    let deadline = tokio::time::Instant::now() + RECORD_WAIT;
     loop {
         tokio::select! {
             got = &mut result => return Ok(got.unwrap_or(None)),
@@ -477,6 +480,26 @@ pub(crate) async fn record(app: AppHandle, action: Action) -> Result<Option<Stri
                 }
             }
         }
+    }
+}
+
+/// Why work on the blocking pool did not come back.
+#[derive(Debug)]
+enum Late {
+    Timeout,
+    Failed(String),
+}
+
+/// Runs `work` on the blocking pool and waits for it until `deadline`. Work that finishes later has its result dropped there, which
+/// is how a [`Recording`] that starts late gives the keys back (its `Drop`), so it cannot stay active behind a refused recording.
+async fn within<T: Send + 'static>(
+    deadline: tokio::time::Instant,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Late> {
+    match tokio::time::timeout_at(deadline, tauri::async_runtime::spawn_blocking(work)).await {
+        Ok(Ok(done)) => Ok(done),
+        Ok(Err(why)) => Err(Late::Failed(why.to_string())),
+        Err(_) => Err(Late::Timeout),
     }
 }
 
@@ -570,6 +593,10 @@ fn key_event(app: &AppHandle, heard: Listened) {
 }
 
 fn feed(app: &AppHandle, action: Action, edge: Edge) {
+    if edge == Edge::Down {
+        // A combination pressed is foreign input to every single key waiting on its own.
+        foreign(app, None);
+    }
     let effect = {
         let runtime = app.state::<Shortcuts>();
         let mut current = runtime.current.lock().unwrap();
@@ -582,6 +609,10 @@ fn feed(app: &AppHandle, action: Action, edge: Edge) {
 
 /// An edge of a single key: its machine says what that does (by the way it was pressed), and when the clock decides next.
 fn feed_key(app: &AppHandle, key: SingleKey, edge: Edge) {
+    if edge == Edge::Down {
+        // Another key pressed makes what the others were waiting on not a lone key.
+        foreign(app, Some(key));
+    }
     let (done, deadline) = {
         let runtime = app.state::<Shortcuts>();
         let mut current = runtime.current.lock().unwrap();
@@ -593,6 +624,20 @@ fn feed_key(app: &AppHandle, key: SingleKey, edge: Edge) {
     }
     if let Some(deadline) = deadline {
         arm(app, key, deadline);
+    }
+}
+
+/// Foreign input to the single keys other than `pressed` (none: to all): a hold not yet started never starts, a pending tap is dropped.
+fn foreign(app: &AppHandle, pressed: Option<SingleKey>) {
+    let runtime = app.state::<Shortcuts>();
+    let mut current = runtime.current.lock().unwrap();
+    let keys: Vec<SingleKey> = current.keys.iter().map(|slot| slot.key).collect();
+    let others = match pressed {
+        Some(pressed) => shortcuts::others(&keys, pressed),
+        None => keys,
+    };
+    for slot in current.keys.iter_mut().filter(|slot| others.contains(&slot.key)) {
+        let _ = slot.machine.on(Edge::Other, Instant::now());
     }
 }
 
@@ -609,12 +654,29 @@ fn arm(app: &AppHandle, key: SingleKey, deadline: Instant) {
         let mut next = Some(deadline);
         while let Some(at) = next {
             let now = Instant::now();
+            let mut watch = Watch::new(now, SystemTime::now());
             if at > now {
                 std::thread::sleep(at - now);
+            }
+            // Woken by a sleep or behind a locked screen, a release was never seen: the key is forgotten, never acted on late
+            // (a hold that opened the microphone for a key let go of while the machine slept).
+            let looked = watch.look(Instant::now(), SystemTime::now(), session::screen_locked());
+            if looked.is_some_and(Release::loses_the_keyboard) {
+                forget_key(&app, key);
+                return;
             }
             next = poll_key(&app, key);
         }
     });
+}
+
+/// Forgets what `key`'s machine is in the middle of.
+fn forget_key(app: &AppHandle, key: SingleKey) {
+    let runtime = app.state::<Shortcuts>();
+    let mut current = runtime.current.lock().unwrap();
+    if let Some(slot) = current.keys.iter_mut().find(|slot| slot.key == key) {
+        slot.machine.cancel();
+    }
 }
 
 /// What the clock alone decides for `key` now; when it decides next.
@@ -738,6 +800,33 @@ mod tests {
             [(Action::HoldToTalk, Effect::HoldStart), (Action::OneTurn, Effect::Fire)],
             "a way nothing carries does nothing"
         );
+    }
+
+    /// R6: a start that stalls (the main thread, the system's monitor) is bounded by the same deadline as the wait for a key, and
+    /// a start that finishes late drops what it made.
+    #[test]
+    fn a_start_that_stalls_is_given_up_on_and_what_it_makes_late_is_dropped() {
+        #[derive(Debug)]
+        struct Dropped(std::sync::mpsc::Sender<()>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let began = Instant::now();
+        let answer = tauri::async_runtime::block_on(within(
+            tokio::time::Instant::now() + Duration::from_millis(100),
+            move || {
+                std::thread::sleep(Duration::from_millis(400));
+                Dropped(tx)
+            },
+        ));
+        assert!(matches!(answer, Err(Late::Timeout)), "{answer:?}");
+        assert!(began.elapsed() < Duration::from_millis(350), "it did not wait for the stalled start");
+        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok(), "the late start's result is dropped, not kept");
+        let quick = tauri::async_runtime::block_on(within(tokio::time::Instant::now() + Duration::from_secs(5), || 7));
+        assert!(matches!(quick, Ok(7)));
     }
 
     #[test]

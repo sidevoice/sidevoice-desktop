@@ -315,26 +315,45 @@ pub enum Listened {
     Other,
 }
 
-/// What a listener's event means to each single key: the edges to feed their machines. A key's own edges go to it; another
-/// key goes to every key a listener carries, to make what is pending not a lone key.
+/// What a listener's event means to each single key: the edges to feed their machines. A key's own edges go to it. Another key
+/// (a key that is none of the bound ones counts, a bound one's `Down` is fed to the others by the shell, see [`others`]) goes to
+/// every bound single key, an F-key too, to make what is pending not a lone key. Only what the listener hears cancels: with no
+/// modifier or Fn bound there is no listener, and typing is not observed for the sake of a pending F-key tap (the app listens to the
+/// keyboard only for the keys it needs, docs/SHORTCUTS.md).
 pub fn route(bindings: &[Option<Parsed>; 3], heard: Listened) -> Vec<(SingleKey, Edge)> {
-    let mut out: Vec<(SingleKey, Edge)> = Vec::new();
+    let mut bound: Vec<SingleKey> = Vec::new();
     for binding in bindings.iter().flatten() {
-        let Parsed::Single { key, .. } = binding else { continue };
-        let edge = match heard {
-            Listened::Single { key: pressed, down } if pressed == *key => {
-                Some(if down { Edge::Down } else { Edge::Up })
-            }
-            Listened::Other if key.needs_listener() => Some(Edge::Other),
-            _ => None,
-        };
-        if let Some(edge) = edge {
-            if !out.iter().any(|(seen, _)| seen == key) {
-                out.push((*key, edge));
+        if let Parsed::Single { key, .. } = binding {
+            if !bound.contains(key) {
+                bound.push(*key);
             }
         }
     }
-    out
+    let heard = match heard {
+        Listened::Single { key, down } if !bound.contains(&key) => {
+            if !down {
+                return Vec::new();
+            }
+            Listened::Other
+        }
+        heard => heard,
+    };
+    bound
+        .into_iter()
+        .filter_map(|key| match heard {
+            Listened::Single { key: pressed, down } if pressed == key => {
+                Some((key, if down { Edge::Down } else { Edge::Up }))
+            }
+            Listened::Single { .. } => None,
+            Listened::Other => Some((key, Edge::Other)),
+        })
+        .collect()
+}
+
+/// The keys that a press of `pressed` is foreign input to: every other single key in use. Their machines get `Other`, so a hold
+/// that has not started never starts, and a pending tap or double is dropped.
+pub fn others(keys: &[SingleKey], pressed: SingleKey) -> Vec<SingleKey> {
+    keys.iter().copied().filter(|key| *key != pressed).collect()
 }
 
 /// What the machine answers.
@@ -594,6 +613,14 @@ pub enum Release {
     CallEnded,
     /// The shortcut was changed or cleared while it was held.
     Rebound,
+}
+
+impl Release {
+    /// Whether the app was not there to see a key come up (asleep, or the screen locked): what a key machine waits on is then forgotten,
+    /// not acted on late.
+    pub fn loses_the_keyboard(self) -> bool {
+        matches!(self, Release::Slept | Release::Locked)
+    }
 }
 
 /// One hold being watched: the shell looks at it every [`WATCH_TICK`] while it lasts.
@@ -1509,6 +1536,23 @@ mod tests {
         assert_eq!(run(&mut key, &[(Down, 14_000), (Up, 14_040), (Other, 14_100)], &[15_000]), []);
     }
 
+    /// A press of another bound key, or a key typed, is foreign input: delivered as `Other`, it drops what is pending.
+    #[test]
+    fn foreign_input_cancels_what_is_pending_on_every_key() {
+        // F9:tap + F9:double: F9, then A within 400 ms. The tap does not fire.
+        let mut f9 = ways(false, true, true);
+        assert_eq!(run(&mut f9, &[(Down, 0), (Up, 50), (Other, 100)], &[500, 900]), []);
+        // Fn:hold (+ a double) then Right Shift pressed: Fn never opens the mic.
+        let mut fn_key = ways(true, false, true);
+        assert_eq!(run(&mut fn_key, &[(Down, 0), (Other, 100), (Up, 300)], &[200, 300]), []);
+        // But a hold that already started goes on.
+        let mut started = ways(true, false, true);
+        assert_eq!(
+            run(&mut started, &[(Down, 0), (Other, 300), (Up, 400)], &[200]),
+            [(200, (HOLD, HoldStart)), (400, (HOLD, HoldEnd))]
+        );
+    }
+
     #[test]
     fn hold_and_tap_on_one_key() {
         let mut key = ways(true, true, false);
@@ -1601,16 +1645,27 @@ mod tests {
         assert_eq!(route(&bindings, fn_key(false)), [(SingleKey::Fn, Edge::Up)]);
         let control = Listened::Single { key: SingleKey::RightControl, down: true };
         assert_eq!(route(&bindings, control), [(SingleKey::RightControl, Edge::Down)]);
-        assert!(route(&bindings, Listened::Single { key: SingleKey::RightAlt, down: true }).is_empty());
-        // Another key spoils a pending tap of every key a listener carries, not of a combination's action.
+        // A single key that is none of the bound ones is foreign input to all of them; its release is nothing.
+        let alt = |down| Listened::Single { key: SingleKey::RightAlt, down };
+        assert_eq!(route(&bindings, alt(true)), [(SingleKey::Fn, Edge::Other), (SingleKey::RightControl, Edge::Other)]);
+        assert!(route(&bindings, alt(false)).is_empty());
+        // Another key spoils a pending tap of every bound single key, an F-key too, not of a combination's action.
         assert_eq!(
             route(&bindings, Listened::Other),
             [(SingleKey::Fn, Edge::Other), (SingleKey::RightControl, Edge::Other)]
         );
-        assert!(
-            route(&bound("Ctrl+Alt+M", "", "F13:tap"), Listened::Other).is_empty(),
-            "a hot key's key hears no keys"
+        assert_eq!(
+            route(&bound("Ctrl+Alt+M", "", "F13:tap"), Listened::Other),
+            [(SingleKey::Function(13), Edge::Other)],
+            "an F-key's pending tap is spoiled by what the listener hears"
         );
+        assert!(route(&bound("Ctrl+Alt+M", "", ""), Listened::Other).is_empty(), "a combination has no machine here");
+        // The press of one bound key is foreign input to the others, and a key is none to itself.
+        let keys = [SingleKey::Fn, SingleKey::RightShift, SingleKey::Function(9)];
+        assert_eq!(others(&keys, SingleKey::Fn), [SingleKey::RightShift, SingleKey::Function(9)]);
+        assert_eq!(others(&keys[..1], SingleKey::Fn), Vec::<SingleKey>::new());
+        assert!(Release::Slept.loses_the_keyboard() && Release::Locked.loses_the_keyboard());
+        assert!(!Release::TooLong.loses_the_keyboard() && !Release::CallEnded.loses_the_keyboard());
         // One physical key carrying several ways is one key, fed once.
         let shared = bound("RightShift:tap", "RightShift:hold", "RightShift:double");
         let shift = |down| Listened::Single { key: SingleKey::RightShift, down };
