@@ -498,19 +498,6 @@ pub enum Platform {
     Linux,
 }
 
-impl Platform {
-    /// The system this build runs on.
-    pub fn current() -> Platform {
-        if cfg!(target_os = "macos") {
-            Platform::Macos
-        } else if cfg!(target_os = "windows") {
-            Platform::Windows
-        } else {
-            Platform::Linux
-        }
-    }
-}
-
 /// What a system can do with the key of a combination, which `global-hotkey` (the backend) decides by its own tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyReach {

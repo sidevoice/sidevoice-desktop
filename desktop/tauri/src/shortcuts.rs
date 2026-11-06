@@ -14,7 +14,7 @@ use sidevoice_desktop_core::bridge::Command;
 use sidevoice_desktop_core::settings::{GlobalShortcut, Registration, Settings};
 use sidevoice_desktop_core::shortcuts::{
     self, Action, Edge, Effect, Headset, HeadsetPress, Heard, Held, Hold, KeyReach, Listened, Machine, Parsed,
-    Permission, PermissionKind, PermissionState, Platform, Recorded, Recorder, Release, Status, Watch, WATCH_TICK,
+    Permission, PermissionKind, PermissionState, Recorded, Recorder, Release, Status, Watch, WATCH_TICK,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -222,7 +222,7 @@ fn snapshot(app: &AppHandle) -> Status {
         let accelerator = shortcut.accelerator.as_deref().unwrap_or_default();
         shortcut.voice_over = shortcut.state == Registration::On && shortcut_access::reserved_chord_active(accelerator);
         shortcut.layout_bound = shortcut.state == Registration::On
-            && shortcuts::hot_key_reach(Platform::current(), accelerator) == KeyReach::ByLayout;
+            && shortcuts::hot_key_reach(shortcut_access::platform(), accelerator) == KeyReach::ByLayout;
     }
     Status {
         shortcuts: shortcuts::Shortcuts::from_array(all),
@@ -261,7 +261,9 @@ pub(crate) fn set(app: &AppHandle, action: Action, text: &str) -> Result<GlobalS
         }
         // A key this system cannot register as itself (the ISO `<>` key, a keypad key Windows maps to another): refused,
         // and never bound as another key. The page says why.
-        if parsed.hot_key().is_some_and(|keys| shortcuts::hot_key_reach(Platform::current(), &keys) == KeyReach::Never)
+        if parsed
+            .hot_key()
+            .is_some_and(|keys| shortcuts::hot_key_reach(shortcut_access::platform(), &keys) == KeyReach::Never)
         {
             return Err(refusal("shortcut_unsupported", format!("This system cannot register that key: {text}")));
         }
