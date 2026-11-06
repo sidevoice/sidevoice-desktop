@@ -370,12 +370,19 @@
         openSettings: () => call("microphone", { action: "open-settings" }).then(() => undefined),
       } : {}),
       /** How to allow a blocked microphone here, in `language` (a BCP 47 tag, the page's): the app's words in it, or in its
-       *  primary language (`es` for `es-419`), else English. Answers at once. Only with words to give. */
+       *  primary language (`es` for `es-419`; Chinese by script: `zh-CN` is `zh-Hans`), else English. Answers at once. Only with words to give. */
       ...(helpTexts && typeof helpTexts === "object" && helpTexts.en ? {
         help(language) {
           const tag = String(language ?? "");
           const own = (key) => (Object.hasOwn(helpTexts, key) ? helpTexts[key] : undefined);
-          return own(tag) ?? own(tag.split(/[-_]/)[0].toLowerCase()) ?? helpTexts.en;
+          const parts = tag.toLowerCase().split(/[-_]/);
+          // Chinese is worded by script (`zh-Hans`), as shared/i18n's `language` picks it: `zh`, `zh-CN`, `zh-SG` and
+          // `zh_Hans` are Simplified; `zh-Hant`, `zh-TW`, `zh-HK` and `zh-MO` are Traditional, which has no words: English.
+          if (parts[0] === "zh") {
+            const traditional = !parts.includes("hans") && parts.some((part) => ["hant", "tw", "hk", "mo"].includes(part));
+            return (traditional ? undefined : own("zh-Hans")) ?? helpTexts.en;
+          }
+          return own(tag) ?? own(parts[0]) ?? helpTexts.en;
         },
       } : {}),
       /** `listener()` whenever `state()` changes: the permission (in System Settings) or a microphone plugged in or

@@ -90,6 +90,18 @@ test("the microphone offers the system's settings page only where the app says t
   assert.deepEqual(calls, [["microphone", { action: "state" }], ["microphone", { action: "open-settings" }]]);
 });
 
+test("the microphone help reads Chinese by script: Simplified tags get zh-Hans, Traditional ones English", () => {
+  const { transport } = fakeTransport();
+  const texts = { en: { steps: ["Open."] }, "zh-Hans": { steps: ["打开。"] } };
+  const microphone = makeMembers(fakeWindow().win, transport).microphone(true, texts);
+  for (const tag of ["zh-Hans", "zh-CN", "zh_Hans", "zh", "zh-SG", "zh-Hans-HK"]) {
+    assert.deepEqual(plain(microphone.help(tag)), texts["zh-Hans"], tag);
+  }
+  for (const tag of ["zh-TW", "zh-Hant", "zh-HK", "zh_Hant_TW"]) {
+    assert.deepEqual(plain(microphone.help(tag)), texts.en, tag);
+  }
+});
+
 test("the microphone words a blocked one in the page's language, or its primary language, or English, only with words to give", () => {
   const { transport } = fakeTransport();
   const texts = {
