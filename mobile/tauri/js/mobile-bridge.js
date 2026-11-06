@@ -150,6 +150,24 @@
     });
   }
 
+  /** The phone's text size (`host.textScale`, docs/BRIDGE.md): where the app's webview does not follow the system's font scale by
+   *  itself (an Android WebView), the app answers it through `window.SidevoiceTextScale` (MobilePlugin.kt) and says when it may have
+   *  changed with the window's `sidevoice-text-scale` event. Where there is no such answer (iOS, whose webview follows Dynamic
+   *  Type and which the page measures itself) nothing is offered. */
+  function textScale() {
+    const native = win.SidevoiceTextScale;
+    if (!native || typeof native.get !== "function") return null;
+    const read = () => Number(native.get());
+    return Object.freeze({
+      get: read,
+      subscribe(listener) {
+        const changed = () => listener(read());
+        win.addEventListener("sidevoice-text-scale", changed);
+        return () => win.removeEventListener("sidevoice-text-scale", changed);
+      },
+    });
+  }
+
   /** The camera that scans the pairing code (docs/MOBILE.md -> "Scanning the pairing code"): Tauri's barcode scanner plugin
    *  (CameraX and ML Kit on Android, AVFoundation on iOS) behind four calls. The plugin's own words (its permission states, its
    *  rejection strings) stay here: the page gets `granted | prompt | denied` for the permission and one result of a scan, and
@@ -249,6 +267,7 @@
       pairings: members.pairings(),
       /** The camera that scans the pairing code a machine shows (the interface choice of sidevoice-desktop#405). */
       codeScanner: codeScanner(),
+      ...(textScale() ? { textScale: textScale() } : {}),
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
        *  handlers or play a Now Playing element of its own. The app answers the headset's buttons and the lock screen
        *  (sidevoice-shared-tauri's platform/media_controls). */
