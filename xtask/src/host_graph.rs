@@ -4,8 +4,8 @@
 //! The crates sit at the workspace root and each app composes the ones it uses (D-RULE-ROOT: a host crate exists only for its
 //! kind, `#![cfg(desktop)]` or `#![cfg(mobile)]` at its root, which `platform_guard` accepts nowhere else):
 //! - the host crates, `desktop/tauri/` and `mobile/tauri/`, depend on neither each other nor anything that depends on the other;
-//! - the shared crates, `shared/core/`, `shared/i18n/` and `shared/tauri/`, depend on neither host crate;
-//! - `shared/core/` and `shared/i18n/` have no shell in their closure: no Tauri, no webview and no window crate, in any kind of dependency.
+//! - the shared crates, `shared/core/`, `shared/headset/`, `shared/i18n/` and `shared/tauri/`, depend on neither host crate;
+//! - `shared/core/`, `shared/headset/` and `shared/i18n/` have no shell in their closure: no Tauri, no webview and no window crate, in any kind of dependency.
 //! - each host crate (`desktop/tauri`, `mobile/tauri`, `mobile/tauri/plugin`) carries the attribute of its kind at its root, and the
 //!   workspace's `default-members`, which a plain `cargo build` or `cargo test` takes, hold no mobile crate.
 //!
@@ -39,9 +39,9 @@ const TARGETS: [&str; 5] = [
 /// The host crates, by their directory at the workspace root.
 const HOSTS: [&str; 2] = ["desktop/tauri", "mobile/tauri"];
 /// The shared crates, by directory.
-const SHARED: [&str; 3] = ["shared/core", "shared/i18n", "shared/tauri"];
+const SHARED: [&str; 4] = ["shared/core", "shared/headset", "shared/i18n", "shared/tauri"];
 /// The shared crates that have no shell.
-const CORES: [&str; 2] = ["shared/core", "shared/i18n"];
+const CORES: [&str; 3] = ["shared/core", "shared/headset", "shared/i18n"];
 /// The host crates that exist only for their kind: the directory below the workspace root, and the kind whose attribute
 /// `#![cfg(..)]` its `src/lib.rs` carries.
 const ROOT_ATTRIBUTES: [(&str, &str); 3] =

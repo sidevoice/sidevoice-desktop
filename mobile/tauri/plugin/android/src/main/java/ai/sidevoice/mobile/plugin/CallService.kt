@@ -590,7 +590,7 @@ class CallService : Service() {
     /**
      * The call's media session, made for [mine] and only while it runs: Android hands it a headset's or a car's play/pause (a
      * press arrives as pause while the call plays, as play while it is muted), which go to the shared plugin
-     * ([MediaControls.command]) and from there to the call (D-NO-CALLKIT-DEFAULT: the headset's buttons are the call's). No
+     * ([MediaControls.command]; two presses within the double-tap time arrive as `onSkipToNext`, the double press) and from there to the call (D-NO-CALLKIT-DEFAULT: the headset's buttons are the call's). No
      * notification shows it (the card is the call's), so it draws no media card; its Hang up custom action stays for a
      * controller that asks.
      */
@@ -600,6 +600,9 @@ class CallService : Service() {
         created.setCallback(object : MediaSession.Callback() {
             override fun onPlay() = MediaControls.command("play")
             override fun onPause() = MediaControls.command("pause")
+            // A headset's two presses within the system's double-tap time: the framework's own `onMediaButtonEvent` turns them into this
+            // (PLAY_PAUSE or HEADSETHOOK twice, when skip-to-next is among the advertised actions: only while the double press has an action, `applyState`).
+            override fun onSkipToNext() = MediaControls.command("next")
             override fun onCustomAction(action: String, extras: Bundle?) {
                 if (action == CUSTOM_HANG_UP && session?.id == mine.id) finish("hang-up")
             }
@@ -634,7 +637,13 @@ class CallService : Service() {
         media.setMetadata(metadata.build())
         media.setPlaybackState(
             PlaybackState.Builder()
-                .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE)
+                .setActions(
+                    PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or
+                        // Skip-to-next is what makes the framework turn two presses into `onSkipToNext`, and hold a single press for the
+                        // double-tap time: advertised only while the double press has an action, so that with none the single press is
+                        // immediate.
+                        (if (state.next) PlaybackState.ACTION_SKIP_TO_NEXT else 0L)
+                )
                 .addCustomAction(CUSTOM_HANG_UP, getString(R.string.call_notification_hang_up), R.drawable.ic_call_hang_up)
                 .setState(
                     if (state.playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,

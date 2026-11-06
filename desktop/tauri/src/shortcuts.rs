@@ -13,9 +13,9 @@ use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::Command;
 use sidevoice_desktop_core::settings::{GlobalShortcut, Refusal, Registration, Settings};
 use sidevoice_desktop_core::shortcuts::{
-    self, Action, Carried, Edge, Effect, Headset, HeadsetPress, Heard, Held, Hint, Hold, KeyMachine, KeyReach,
-    Listened, Machine, Parsed, Permission, PermissionKind, PermissionState, Pulse, Recorded, Recorder, Release,
-    SingleKey, Status, Watch, WATCH_TICK,
+    self, Action, Carried, Edge, Effect, Headset, HeadsetChange, HeadsetPress, Heard, Held, Hint, Hold, KeyMachine,
+    KeyReach, Listened, Machine, Parsed, Permission, PermissionKind, PermissionState, Pulse, Recorded, Recorder,
+    Release, SingleKey, Status, Watch, WATCH_TICK,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -381,29 +381,13 @@ pub(crate) fn set_headset(
     if !sidevoice_shared_tauri::platform::media_controls::available() {
         return Err(refusal("unsupported", "this system has no headset path the app owns"));
     }
-    let double = match double.filter(|value| !value.is_null()) {
-        None => None,
-        Some(value) => Some(
-            value
-                .as_str()
-                .and_then(HeadsetPress::parse)
-                .ok_or_else(|| refusal("bad_request", format!("no such press: {value}")))?,
-        ),
-    };
-    if outside.is_some_and(|value| value != "leave") {
-        return Err(refusal("bad_request", "the app leaves a headset's buttons to other apps outside a call"));
-    }
-    let press = press
-        .map(|press| {
-            HeadsetPress::parse(press).ok_or_else(|| refusal("bad_request", format!("no such press: {press}")))
-        })
-        .transpose()?;
-    if press.is_some() || double.is_some() {
+    let change = HeadsetChange::parse(press, double, outside).map_err(|why| refusal("bad_request", why))?;
+    if !change.is_empty() {
         let runtime = app.state::<Shortcuts>();
         let _one_at_a_time = runtime.change.lock().unwrap();
         crate::change_settings(app, |s| {
-            s.headset_press = press.unwrap_or(s.headset_press);
-            s.headset_double_press = double.unwrap_or(s.headset_double_press);
+            s.headset_press = change.press.unwrap_or(s.headset_press);
+            s.headset_double_press = change.double_press.unwrap_or(s.headset_double_press);
         })
         .map_err(|e| refusal("internal", e))?;
         apply_locked(app, &runtime);

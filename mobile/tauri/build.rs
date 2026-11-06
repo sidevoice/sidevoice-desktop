@@ -2,7 +2,7 @@ fn main() {
     build_channel();
     // The app's own commands, declared so its capability can grant them: the page's number, its report of the call, the
     // creatures' stills its surfaces show (`call_page`, `call_state`, `call_still`, `call_forget`) and the developer
-    // options' one (`developer_options`). What the apps share is the plugin's (sidevoice-shared-tauri).
+    // options' one (`developer_options`) and the headset's presses' (`global_shortcuts`). What the apps share is the plugin's (sidevoice-shared-tauri).
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "call_page",
@@ -10,6 +10,7 @@ fn main() {
             "call_still",
             "call_forget",
             "developer_options",
+            "global_shortcuts",
         ]),
     ))
     .expect("failed to run tauri-build");

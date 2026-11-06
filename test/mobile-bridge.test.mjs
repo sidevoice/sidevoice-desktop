@@ -45,7 +45,7 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.equal(typeof api.snapshot, "function");
     assert.equal(typeof api.run, "function");
     const host = api.host;
-    assert.deepEqual(Object.keys(host).sort(), ["build", "callSurface", "codeScanner", "engine", "microphone", "pairings", "presence", "reach", "voice"]);
+    assert.deepEqual(Object.keys(host).sort(), ["build", "callSurface", "codeScanner", "engine", "microphone", "pairings", "presence", "reach", "shortcuts", "voice"]);
     assert.equal(host.callSurface.active(), true, "the app draws the call's surfaces");
     for (const fn of ["still", "forget"]) assert.equal(typeof host.callSurface[fn], "function", fn);
     assert.equal(JSON.stringify(host.presence), JSON.stringify({ media: "app" }));
@@ -391,6 +391,77 @@ test("host.debug after a reload reads the app's live state, not the snapshot the
   const release = install("tauri://localhost");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(release.invoked.some(([command]) => command === "developer_options"), false, "a release never asks");
+});
+
+// ----- The headset's presses (host.shortcuts: the only shortcuts a phone has) -----
+const HEADSET_STATUS = { shortcuts: {}, permission: null, inApp: false, headset: { press: "mute", doublePress: "none", outsideCall: "leave" } };
+
+test("host.shortcuts reports the headset alone, asks the app, and tells whoever listens what the page set", async () => {
+  const asked = [];
+  live.plugin = {
+    global_shortcuts: (args) => {
+      asked.push(args);
+      return args.action === "get"
+        ? HEADSET_STATUS
+        : { ...HEADSET_STATUS, headset: { ...HEADSET_STATUS.headset, ...args.headset } };
+    },
+  };
+  try {
+    const { api } = install("tauri://localhost");
+    const shortcuts = api.host.shortcuts;
+    for (const member of ["get", "setHeadset", "subscribe"]) assert.equal(typeof shortcuts[member], "function", member);
+    for (const member of ["set", "restore", "request", "record"]) assert.equal(member in shortcuts, false, `${member}: a phone has no key to set`);
+    const status = await shortcuts.get();
+    assert.deepEqual(Object.keys(status.shortcuts), [], "no global shortcut is offered");
+    assert.equal(status.permission, null);
+    assert.equal(status.inApp, false, "the page has no keys of its own to offer");
+    assert.equal(status.headset.press, "mute");
+    assert.equal(status.headset.doublePress, "none");
+    const heard = [];
+    const stop = shortcuts.subscribe((value) => heard.push(value.headset.doublePress));
+    const next = await shortcuts.setHeadset({ doublePress: "oneTurn" });
+    assert.equal(next.headset.doublePress, "oneTurn");
+    assert.deepEqual(heard, ["oneTurn"]);
+    assert.equal(JSON.stringify(asked.at(-1)), JSON.stringify({ action: "headset", headset: { doublePress: "oneTurn" } }));
+    stop();
+    await shortcuts.setHeadset({ press: "skip" });
+    assert.deepEqual(heard, ["oneTurn"], "a listener that stopped hears no more");
+    await assert.rejects(shortcuts.setHeadset(null), { key: "bad_request" });
+    await assert.rejects(shortcuts.setHeadset("mute"), { key: "bad_request" });
+    assert.equal(asked.filter((args) => args.action === "headset").length, 2, "a bad change never reaches the app");
+  } finally {
+    live.plugin = {};
+  }
+});
+
+test("the developer option that turns the system's call on is read again by whoever listens to host.shortcuts", async () => {
+  let managed = false;
+  live.plugin = {
+    global_shortcuts: () => ({ ...HEADSET_STATUS, headset: { ...HEADSET_STATUS.headset, ...(managed ? { managedBySystem: true } : {}) } }),
+    developer_options: (args) => (managed = args.enabled, { available: ["systemCall"], systemCall: managed }),
+  };
+  try {
+    const { api } = install("tauri://localhost", undefined, true, null, null, null, undefined, { available: ["systemCall"], systemCall: false });
+    const heard = [];
+    api.host.shortcuts.subscribe((value) => heard.push(!!value.headset.managedBySystem));
+    await api.host.debug.set("systemCall", true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(heard, [true]);
+  } finally {
+    live.plugin = {};
+  }
+});
+
+test("a headset's press made 'say one thing' runs the room's one-turn, and does nothing where the page has none", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let turns = 0;
+  win.sidevoiceActions = { toggleMic: () => {}, oneTurn: () => { turns++; } };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic: { enabled: true } }), subscribe: () => () => {} } };
+  assert.equal(api.run({ command: "one-turn" }), true);
+  assert.equal(turns, 1);
+  win.sidevoiceActions = { toggleMic: () => {} };
+  assert.equal(api.run({ command: "one-turn" }), false);
 });
 
 // ----- The camera that scans the pairing code (host.codeScanner; the barcode scanner plugin behind it) -----

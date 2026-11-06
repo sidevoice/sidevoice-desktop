@@ -25,6 +25,7 @@ class UpdateMediaControlsArgs {
     var active: Boolean = false
     var playing: Boolean = false
     var title: String = ""
+    var next: Boolean = false
 }
 
 /**
@@ -67,7 +68,7 @@ class AppPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun updateMediaControls(invoke: Invoke) {
         val args = invoke.parseArgs(UpdateMediaControlsArgs::class.java)
-        MediaControls.update(args.active, args.playing, args.title)
+        MediaControls.update(args.active, args.playing, args.title, args.next)
         invoke.resolve()
     }
 }

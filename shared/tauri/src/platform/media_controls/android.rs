@@ -2,11 +2,13 @@
 //! told the call (active, playing while the microphone is open, its title) and hands back the controls' commands. The
 //! media session is the call's foreground service's (the mobile app's `CallService`), which exists only during the call:
 //! it says the call as playing or paused, Android hands it a headset's play/pause, and its notification and the lock
-//! screen show it. The commands are mapped as on macOS and iOS (`crate::headset`): play → unmute, pause → toggle.
+//! screen show it. The commands are mapped as on macOS and iOS (`crate::headset`): play → unmute, pause → toggle (the single press)
+//! and next → the double press: the session advertises skip-to-next only while the double press has an action (it makes the framework hold a single press for the double-tap time), and the framework turns a headset's two presses within the
+//! system's double-tap time into `onSkipToNext` (`CallService.kt`).
 //!
 //! Every command that arrives is recorded in the app log (`headset …` lines), as on the Apple systems.
 use super::{CallState, CommandSink, MediaCommand, Os};
-use crate::headset::media_command_action;
+use crate::headset::{media_dispatch, Dispatch};
 use crate::platform::kotlin;
 use serde_json::{json, Value};
 use std::sync::Mutex;
@@ -26,19 +28,22 @@ fn record(source: &str, action: &str) {
     sidevoice_shared::debug::debug(&format!("headset {source} → {action}"));
 }
 
-/// A command of the session arrived (`play`, `pause`), on the Kotlin side's main thread.
+/// A command of the session arrived (`play`, `pause`, `next`), on the Kotlin side's main thread.
 fn on_media_command(app: &AppHandle, command: &str) {
     let headset = app.state::<Headset>();
     let call = headset.call.lock().unwrap().clone();
-    let in_call = call.ready && call.joined;
     let source = format!("session:{command}");
-    match if in_call { media_command_action(command, call.mic_enabled) } else { None } {
-        Some(what) => {
+    match media_dispatch(command, call.ready && call.joined, call.mic_enabled) {
+        Dispatch::NextTrack => {
+            (headset.sink)(MediaCommand::NextTrack);
+            record(&source, "double press");
+        }
+        Dispatch::ToggleMute(what) => {
             (headset.sink)(MediaCommand::ToggleMute);
             record(&source, what);
         }
-        None if in_call => record(&source, "already so"),
-        None => record(&source, "no call: only recorded"),
+        Dispatch::Unchanged => record(&source, "already so"),
+        Dispatch::NoCall => record(&source, "no call: only recorded"),
     }
 }
 
@@ -49,6 +54,7 @@ fn session_state(call: &CallState) -> Value {
         "active": call.ready && call.joined,
         "playing": call.mic_enabled,
         "title": call.title.trim(),
+        "next": call.double_press_wanted,
     })
 }
 
@@ -89,9 +95,21 @@ mod tests {
 
     #[test]
     fn the_session_is_active_only_in_a_call_and_plays_while_the_microphone_is_open() {
-        let call =
-            CallState { ready: true, joined: true, mic_enabled: false, title: " Repo ".into(), now_playing_off: false };
-        assert_eq!(session_state(&call), json!({"active": true, "playing": false, "title": "Repo"}));
+        let call = CallState {
+            ready: true,
+            joined: true,
+            mic_enabled: false,
+            title: " Repo ".into(),
+            now_playing_off: false,
+            double_press_wanted: false,
+        };
+        assert_eq!(session_state(&call), json!({"active": true, "playing": false, "title": "Repo", "next": false}));
+        let wanted = CallState { double_press_wanted: true, ..call.clone() };
+        assert_eq!(
+            session_state(&wanted)["next"],
+            true,
+            "skip-to-next is advertised only while the double press has an action"
+        );
         let idle = CallState { ready: true, ..Default::default() };
         assert_eq!(session_state(&idle)["active"], false);
     }
@@ -106,7 +124,7 @@ mod tests {
         let controls = include_str!("../../../android/src/main/java/ai/sidevoice/app/MediaControls.kt");
         assert!(
             controls.contains("fun command(name: String)")
-                && controls.contains("fun update(active: Boolean, playing: Boolean, title: String)")
+                && controls.contains("fun update(active: Boolean, playing: Boolean, title: String, next: Boolean)")
         );
     }
 }

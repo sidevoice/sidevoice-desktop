@@ -481,6 +481,12 @@ impl RoomCall {
         });
     }
 
+    /// The person changed what the headset's double press does (`headset::HeadsetSettings`): the media controls follow, in
+    /// order with the rest (iOS registers the next-track command only while the double press has an action).
+    pub fn headset_changed(&self) {
+        self.then(|room| room.media());
+    }
+
     /// A headset's button or the lock screen asked to mute or unmute: the other of the app's mute (a headset shows none,
     /// [`Room::toggle_mute`]), in order with the rest.
     pub fn toggle_mute(&self) {
@@ -538,6 +544,17 @@ impl RoomCall {
 }
 
 impl Room {
+    /// Tells the headset's settings who owns the call now (the system, or the app's own), so that the rows and the presses follow
+    /// the call and not the developer option, which applies to the next call.
+    fn note_owner(&self) {
+        if let Some(settings) = self
+            .app
+            .try_state::<crate::bridge::headset::HeadsetSettings>()
+        {
+            settings.call_owner(self.holding.map(|_| self.system));
+        }
+    }
+
     /// Starts or stops the call's service, as `joined` says, for the call joined at `since`.
     fn hold(&mut self, joined: bool, since: Option<f64>) {
         if joined == self.holding.is_some() {
@@ -568,6 +585,7 @@ impl Room {
                     Ok(()) => {
                         self.holding = Some(start);
                         self.system = kind;
+                        self.note_owner();
                         self.since = since;
                         // The system is told the page's mute and title at once (`show`), whatever it started with.
                         self.shown = None;
@@ -589,6 +607,7 @@ impl Room {
         } else {
             self.holding = None;
             self.system = false;
+            self.note_owner();
             self.clear_interruption();
             self.since = None;
             self.shown = None;
@@ -872,19 +891,37 @@ impl Room {
     /// The media controls follow the page's call (the media controls reach the plugin's Kotlin, which runs on Android's
     /// UI thread: never from there). Where the system's call takes their place, they show none while it lasts.
     fn media(&self) {
+        // What the person chose for the headset: a double press with an action registers the next-track command, and any choice but
+        // the defaults needs the remote commands, so Now Playing stays beside the call's own surface (iOS: the Live Activity). With
+        // the defaults it gives way, and mute comes from the system's mute gesture and the surface's button.
+        let settings = self
+            .app
+            .try_state::<crate::bridge::headset::HeadsetSettings>();
+        let wanted = settings
+            .as_ref()
+            .is_some_and(|settings| settings.double_press_wanted(self.system));
+        let choice = settings
+            .as_ref()
+            .map(|settings| settings.choice())
+            .unwrap_or_default();
         let state = if self.holding.is_some() && self.system && call_replaces_media_controls(true) {
             CallState {
                 ready: self.state.ready,
                 ..CallState::default()
             }
         } else if self.holding.is_some() && !self.system && call_replaces_media_controls(false) {
-            // The call's Live Activity shows it: no second card, but the AirPods gesture still follows the call.
+            // The call's Live Activity shows it: no second card (unless the person chose another action, which only the remote
+            // commands of Now Playing deliver), but the AirPods gesture still follows the call.
             CallState {
-                now_playing_off: true,
+                now_playing_off: sidevoice_shared_headset::now_playing_gives_way(true, choice),
+                double_press_wanted: wanted,
                 ..self.state.clone()
             }
         } else {
-            self.state.clone()
+            CallState {
+                double_press_wanted: wanted,
+                ..self.state.clone()
+            }
         };
         media_controls::update(&self.app, &state);
     }
@@ -1051,6 +1088,7 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             // The service is gone: the next join starts another.
             room.holding = None;
             room.system = false;
+            room.note_owner();
             room.shown = None;
             room.phone.system_call(false);
             room.clear_interruption();

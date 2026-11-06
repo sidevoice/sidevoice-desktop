@@ -291,7 +291,8 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `reach` | always | `{ plainHttpPrivate: true }`: the webview, at the app's own origin, sends plain http to a private address; whom it may send a secret to, and with whose consent, stay the page's policy. |
 | `localHost` | always | This computer's own core (below). |
 | `reset` | always | `deleteAll`, `resetReport`, and `uninstall` only where the app can remove itself (macOS). |
-| `shortcuts`, `muteShortcut`, `callControls` | always | The app's own settings, set from the page's Settings: the global shortcuts, the headset's press and, where the app captures keys itself, `record` (below); `muteShortcut` is the mute one alone. |
+| `shortcuts` | the desktop app, and the mobile app | The desktop: below, always. The phone: the headset's two presses alone, never the others (below, "The shortcuts"). |
+| `muteShortcut`, `callControls` | the desktop app |  The app's own settings, set from the page's Settings: the global shortcuts, the headset's press and, where the app captures keys itself, `record` (below); `muteShortcut` is the mute one alone. |
 | `mediaDuck` | always | What happens to other apps' media while the microphone is open or the agent is speaking in a call: `get()`, `set(mode)`, `setLevel(level)` (how far Lower goes: `half`, `quarter`, the default, or `mute`; applied at once while lowered), `allow(permission)` (the person's own request, from the list of permissions, to let the app do what `permission` names, macOS `capture` (System Audio Recording) or `automation` (Music and Spotify): when the system may ask) `openSettings(permission)` (macOS: that permission's page in System Settings) and `restart()` (macOS: quits and reopens the app once `capture` is `restart`, that is System Audio Recording allowed but not yet seen by the running process; rejected with the key `media_duck.restart-in-call` during a call, `media_duck.restart-not-needed` otherwise; optional, so a page offers it only where present), `mode` `lower` (the default), `pause` or `off`. Each answers `{mode, level, lower, pause, access?, capture?}`, `capture` being `granted`, `denied`, `undetermined`, `unknown` or `restart` ([MEDIA_DUCK.md](MEDIA_DUCK.md)). Not offered by the mobile app yet. |
 | `updater` | a release or nightly that can update itself | Below. |
 | `debug` | a nightly or a dev build | The developer options (below). |
@@ -868,9 +869,10 @@ interface ShortcutsBridge {
 }
 type RecordHint = "leftModifier" | "loneModifier";   // why a key just pressed was not taken; the recording goes on
 interface ShortcutsStatus {
-  shortcuts: Record<ShortcutAction, GlobalShortcut>;
+  shortcuts: Partial<Record<ShortcutAction, GlobalShortcut>>;   // the global shortcuts the host offers, by action; an action it does not offer is absent, `{}`: none (the phone)
   permission: { kind: "inputMonitoring"; state: "granted" | "notAsked" | "denied" } | null;
   headset: HeadsetStatus | null;                                          // null: no headset path the app owns
+  inApp?: boolean;                                                         // false: the host has no keys of the page's own to offer (the phone); absent: it has, as before
 }
 interface GlobalShortcut {
   accelerator: string | null;   // as the app keeps it: "Ctrl+Alt+Shift+M", "Fn:hold"; null when there is none
@@ -890,6 +892,7 @@ interface HeadsetStatus {
   press: "mute" | "oneTurn" | "skip" | "none";
   doublePress: "mute" | "oneTurn" | "skip" | "none" | null;   // the system's next track; null: this path cannot send one (not on macOS)
   outsideCall: "leave" | "join";                               // "leave" (always, today)
+  managedBySystem?: boolean;                                            // true: the system's call holds the headset (CallKit, Telecom): the system mutes, and the page shows the rows read-only
 }
 interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
   get(): Promise<GlobalShortcut>;
@@ -961,6 +964,11 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
     warning: `leftModifier` (macOS: a left-hand ⌘ ⌥ ⌃ ⇧ pressed alone; only the right-hand ones work on their own) or `loneModifier`
     (a modifier or Fn pressed alone where the system gives the app no way to hear one: Windows and Linux). Where there is no
     `record`, the page records itself and ignores a lone modifier the same way, with the same two hints.
+- **The page renders what the host reports (`ShortcutsStatus`), and checks no platform.** The global group shows the actions present in `shortcuts`
+  (none: no group), the headset group shows when `headset` is not `null` (its double press row when `doublePress` is not `null`), and the keys of
+  the page's own show unless `inApp` is `false`. A host that reports nothing of a group offers none of it; a page that gets `host.muteShortcut`
+  alone, or neither, behaves as it did. The mobile app reports `{shortcuts: {}, permission: null, inApp: false, headset}`: the headset's
+  rows and nothing else ("The mobile app", below).
 - `setHeadset({press, doublePress})` is the one writer of the headset's choice, kept with the app's settings. It is offered where the
   app owns the headset's buttons (macOS: `host.presence`): the single press (the system's play/pause, and the AirPods gesture)
   and the double press (the system's next track) do what they say; the double press is `none` until chosen. `outsideCall: "join"` is refused `bad_request`: the app
@@ -985,6 +993,20 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
   A hint of `record` comes back to the page as `window.__sidevoiceHost.recordHint(hint)`.
 - Everything the page is told is English or a key; the app's own texts for it (a right-hand key's "Right" in the card's tooltip)
   are core `i18n` keys.
+
+### The mobile app
+
+`host.shortcuts` is there on iOS and Android with `get`, `subscribe` and `setHeadset`, and no `set`, `restore`, `request` or `record`: a phone
+has no key to set. `get()` answers `{shortcuts: {}, permission: null, inApp: false, headset: {press, doublePress, outsideCall: "leave"}}`:
+`press` is `mute` and `doublePress` `none` until chosen, as on the desktop (the same `HeadsetPress` values and defaults,
+`sidevoice-shared-headset`). The choice is kept in the app's own files (`headset.json`, mobile `src/bridge.rs`, `headset`), the way the desktop keeps
+its settings, and acts through the room's commands (`toggle-mute`, `one-turn`, `skip-reply`). It is delivered as the desktop's is: the single
+press is the system's play/pause (and the AirPods stem), the double press the system's next track (docs/MEDIA_CONTROLS.md).
+
+When the call in progress is the system's (CallKit, Telecom; the nightly developer option "Treat calls as system calls" decides what the next call is, and a call the system refused is the app's own, so the option changing mid-call changes nothing of this one), the system's call holds the headset: `get()` adds
+`headset.managedBySystem: true`, the system mutes whatever was chosen, the double press does nothing, and `setHeadset` is refused
+`bad_request`. The page shows the rows disabled with its own note. `subscribe` hears what the page set with `setHeadset` and the
+developer option's change. `headset.nonDefaultAddsCard: true` (iOS, where the Live Activity shows the call) says that choosing anything but the defaults adds a playback card to the lock screen, because the chosen actions arrive through Now Playing's remote commands; the page says so. The command behind it: `global_shortcuts {action: "get"}` or `{action: "headset", headset}`.
 
 ## The call controls settings
 

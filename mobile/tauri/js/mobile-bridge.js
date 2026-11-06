@@ -112,6 +112,8 @@
         if (state.micEnabled === request.muted) actions.toggleMic();
         return true;
       },
+      // A headset's press that the person made "say one thing" (host.shortcuts.setHeadset): the microphone opens for one turn.
+      "one-turn": (_request, _state, actions) => typeof actions.oneTurn === "function" && (actions.oneTurn(), true),
       // The stack of conversations on the call's surfaces was tapped: the app is in front, and the page shows its list
       // of conversations (the room's `openConversations`, where the page has it).
       "open-conversations": () => {
@@ -127,7 +129,7 @@
    *  `developer_options` command (docs/BRIDGE.md -> "The developer options"), as the desktop's `host.debug`. The one switch
    *  a phone has is `systemCall`: whether the call is a system's call (CallKit, Telecom). It reads live: what the app kept (asked
    *  again as each page loads, the injected snapshot being from the app's start), then what the last `set` took. */
-  function debug(initial) {
+  function debug(initial, changed) {
     const SWITCHES = ["systemCall"];
     const available = Object.freeze(SWITCHES.filter((name) => (initial.available || []).includes(name)));
     const state = {};
@@ -145,8 +147,52 @@
       },
       set: (name, on) =>
         available.includes(name) && typeof on === "boolean"
-          ? transport.own.call("developer_options", { action: "set", name, enabled: on }).then(take)
+          ? transport.own.call("developer_options", { action: "set", name, enabled: on }).then((state) => {
+              take(state);
+              changed();
+            })
           : Promise.reject({ key: "bad_request", message: "set(name, on) takes an available switch and a boolean." }),
+    });
+  }
+
+  /** The headset's two presses, the only shortcuts a phone has (`host.shortcuts`, docs/BRIDGE.md -> "The shortcuts"), onto the
+   *  app's `global_shortcuts` command. The status it reports holds the headset group alone: no global shortcut (`shortcuts` is
+   *  empty), no permission, and no keys of the page's own (`inApp: false`), so the page shows exactly that and asks nothing of
+   *  the platform. `headset.managedBySystem` is the developer option "Treat calls as system calls": the system mutes then.
+   *  Nothing the app does changes it on its own, so `subscribe` hears what this page set (and the developer option). */
+  function shortcuts() {
+    const listeners = new Set();
+    const status = () => transport.own.call("global_shortcuts", { action: "get" });
+    const tell = (value) => {
+      for (const listener of Array.from(listeners)) {
+        try {
+          listener(value);
+        } catch (error) {
+          if (win.console) win.console.warn("[sidevoice] shortcuts listener failed:", error);
+        }
+      }
+    };
+    return Object.freeze({
+      host: Object.freeze({
+        get: status,
+        /** `change`: `{press?, doublePress?}`, each `"mute" | "oneTurn" | "skip" | "none"`. Answers the status. */
+        setHeadset: (change) =>
+          change && typeof change === "object"
+            ? transport.own.call("global_shortcuts", { action: "headset", headset: change }).then((value) => {
+                tell(value);
+                return value;
+              })
+            : Promise.reject({ key: "bad_request", message: "setHeadset(change) takes an object." }),
+        subscribe: (listener) => {
+          if (typeof listener !== "function") return () => {};
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      }),
+      /** The status changed behind the page's back (the developer option): read again, told to whoever listens. */
+      refresh: () => {
+        if (listeners.size > 0) status().then(tell, () => {});
+      },
     });
   }
 
@@ -239,6 +285,8 @@
     });
   }
 
+  const headset = shortcuts();
+
   const api = {
     /** The contract this app speaks: the desktop's (docs/BRIDGE.md). */
     version: 2,
@@ -262,7 +310,7 @@
        *  developer options by its channel (a nightly or a dev build). */
       build: Object.freeze({ ...build }),
       // Only in a nightly or a dev build (the app tells the state in a build that offers it, `null` in a release).
-      ...(debugState && typeof debugState === "object" ? { debug: debug(debugState) } : {}),
+      ...(debugState && typeof debugState === "object" ? { debug: debug(debugState, headset.refresh) } : {}),
       // The pairings, in the app's private storage (mobile/tauri/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
       /** The camera that scans the pairing code a machine shows (the interface choice of sidevoice-desktop#405). */
@@ -272,6 +320,8 @@
        *  handlers or play a Now Playing element of its own. The app answers the headset's buttons and the lock screen
        *  (sidevoice-shared-tauri's platform/media_controls). */
       presence: Object.freeze({ media: "app" }),
+      /** What a headset's presses do: the only shortcuts a phone has. */
+      shortcuts: headset.host,
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
       reach: Object.freeze({ plainHttpPrivate: true }),
       /** The app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's

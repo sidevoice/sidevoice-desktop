@@ -59,6 +59,10 @@ unsafe impl Send for Observer {}
 static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
 
 impl apple::Os for Native {
+    /// The double press (AirPods, a headset) arrives as the next-track command, registered while the person has given it something
+    /// to do: the lock screen draws a next-track button for it, which nobody asked for until then.
+    const NEXT_TRACK_ON_DEMAND: bool = true;
+
     fn listen_for_mute_gesture(app: &AppHandle) -> bool {
         let (Some(name), Some(key)) = (
             exported_string(c"AVAudioApplicationInputMuteStateChangeNotification"),

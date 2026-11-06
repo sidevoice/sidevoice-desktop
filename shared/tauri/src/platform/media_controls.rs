@@ -28,13 +28,16 @@ pub struct CallState {
     /// Another surface shows the call (iOS: the call's Live Activity): no Now Playing and no remote commands, so that the
     /// system draws no second card. The AirPods mute gesture does not depend on them and follows the call all the same.
     pub now_playing_off: bool,
+    /// The double press has an action the person chose: iOS registers the next-track command only then (macOS always does).
+    pub double_press_wanted: bool,
 }
 
 /// What a media action asks of the call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaCommand {
     ToggleMute,
-    /// macOS's `nextTrackCommand`: what a headset's or AirPods' double press of play/pause arrives as. Only macOS sends it.
+    /// `nextTrackCommand`, on Apple systems, and the media session's skip-to-next on Android: what a headset's or AirPods' double
+    /// press of play/pause arrives as.
     NextTrack,
 }
 

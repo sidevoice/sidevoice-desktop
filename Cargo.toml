@@ -6,10 +6,10 @@
 # runs cargo there).
 [workspace]
 resolver = "2"
-members = ["shared/core", "shared/i18n", "shared/tauri", "desktop/tauri", "desktop/core", "desktop/local-host", "mobile/tauri", "mobile/tauri/plugin", "test-support"]
+members = ["shared/core", "shared/i18n", "shared/headset", "shared/tauri", "desktop/tauri", "desktop/core", "desktop/local-host", "mobile/tauri", "mobile/tauri/plugin", "test-support"]
 # A plain `cargo build` or `cargo test` on a computer does not enter the mobile crates (Cargo cannot make a member depend on the
 # target; each host crate is empty for the other kind, `#![cfg(..)]` at its root). The mobile jobs name them (`-p`).
-default-members = ["shared/core", "shared/i18n", "shared/tauri", "desktop/tauri", "desktop/core", "desktop/local-host", "test-support"]
+default-members = ["shared/core", "shared/i18n", "shared/headset", "shared/tauri", "desktop/tauri", "desktop/core", "desktop/local-host", "test-support"]
 
 # Profiles are read from the workspace root only.
 [profile.release]

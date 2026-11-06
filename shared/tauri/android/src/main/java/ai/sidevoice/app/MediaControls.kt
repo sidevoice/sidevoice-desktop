@@ -10,21 +10,21 @@ package ai.sidevoice.app
  * [command].
  */
 object MediaControls {
-    /** The call as the controls show it: whether there is one, whether it plays (the microphone is open), its title. */
-    data class State(val active: Boolean, val playing: Boolean, val title: String)
+    /** The call as the controls show it: whether there is one, whether it plays (the microphone is open), its title, and whether the double press has an action (`next`: only then does the session advertise skip-to-next, which makes the framework hold a single press for the double-tap time). */
+    data class State(val active: Boolean, val playing: Boolean, val title: String, val next: Boolean)
 
     private val lock = Any()
     private var send: ((String) -> Unit)? = null
-    private var state = State(active = false, playing = false, title = "")
+    private var state = State(active = false, playing = false, title = "", next = false)
     private val listeners = mutableListOf<(State) -> Unit>()
 
     /** Where the commands go, once, when the app starts. */
     fun attach(send: (String) -> Unit) = synchronized(lock) { this.send = send }
 
     /** The call changed: every observer hears it. */
-    fun update(active: Boolean, playing: Boolean, title: String) {
+    fun update(active: Boolean, playing: Boolean, title: String, next: Boolean) {
         val (now, observers) = synchronized(lock) {
-            state = State(active, playing, title)
+            state = State(active, playing, title, next)
             state to listeners.toList()
         }
         observers.forEach { it(now) }
@@ -33,7 +33,7 @@ object MediaControls {
     /** The call as it is now. */
     fun state(): State = synchronized(lock) { state }
 
-    /** A command of the controls: `play` or `pause`. */
+    /** A command of the controls: `play` or `pause` (the single press), `next` (the double press). */
     fun command(name: String) {
         synchronized(lock) { send }?.invoke(name)
     }
