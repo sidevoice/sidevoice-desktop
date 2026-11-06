@@ -49,7 +49,19 @@ const end = controller.indexOf("function ", applyAt + 9);
 const region = controller.slice(start, end);
 const setter = region.match(/"set-muted"\?([\w$]+)\(![\w$]+\.muted\)/)[1];
 const literal = name => name.replaceAll("$", "\\$"); // a minified name may hold a dollar sign
-const setterSource = controller.match(new RegExp(`function ${literal(setter)}\\(([\\w$]+)\\)\\{[^{}]+\\}`))[0];
+// A function's whole source by name: its parameter list (which may hold braces, as a destructured default does) is skipped
+// by balancing parentheses, then its body by balancing braces, so a body with nested blocks is read in full.
+const functionSource = (source, name) => {
+  const at = source.search(new RegExp(`function ${literal(name)}\\(`));
+  assert.ok(at >= 0, `the pinned page defines ${name}`);
+  let depth = 0, i = source.indexOf("(", at);
+  for (; i < source.length; i++) {
+    if (source[i] === "(") depth++;
+    else if (source[i] === ")" && --depth === 0) break;
+  }
+  return source.slice(at, ofFunction(source, i));
+};
+const setterSource = functionSource(controller, setter);
 const fanout = setterSource.match(/\.micEnabled=[\w$]+,([\w$]+)\(\)/)[1];
 const fanoutSource = controller.match(new RegExp(`function ${literal(fanout)}\\(\\)\\{for\\(const ([\\w$]+) of ([\\w$]+)\\.values\\(\\)\\)[^{}]+\\}`));
 assert.ok(fanoutSource, "the page mutes each active voice call");
