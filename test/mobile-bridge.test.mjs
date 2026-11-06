@@ -505,3 +505,36 @@ test("a cancel while the camera permission is asked starts no scan", async () =>
   assert.deepEqual(plain(await scanning), { status: "cancelled" });
   assert.ok(!calls(invoked).includes("scan"));
 });
+
+// ----- The phone's text size (host.textScale: Android's webview does not follow the font scale by itself) -----
+
+test("host.textScale is the app's answer where there is one (Android), live, with the change event; none on iOS", () => {
+  const listeners = new Map();
+  let scale = 1;
+  const { api, win } = install("tauri://localhost");
+  assert.equal("textScale" in api.host, false, "no answer from the app: nothing offered");
+  const withNative = (() => {
+    const module = { exports: {} };
+    vm.runInNewContext(composed, { module, Promise, JSON, Date });
+    const url = new URL("tauri://localhost");
+    const fake = {
+      location: { protocol: url.protocol, host: url.host }, performance: { timeOrigin: 1 }, navigator: undefined,
+      SidevoiceTextScale: { get: () => scale },
+      addEventListener: (type, fn) => listeners.set(type, fn), removeEventListener: (type) => listeners.delete(type),
+      __TAURI_INTERNALS__: { transformCallback: () => 1, unregisterCallback: () => {}, invoke: () => Promise.resolve(null) },
+      setInterval: () => 1, clearInterval: () => {}, setTimeout: (fn) => setTimeout(fn, 0),
+    };
+    return module.exports(fake, "tauri://localhost", true, null, null, null, { channel: "dev", version: "0.1.0" }, null);
+  })();
+  assert.equal(win.__sidevoiceHost.host.textScale, undefined);
+  const ts = withNative.host.textScale;
+  assert.equal(ts.get(), 1);
+  scale = 1.3;
+  assert.equal(ts.get(), 1.3, "read live");
+  const heard = [];
+  const stop = ts.subscribe((value) => heard.push(value));
+  listeners.get("sidevoice-text-scale")();
+  assert.deepEqual(heard, [1.3]);
+  stop();
+  assert.equal(listeners.has("sidevoice-text-scale"), false);
+});

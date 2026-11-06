@@ -4,7 +4,11 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.ComponentCallbacks
+import android.content.res.Configuration
+import android.util.TypedValue
 import android.view.WindowManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -44,15 +48,28 @@ class KeepScreenOnArgs {
 @TauriPlugin
 class MobilePlugin(private val activity: Activity) : Plugin(activity) {
     /**
-     * The page is an app, not a document: it does not pinch-zoom, and shows no zoom buttons. (Text size is the system's
-     * font scale, which the page follows.)
+     * The page is an app, not a document: it does not pinch-zoom, and shows no zoom buttons.
+     *
+     * Text size: an Android WebView does not follow the system's font scale by itself (its `textZoom` is 100 until the app says
+     * otherwise), so the page would not grow with the person's setting. It is kept at 100 here, so that text is never
+     * inflated twice, and the app tells the page the scale instead ([TextScale], the page's `host.textScale`), which the
+     * page applies to its type alone, as a native app does.
      */
     override fun load(webView: WebView) {
         webView.settings.apply {
             setSupportZoom(false)
             builtInZoomControls = false
             displayZoomControls = false
+            textZoom = 100
         }
+        webView.addJavascriptInterface(TextScale(activity), TextScale.NAME)
+        activity.registerComponentCallbacks(object : ComponentCallbacks {
+            override fun onConfigurationChanged(newConfig: Configuration) {
+                webView.post { webView.evaluateJavascript(TextScale.CHANGED, null) }
+            }
+
+            override fun onLowMemory() {}
+        })
         // The activity was made anew by the call card's stack (its process outlived it).
         openConversations(activity.intent)
     }
@@ -202,5 +219,27 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
     private fun visible(): Boolean {
         val current = PluginManager.activity ?: return false
         return current.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+    }
+}
+
+/**
+ * The system's text scale for the page (`window.SidevoiceTextScale`, which the mobile bridge offers as `host.textScale`): how
+ * much bigger than its default the person has set the text, as a multiple (1 is the default). From Android 14 the scale is
+ * nonlinear (large text grows less than the small), so it is measured, not read from `Configuration.fontScale`: what 17sp
+ * comes to in px, over what 17dp would. Read every time it is asked, so it is always the current one.
+ */
+class TextScale(private val activity: Activity) {
+    @JavascriptInterface
+    fun get(): Double {
+        val metrics = activity.resources.displayMetrics
+        val scale = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, REFERENCE_SP, metrics) / metrics.density / REFERENCE_SP
+        return if (scale.isFinite() && scale > 0f) scale.toDouble() else 1.0
+    }
+
+    companion object {
+        const val NAME = "SidevoiceTextScale"
+        /** What the page listens for: the scale may have changed, ask again. */
+        const val CHANGED = "window.dispatchEvent(new Event('sidevoice-text-scale'))"
+        private const val REFERENCE_SP = 17f
     }
 }
