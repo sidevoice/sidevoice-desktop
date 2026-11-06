@@ -62,6 +62,8 @@ Keys together (`Ctrl+Alt+Shift+M`, `Cmd+Shift+M`, `F9`) or a single key with how
 | Headset's press | `MPRemoteCommandCenter` (the system's play/pause; a double press is `nextTrackCommand`) and the AirPods gesture: what the person chose | no path (`headset: null`) | no path | no path |
 | Screen locked → a hold is let go | yes (`CGSessionCopyCurrentDictionary`) | yes (the input desktop cannot be opened) | no observation | no observation |
 
+On the phones (iOS, Android) Settings › Shortcuts shows the headset's two rows and nothing else: the phone reports `shortcuts: {}` and `inApp: false` (docs/BRIDGE.md → "The mobile app"; docs/MEDIA_CONTROLS.md).
+
 Single modifier keys on Windows and Linux are `unavailable` on purpose: `RegisterHotKey` and an X11 grab take a key with its
 modifiers, and the alternatives (a `WH_KEYBOARD_LL` hook, raw input, `/dev/input`) hear every key; a keyboard hook is what keyloggers use and
 what antivirus heuristics look at, so the app does not install one for a convenience. F-keys (F13 to F24 are the usual lone keys) work on every

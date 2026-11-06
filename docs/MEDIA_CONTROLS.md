@@ -35,11 +35,25 @@ the app shows the call as Now Playing; the handler is removed with the others), 
 (`host.shortcuts.setHeadset({doublePress})`, `headset_double_press`), **nothing** until chosen. A keyboard's next-track key arrives as the same command, so while
 the app holds the session it triggers the double press's action too. Outside a call the app leaves the buttons to other apps
 (`outsideCall`: `leave`), as the handlers are only attached while a call is on. A headset's hold to talk stays ruled out (desktop#447).
-Mobile is out of scope here: it is owned by the call's surface (Live Activity, Android's session).
+The phones answer the same two presses with the same choices (below, and docs/MOBILE.md → "The bridge", `shortcuts`).
 
-On a phone the same rule holds for the native commands: play unmutes, pause toggles. On Android a headset's single press
-arrives as pause while the session plays (the microphone is open) and as play while it is paused (muted). There is no
-next-track mapping on the phones: only the desktop has one (above).
+On a phone the same rule holds for the native commands: play unmutes, pause toggles, and the single press does what the person chose
+(`mobile/tauri/src/headset.rs`, kept in `headset.json`). On Android a headset's single press arrives as pause while the session
+plays (the microphone is open) and as play while it is paused (muted). The double press is the next-track command too:
+
+- **iOS** registers `nextTrackCommand` (`apple.rs`, `Os::NEXT_TRACK_ON_DEMAND`) only while the double press has an action
+  (`CallState::double_press_wanted`), because the lock screen draws a next-track button for it. The Live Activity makes Now Playing give
+  way (`now_playing_off`), so a double press with an action brings Now Playing back, and with it the handlers, for the call; a
+  double press of `none` leaves it as it was. Registered and let go with the other commands (hang-up included), so music apps get their
+  keys back.
+- **Android** has no remote-command center: the call service's `MediaSession` advertises skip-to-next and gets `onSkipToNext` from the
+  framework, which turns PLAY_PAUSE or HEADSETHOOK pressed twice within the system's double-tap time into it (the single press is
+  delivered after that time). It is released with the service at hang-up.
+- With "Treat calls as system calls" on, the system holds the headset: the single press mutes, the double press does nothing, and the
+  rows say so read-only (`managedBySystem`).
+
+Which of these a given headset sends is the headset's: AirPods can be set to other gestures in iOS settings, and some Bluetooth
+headsets send a double press as something else.
 
 `npm run web && npm test` runs the pinned page's Media Session and microphone fan-out bodies,
 verbatim from its release bundle, against a live native-call bridge object with Tauri commands

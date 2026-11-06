@@ -1,5 +1,6 @@
 //! What a headset button does to the call's microphone (`platform/media_controls/apple.rs` wires it to macOS and iOS,
-//! `platform/media_controls/android.rs` to Android's media session).
+//! `platform/media_controls/android.rs` to Android's media session). What a press does, and what the page reads of it, is
+//! `sidevoice-shared-headset`'s.
 
 /// What a media command does to the microphone, given whether it is on now. `None`: leave it.
 pub fn media_command_action(command: &str, mic_enabled: bool) -> Option<&'static str> {
@@ -12,13 +13,21 @@ pub fn media_command_action(command: &str, mic_enabled: bool) -> Option<&'static
 }
 
 /// The commands of the system's remote-command center the app answers while it shows a call as Now Playing: the single
-/// press's (`play`, `pause`, `toggle`) and, where the platform has it (`next_track`: macOS), the double press's `next`.
+/// press's (`play`, `pause`, `toggle`) and, where the platform registers it (`next_track`, [`next_track_registered`]), the
+/// double press's `next`.
 pub fn registered_commands(next_track: bool) -> Vec<&'static str> {
     let mut names = vec!["play", "pause", "toggle"];
     if next_track {
         names.push("next");
     }
     names
+}
+
+/// Whether the double press's command (`next`) is registered: always where the platform has it as a matter of course
+/// (`always`: macOS), and where it shows a button the person did not ask for (`on_demand`: iOS, whose lock screen draws a
+/// next-track button for it) only while the person has given the double press something to do (`wanted`).
+pub fn next_track_registered(always: bool, on_demand: bool, wanted: bool) -> bool {
+    always || (on_demand && wanted)
 }
 
 /// Every command of the command center the app lets go of when Now Playing ends: those it registers, and the rest, which
@@ -132,6 +141,14 @@ mod tests {
         }
         let mut seen = std::collections::HashSet::new();
         assert!(ALL_COMMANDS.iter().all(|name| seen.insert(*name)), "each command once");
+    }
+
+    #[test]
+    fn the_double_press_is_registered_by_the_platform_or_on_the_person_s_demand() {
+        assert!(next_track_registered(true, false, false), "macOS: always");
+        assert!(!next_track_registered(false, true, false), "iOS: no button nobody asked for");
+        assert!(next_track_registered(false, true, true), "iOS: the double press has an action");
+        assert!(!next_track_registered(false, false, true), "Android has no remote-command center");
     }
 
     #[test]

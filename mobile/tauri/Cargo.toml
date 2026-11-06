@@ -23,6 +23,7 @@ sidevoice-shared = { path = "../../shared/core" }
 sidevoice-shared-tauri = { path = "../../shared/tauri" }
 # The loader of the app's own texts (src/i18n.rs).
 sidevoice-shared-i18n = { path = "../../shared/i18n" }
+sidevoice-shared-headset = { path = "../../shared/headset" }
 tauri = { version = "2.12", features = [] }
 # The pairings file (src/pairings.rs): a temporary file in the same directory, synced, renamed over the old record, the
 # directory synced. Unix and Windows; the OS calls are the crate's.

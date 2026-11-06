@@ -94,6 +94,7 @@ npx tauri dev                              # needs a desktop: macOS, Windows, or
 Cargo.toml           the Rust workspace: shared/, desktop/, mobile/ and test-support/ (xtask/ is a workspace of its own)
 shared/core/         what every app shares, with no shell: the voice call (host, models, settings) and the app's side of sidevoice-engine
 shared/i18n/         the one loader of the apps' texts: a JSON table per language, English the fallback (serde_json only)
+shared/headset/      what a headset's presses do: the choices, the change the page asks for, the status it reads (serde only)
 shared/tauri/        the commands every app shares, as one Tauri plugin over shared/core (its ACL.md says who may call each); js/ holds the members and the transport of the page's script
 desktop/core/        pure logic (settings, bridge contract, media rules), testable without Tauri
 desktop/tauri/       the desktop app: the shell (src/: windows, tray, shortcut, commands, the voice call's commands and its keychain), packaging, capabilities, and js/, the desktop's part of the script injected into the call page (docs/BRIDGE.md)

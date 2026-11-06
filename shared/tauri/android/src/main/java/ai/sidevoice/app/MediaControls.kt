@@ -33,7 +33,7 @@ object MediaControls {
     /** The call as it is now. */
     fun state(): State = synchronized(lock) { state }
 
-    /** A command of the controls: `play` or `pause`. */
+    /** A command of the controls: `play` or `pause` (the single press), `next` (the double press). */
     fun command(name: String) {
         synchronized(lock) { send }?.invoke(name)
     }

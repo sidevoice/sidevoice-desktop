@@ -8,7 +8,9 @@
 //!   same commands come from the lock screen and Control Center, where the call is shown, and the app is the Now Playing
 //!   app while its audio session is active (the mobile app's host activates it).
 //! - **Double press**: a headset's or AirPods' double press of play/pause arrives as `nextTrackCommand`, registered on macOS
-//!   only (`Os::NEXT_TRACK`), under the same condition as the single press: while the app shows the call as Now Playing.
+//!   (`Os::NEXT_TRACK`) and on iOS while the person has given the double press something to do (`Os::NEXT_TRACK_ON_DEMAND`: its
+//!   lock screen draws a next-track button for it), under the same condition as the single press: while the app shows the call as
+//!   Now Playing.
 //!   The app sends it as `MediaCommand::NextTrack`; a keyboard's next-track key arrives the same way.
 //! - **Extra, AirPods / Beats** (macOS 14+, iOS 17+): the stem-press mute gesture arrives through
 //!   `AVAudioApplication.setInputMuteStateChangeHandler`; the app keeps that state in step with its own mute.
@@ -29,7 +31,9 @@ use objc2_media_player::{
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use crate::headset::{media_dispatch, mute_gesture_action, registered_commands, Changed, Dispatch, ALL_COMMANDS};
+use crate::headset::{
+    media_dispatch, mute_gesture_action, next_track_registered, registered_commands, Changed, Dispatch, ALL_COMMANDS,
+};
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -41,9 +45,14 @@ pub(super) trait Os {
     /// playback starts or stops; iOS takes it from the app's audio session.
     fn set_playback_state(_center: &MPNowPlayingInfoCenter, _state: MPNowPlayingPlaybackState) {}
 
-    /// Whether the next-track command is registered too: a headset's or AirPods' double press of play/pause arrives as it
-    /// (macOS). iOS leaves it alone, so that the lock screen shows no next-track button. False by default.
+    /// Whether the next-track command is registered too, as a matter of course: a headset's or AirPods' double press of
+    /// play/pause arrives as it (macOS). False by default.
     const NEXT_TRACK: bool = false;
+
+    /// Whether it is registered, when not [`Os::NEXT_TRACK`], while the person has given the double press something to do
+    /// (`CallState::double_press_wanted`) and not otherwise: iOS draws a next-track button on the lock screen for it, which
+    /// nobody asked for until then. False by default.
+    const NEXT_TRACK_ON_DEMAND: bool = false;
 
     /// Starts hearing the AirPods / Beats mute gesture, each one handed to [`heard`]; whether it does. Called on the main
     /// thread, with `AVAudioApplication` present. None by default.
@@ -140,8 +149,10 @@ pub fn update<N: Os>(app: &AppHandle, snapshot: &CallState) {
     let now_playing = active && !snapshot.now_playing_off;
     let title = snapshot.title.trim().to_owned();
     let (mic, in_call) = (snapshot.mic_enabled, snapshot.ready && snapshot.joined);
+    let next = next_track_registered(N::NEXT_TRACK, N::NEXT_TRACK_ON_DEMAND, snapshot.double_press_wanted);
     let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || apply::<N>(&app2, active, now_playing, in_call, mic, &title));
+    let _ =
+        app.run_on_main_thread(move || apply::<N>(&app2, Applied { active, now_playing, in_call, mic, next }, &title));
 }
 
 /// Whether the gesture handler is installed now (only during a call).
@@ -169,10 +180,10 @@ fn set_muted(shared: &AVAudioApplication, muted: bool) {
     }
 }
 
-/// The commands the app answers ([`registered_commands`]: the single press's, and on macOS the double press's
-/// `nextTrackCommand`), each with its name.
-fn commands<N: Os>() -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
-    registered_commands(N::NEXT_TRACK).into_iter().map(|name| (command_named(name), name)).collect()
+/// The commands the app answers ([`registered_commands`]: the single press's, and the double press's `nextTrackCommand` where
+/// it is registered), each with its name.
+fn commands(next: bool) -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
+    registered_commands(next).into_iter().map(|name| (command_named(name), name)).collect()
 }
 
 /// The command of the shared command center that `name` ([`ALL_COMMANDS`]) names.
@@ -250,19 +261,49 @@ fn census(when: &str) {
     );
 }
 
-/// Registers the handlers of the commands, enabled, once.
-fn register<N: Os>(app: &AppHandle) {
-    for (command, name) in commands::<N>() {
-        let app = app.clone();
-        let handler = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
-            on_media_command(&app, name);
-            MPRemoteCommandHandlerStatus::Success
-        });
-        // SAFETY: the target the command center returns is kept by it; the block is retained by it too.
-        unsafe {
-            let _target: Retained<AnyObject> = command.addTargetWithHandler(&handler);
+/// Whether the double press's `nextTrackCommand` has its handler now. Only touched on the main thread.
+static NEXT_REGISTERED: Mutex<bool> = Mutex::new(false);
+
+/// Adds the handler of the command `name`.
+fn add_handler(app: &AppHandle, command: &MPRemoteCommand, name: &'static str) {
+    let app = app.clone();
+    let handler = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
+        on_media_command(&app, name);
+        MPRemoteCommandHandlerStatus::Success
+    });
+    // SAFETY: the target the command center returns is kept by it; the block is retained by it too.
+    unsafe {
+        let _target: Retained<AnyObject> = command.addTargetWithHandler(&handler);
+    }
+}
+
+/// Registers the handlers of the commands, once; the double press's only where `next` says ([`Applied::next`]).
+fn register<N: Os>(app: &AppHandle, next: bool) {
+    for (command, name) in commands(next) {
+        add_handler(app, &command, name);
+    }
+    *NEXT_REGISTERED.lock().unwrap() = next;
+}
+
+/// The double press's command follows whether the person wants it, while the others stay registered: its handler goes or
+/// comes without the call's card being let go of.
+fn follow_next(app: &AppHandle, next: bool) {
+    let mut registered = NEXT_REGISTERED.lock().unwrap();
+    if *registered == next {
+        return;
+    }
+    let command = command_named("next");
+    // SAFETY: main thread; `nil` removes every target of the command.
+    unsafe {
+        if next {
+            add_handler(app, &command, "next");
+            command.setEnabled(true);
+        } else {
+            command.removeTarget(None);
+            command.setEnabled(false);
         }
     }
+    *registered = next;
 }
 
 /// Lets go of Now Playing (HANDOVER-live-activity R2-6): every handler of every command removed and every command
@@ -282,10 +323,22 @@ fn release<N: Os>() {
         center.setNowPlayingInfo(None);
     }
     *REGISTERED.lock().unwrap() = false;
+    *NEXT_REGISTERED.lock().unwrap() = false;
     N::end_remote_control_events();
 }
 
-fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool, mic_enabled: bool, title: &str) {
+/// What [`apply`] shows: whether a call is active, whether Now Playing shows it, whether it is joined, whether the microphone
+/// is open, and whether the double press's command is registered ([`next_track_registered`]).
+struct Applied {
+    active: bool,
+    now_playing: bool,
+    in_call: bool,
+    mic: bool,
+    next: bool,
+}
+
+fn apply<N: Os>(app: &AppHandle, shown: Applied, title: &str) {
+    let Applied { active, now_playing, in_call, mic: mic_enabled, next } = shown;
     // Let go of Now Playing whenever it is not to show the call and something changed: a call starting (the report that
     // starts the call's service), Now Playing giving way (the Live Activity runs), and a call ending. What was there at a
     // call's start, and what is left after, go to the app log.
@@ -303,12 +356,15 @@ fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool,
         }
     }
     if now_playing && !*REGISTERED.lock().unwrap() {
-        register::<N>(app);
+        register::<N>(app, next);
         *REGISTERED.lock().unwrap() = true;
-        for (command, _) in commands::<N>() {
+        for (command, _) in commands(next) {
             // SAFETY: main thread; plain property set.
             unsafe { command.setEnabled(true) };
         }
+    }
+    if now_playing {
+        follow_next(app, next);
     }
     // SAFETY: main thread (update() dispatches here); plain Foundation / MediaPlayer calls.
     unsafe {

@@ -13,6 +13,7 @@ mod bridge;
 mod call;
 mod developer_options;
 mod downloads;
+mod headset;
 mod hold;
 mod i18n;
 pub mod pairings;
@@ -170,6 +171,35 @@ fn developer_options(
     }
 }
 
+/// `host.shortcuts`' one command (docs/BRIDGE.md → "The shortcuts"), the phone's part of it: `action` `get`, or `headset` with the
+/// change (`setHeadset`), answering the status, which holds the headset group alone (`headset::HeadsetSettings::status`).
+#[tauri::command]
+fn global_shortcuts(
+    app: AppHandle,
+    webview: Webview,
+    settings: tauri::State<'_, headset::HeadsetSettings>,
+    action: String,
+    headset: Option<serde_json::Value>,
+) -> Result<serde_json::Value, serde_json::Value> {
+    let refusal = |why: String| serde_json::json!({ "key": "bad_request", "message": why });
+    the_page(&app, &webview).map_err(refusal)?;
+    let system = headset::system_call(&app);
+    match (action.as_str(), headset.as_ref()) {
+        ("get", None) => Ok(settings.status(system)),
+        ("headset", Some(change)) => {
+            let status = settings.set(Some(change), system).map_err(refusal)?;
+            // Now Playing follows whether the double press has an action (iOS), also within a call.
+            if let Some(room) = app.try_state::<call::RoomCall>() {
+                room.headset_changed();
+            }
+            Ok(status)
+        }
+        _ => Err(refusal(
+            "global_shortcuts takes get, or headset with the change".into(),
+        )),
+    }
+}
+
 /// The page's number (the host's page generation), asked once by the page's script when it loads (the app's own
 /// command): it sends it back with every report, so that a report of a page that has since been replaced, reaching the
 /// app late, is told from the current page's.
@@ -284,6 +314,7 @@ impl From<CallReport> for CallState {
             mic_enabled: report.mic_enabled,
             title: report.title,
             now_playing_off: false,
+            double_press_wanted: false,
         }
     }
 }
@@ -323,7 +354,8 @@ fn run_app() {
             call_state,
             call_still,
             call_forget,
-            developer_options
+            developer_options,
+            global_shortcuts
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -338,13 +370,11 @@ fn run_app() {
             media_controls::attach(
                 &handle,
                 Arc::new(move |command| match command {
-                    MediaCommand::ToggleMute => {
-                        if let Some(room) = media_app.try_state::<call::RoomCall>() {
-                            room.toggle_mute();
-                        }
-                    }
-                    // Sent by macOS only: the phone's session does not register the next-track command.
-                    MediaCommand::NextTrack => {}
+                    // The single press (play/pause, the AirPods stem): what the person chose, the mute by default.
+                    MediaCommand::ToggleMute => headset::pressed(&media_app, sidevoice_shared_headset::Presses::Single),
+                    // The double press (the next-track command; iOS, while the double press has an action, and Android's skip to
+                    // next): what the person chose, nothing by default.
+                    MediaCommand::NextTrack => headset::pressed(&media_app, sidevoice_shared_headset::Presses::Double),
                 }),
             );
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
@@ -365,6 +395,7 @@ fn run_app() {
                 &handle,
                 env!("SIDEVOICE_BUILD_CHANNEL"),
             )?);
+            app.manage(headset::HeadsetSettings::of_app(&handle)?);
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
             // The application host: the voice call and the engine. A phone never resets its data under the call, so
             // every request is admitted.

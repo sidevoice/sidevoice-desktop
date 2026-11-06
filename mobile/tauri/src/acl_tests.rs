@@ -41,6 +41,7 @@ fn the_window_is_granted_every_shared_command_it_uses_once_and_nothing_else() {
             "allow-call-state",
             "allow-call-still",
             "allow-developer-options",
+            "allow-global-shortcuts",
             "barcode-scanner:allow-cancel",
             "barcode-scanner:allow-check-permissions",
             "barcode-scanner:allow-open-app-settings",
@@ -48,7 +49,7 @@ fn the_window_is_granted_every_shared_command_it_uses_once_and_nothing_else() {
             "barcode-scanner:allow-scan",
             "log:allow-log"
         ],
-        "the app's own: its page's number, its report of the call, the stills of its surfaces, its developer options, the \
+        "the app's own: its page's number, its report of the call, the stills of its surfaces, its developer options, its headset's presses, the \
          scanner's camera permission, settings link and scan (not its vibration), and the page's problems into the log"
     );
     let unique: BTreeSet<&String> = granted.iter().collect();

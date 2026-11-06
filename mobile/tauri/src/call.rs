@@ -481,6 +481,12 @@ impl RoomCall {
         });
     }
 
+    /// The person changed what the headset's double press does (`headset::HeadsetSettings`): the media controls follow, in
+    /// order with the rest (iOS registers the next-track command only while the double press has an action).
+    pub fn headset_changed(&self) {
+        self.then(|room| room.media());
+    }
+
     /// A headset's button or the lock screen asked to mute or unmute: the other of the app's mute (a headset shows none,
     /// [`Room::toggle_mute`]), in order with the rest.
     pub fn toggle_mute(&self) {
@@ -872,19 +878,30 @@ impl Room {
     /// The media controls follow the page's call (the media controls reach the plugin's Kotlin, which runs on Android's
     /// UI thread: never from there). Where the system's call takes their place, they show none while it lasts.
     fn media(&self) {
+        // Whether the double press has an action: iOS shows Now Playing (and registers the next-track command) for it, also beside
+        // the Live Activity, which is a second card on the lock screen that the person asked for by choosing one.
+        let wanted = self
+            .app
+            .try_state::<crate::headset::HeadsetSettings>()
+            .is_some_and(|settings| settings.double_press_wanted(false));
         let state = if self.holding.is_some() && self.system && call_replaces_media_controls(true) {
             CallState {
                 ready: self.state.ready,
                 ..CallState::default()
             }
         } else if self.holding.is_some() && !self.system && call_replaces_media_controls(false) {
-            // The call's Live Activity shows it: no second card, but the AirPods gesture still follows the call.
+            // The call's Live Activity shows it: no second card (unless the double press has an action, which only Now Playing
+            // delivers), but the AirPods gesture still follows the call.
             CallState {
-                now_playing_off: true,
+                now_playing_off: !wanted,
+                double_press_wanted: wanted,
                 ..self.state.clone()
             }
         } else {
-            self.state.clone()
+            CallState {
+                double_press_wanted: wanted,
+                ..self.state.clone()
+            }
         };
         media_controls::update(&self.app, &state);
     }

@@ -905,46 +905,9 @@ pub struct Permission {
     pub state: PermissionState,
 }
 
-/// What a headset's press does: the single press (play/pause) or the double press (the system's next track).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub enum HeadsetPress {
-    #[default]
-    Mute,
-    OneTurn,
-    Skip,
-    None,
-}
-
-impl HeadsetPress {
-    pub fn parse(name: &str) -> Option<HeadsetPress> {
-        match name {
-            "mute" => Some(HeadsetPress::Mute),
-            "oneTurn" => Some(HeadsetPress::OneTurn),
-            "skip" => Some(HeadsetPress::Skip),
-            "none" => Some(HeadsetPress::None),
-            _ => None,
-        }
-    }
-}
-
-/// What a headset's buttons do here: `host.shortcuts`' `HeadsetStatus`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Headset {
-    pub press: HeadsetPress,
-    /// A double press arrives as the system's next-track command, which the app answers while it holds the media session.
-    /// Always there where the app owns the headset; `Option` is the page's `null`: a path that cannot send one.
-    pub double_press: Option<HeadsetPress>,
-    /// The headset only acts in a call: the app leaves the buttons to other apps outside one.
-    pub outside_call: &'static str,
-}
-
-impl Headset {
-    pub fn new(press: HeadsetPress, double_press: HeadsetPress) -> Headset {
-        Headset { press, double_press: Some(double_press), outside_call: "leave" }
-    }
-}
+/// What a headset's presses do, and the status the page reads of them: the phones answer them too, so they are
+/// `sidevoice-shared-headset`'s.
+pub use sidevoice_shared_headset::{Headset, HeadsetChange, HeadsetPress};
 
 /// `host.shortcuts.get()`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
