@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-global-shortcuts"
+description = "Enables the global_shortcuts command without any pre-configured scope."
+commands.allow = ["global_shortcuts"]
+
+[[permission]]
+identifier = "deny-global-shortcuts"
+description = "Denies the global_shortcuts command without any pre-configured scope."
+commands.deny = ["global_shortcuts"]

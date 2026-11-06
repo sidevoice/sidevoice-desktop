@@ -12,8 +12,8 @@ fn main() {
     // tauri-build adds none of its own.
     let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
     // The app's own commands, declared so capabilities can grant them per window/origin: the room window's `bridge_state`
-    // (+ `debug_log`), the local host (`local_host_*`), the data reset (`data_*`), the mute shortcut and the call controls
-    // settings (`mute_shortcut`, `call_controls_settings`), the app's updates (`updater`) and the developer options
+    // (+ `debug_log`), the local host (`local_host_*`), the data reset (`data_*`), the global shortcuts and the call controls
+    // settings (`global_shortcuts`, `call_controls_settings`), the app's updates (`updater`) and the developer options
     // (`debug_options`); the call controls card its own six. What the apps share is the plugin's (sidevoice-shared-tauri;
     // its permissions are `sidevoice-shared-tauri:allow-<command>`): the voice call, the engine, the microphone permission,
     // the levels of the call and the pairings.
@@ -37,7 +37,7 @@ fn main() {
             "data_delete_all",
             "data_uninstall",
             "data_reset_report",
-            "mute_shortcut",
+            "global_shortcuts",
             "media_duck",
             "call_controls_settings",
             "updater",

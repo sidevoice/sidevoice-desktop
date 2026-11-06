@@ -79,7 +79,7 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `codeScanner` | `{ permission(), request(), scan(), cancel(), openSettings() }`: the camera that scans the pairing QR code a machine shows ("Scanning the pairing code" below). |
 | `callSurface` | `{ active() }`, always `true`: the app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's `callSurface`, so the page publishes what costs it work (the creatures' stills, the spoken page). "The call surface" below. |
 
-Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`) is
+Nothing of the desktop's own (`localHost`, `reset`, `shortcuts`, `muteShortcut`, `callControls`, `updater`) is
 offered. The page reports the call (the members' `room`) to the app's own `call_state`, and the app runs commands on the room
 through `run` (the call's service hangs up through it).
 

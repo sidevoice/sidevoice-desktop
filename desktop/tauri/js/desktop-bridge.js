@@ -8,7 +8,7 @@
 //                the voice call's events (host.voice) come over a channel the page opens when it loads (voice_events);
 //                window.__sidevoiceHost.voiceEvent(event) is where each one is handed to the page
 //                window.__sidevoiceHost.updaterEvent(status)  the updates' status changed (host.updater)
-//                window.__sidevoiceHost.muteShortcutEvent(status)  the mute shortcut changed (host.muteShortcut)
+//                window.__sidevoiceHost.shortcutsEvent(status)  a global shortcut or the headset changed (host.shortcuts, host.muteShortcut)
 // It only reads the web UI's public seams (window.sidevoiceUI.store, .micLevel, .playbackLevel and .openSettings,
 // window.sidevoiceActions) and
 // never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
@@ -21,8 +21,8 @@
 // part is evaluated where `transportOf` and `membersOf`, the other two, are in scope.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_DEVICE_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_UNINSTALL__", "__SIDEVOICE_SHORTCUT_MODIFIER__", "__SIDEVOICE_MICROPHONE_HELP__", "__SIDEVOICE_MESSAGES__");
-})(function installDesktopBridge(win, roomOrigin, mediaOwned, localHostOffered, voiceOffered, updaterOffered, build, deviceName, debugState, microphoneSettingsOffered, uninstallOffered, shortcutModifier, microphoneHelp, messageTables) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_DEVICE_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_UNINSTALL__", "__SIDEVOICE_SHORTCUT_MODIFIER__", "__SIDEVOICE_CAPTURES_KEYS__", "__SIDEVOICE_MICROPHONE_HELP__", "__SIDEVOICE_MESSAGES__");
+})(function installDesktopBridge(win, roomOrigin, mediaOwned, localHostOffered, voiceOffered, updaterOffered, build, deviceName, debugState, microphoneSettingsOffered, uninstallOffered, shortcutModifier, capturesKeys, microphoneHelp, messageTables) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -255,23 +255,65 @@
     };
   }
 
-  /** The global mute shortcut: sidevoice-web's `MuteShortcutBridge`, onto the `mute_shortcut` command (docs/BRIDGE.md →
-   *  "The mute shortcut"). Its `MuteShortcut` is `{accelerator, label, state, alternatives, voiceOver}`. */
-  function muteShortcut() {
-    const listeners = listened();
-    const invalid = () => ({ key: "shortcut_invalid", message: "set(accelerator) takes a string or null." });
-    const host = {
-      get: () => call("mute_shortcut", { action: "get" }),
-      /** `accelerator` as the web writes it (`Cmd+Shift+M`), or `null` for none. Rejects `{key: "shortcut_invalid"}`
-       *  for one that is not a shortcut. */
-      set: (accelerator) =>
-        typeof accelerator === "string" || accelerator === null
-          ? call("mute_shortcut", { action: "set", accelerator })
-          : Promise.reject(invalid()),
-      /** `listener(shortcut)` on every change: set here, or refused. Returns `stop`. */
-      subscribe: listeners.subscribe,
+  /** The global shortcuts and the headset's buttons: sidevoice-web's `ShortcutsBridge`, onto the `global_shortcuts` command
+   *  (docs/BRIDGE.md → "The shortcuts"), and `host.muteShortcut`, the older seam of the mute one alone, as a thin view of it.
+   *  A shortcut is `{accelerator, label, state, alternatives, voiceOver, managedBySystem}`; `get()` is the status `{shortcuts:
+   *  {mute, holdToTalk, oneTurn}, permission, headset}`. */
+  function shortcuts(captures) {
+    const everyone = listened();
+    const mute = listened();
+    const ACTIONS = ["mute", "holdToTalk", "oneTurn"];
+    const refusal = (key, message) => Promise.reject({ key, message });
+    const action = (name) => (ACTIONS.includes(name) ? null : { key: "bad_request", message: "no such shortcut action: " + name });
+    const setting = (target, accelerator) => {
+      const wrong = action(target);
+      if (wrong) return Promise.reject(wrong);
+      return typeof accelerator === "string" || accelerator === null
+        ? call("global_shortcuts", { action: "set", target, accelerator })
+        : refusal("shortcut_invalid", "set(action, accelerator) takes a string or null.");
     };
-    return { host: Object.freeze(host), changed: listeners.tell };
+    const host = {
+      get: () => call("global_shortcuts", { action: "get" }),
+      /** `accelerator` as the web writes it: keys together (`Ctrl+Alt+Shift+M`), or a single key with how it is pressed
+       *  (`Fn:hold`, `RightControl:double`, `F13:tap`); `null` for none. Answers how the system took it (`state`,
+       *  `alternatives`); rejects `{key: "shortcut_invalid"}` for one that is not a shortcut, or that the action cannot be
+       *  done with. */
+      set: setting,
+      /** `listener(status)` on every change: set here, refused, or a permission given. Returns `stop`. */
+      subscribe: everyone.subscribe,
+      /** The person's own Allow for single keys (macOS: Input Monitoring); the system asks only now. */
+      request: (permission) =>
+        permission === undefined || typeof permission === "string"
+          ? call("global_shortcuts", { action: "request", ...(permission === undefined ? {} : { permission }) })
+          : refusal("bad_request", "request(permission) takes a string."),
+      /** What a headset's press does: `{press: "mute" | "oneTurn" | "skip" | "none"}`. */
+      setHeadset: (change) =>
+        change && typeof change === "object"
+          ? call("global_shortcuts", { action: "headset", headset: change })
+          : refusal("bad_request", "setHeadset(change) takes an object."),
+      /** The app captures the next key itself, Fn included, which a page cannot see: the accelerator, or `null` for Escape. Only
+       *  where the system lets the app hear keys with no permission. */
+      ...(captures === true ? {
+        record: (target) => {
+          const wrong = action(target);
+          return wrong ? Promise.reject(wrong) : call("global_shortcuts", { action: "record", target });
+        },
+      } : {}),
+    };
+    /** `host.muteShortcut`: the mute one of the same status, for a page that has only this. */
+    const muteHost = {
+      get: () => host.get().then((status) => status.shortcuts.mute),
+      set: (accelerator) => setting("mute", accelerator),
+      subscribe: mute.subscribe,
+    };
+    return {
+      host: Object.freeze(host),
+      muteHost: Object.freeze(muteHost),
+      changed(status) {
+        everyone.tell(status);
+        if (status && status.shortcuts) mute.tell(status.shortcuts.mute);
+      },
+    };
   }
 
   /** What happens to other apps' media while the microphone is open or the agent speaks in a call: sidevoice-web's
@@ -430,6 +472,11 @@
         win.sidevoiceUI.openSettings("floating-card");
         return true;
       },
+      // The global shortcuts' (src/shortcuts.rs): hold to talk goes down and is let go (the page's Space hold, which a page
+      // losing focus does not end), and say one thing.
+      "hold-start": (request, state, actions) => typeof actions.holdStart === "function" && (actions.holdStart(), true),
+      "hold-end": (request, state, actions) => typeof actions.holdEnd === "function" && (actions.holdEnd(), true),
+      "one-turn": (request, state, actions) => typeof actions.oneTurn === "function" && (actions.oneTurn(), true),
       // The tray's Settings: the room's Settings as it was left (the app brings the room in front).
       "show-settings": () => {
         if (!win.sidevoiceUI || typeof win.sidevoiceUI.openSettings !== "function") return false;
@@ -443,7 +490,7 @@
   const voiceCall = voiceOffered === true ? members.voice() : null;
   // Only in a release or a nightly that can update itself (core `updater::offered`).
   const updates = updaterOffered === true ? updater() : null;
-  const shortcut = muteShortcut();
+  const shortcut = shortcuts(capturesKeys);
   // Only in a nightly or a dev build (core `debug_options::offered`): the switches' state and which this platform has.
   const debugOptions = debugState && typeof debugState === "object" && Array.isArray(debugState.available) ? debug(debugState) : null;
 
@@ -488,9 +535,10 @@
       // The name the person gave this computer ("Mac de Ana"): the page proposes it as the device's name. Only
       // where the system has one.
       ...(typeof deviceName === "string" && deviceName ? { deviceName } : {}),
-      /** The global mute shortcut, and whether the call controls card shows always in a call: the app's, set from
-       *  the page's Settings. */
-      muteShortcut: shortcut.host,
+      /** The global shortcuts (mute, hold to talk, say one thing) and the headset's press, and `muteShortcut`, the mute one alone:
+       *  the app's, set from the page's Settings. */
+      shortcuts: shortcut.host,
+      muteShortcut: shortcut.muteHost,
       mediaDuck: mediaDuck(),
       callControls: callControls(),
       // Only in a nightly or a dev build: the developer options (docs/BRIDGE.md -> "The developer options").
@@ -506,8 +554,9 @@
     updaterEvent(status) {
       if (updates) updates.changed(status);
     },
-    /** The mute shortcut changed, from the app (`webview.eval`): to `host.muteShortcut.subscribe`'s listeners. */
-    muteShortcutEvent(status) {
+    /** A global shortcut or the headset changed, from the app (`webview.eval`): to `host.shortcuts.subscribe`'s listeners,
+     *  and the mute one to `host.muteShortcut.subscribe`'s. */
+    shortcutsEvent(status) {
       shortcut.changed(status);
     },
     snapshot: reporting.snapshot,

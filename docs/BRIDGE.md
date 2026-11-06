@@ -10,7 +10,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 |---|---|
 | `desktop/tauri/js/desktop-bridge.js`, `shared/tauri/js/members.js`, `shared/tauri/js/transport.js` | The page's script, injected by the app into every page of the room window, before the page's own scripts, bound to the app's own origin (the bundled interface). It is three parts, one per crate that owns them (below). |
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
-| `desktop/tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
+| `desktop/tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The global shortcuts, behind `shortcuts` and `muteShortcut` (`shortcuts.rs`), and the one writer of the app's settings (below). |
 | `shared/tauri/src/engine.rs`, `shared/core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The plugin's are the transport (`shared/tauri/ACL.md` says who may call each); `shared/core`'s do the work. |
 | `shared/tauri/src/voice.rs`, `desktop/tauri/src/voice.rs`, `shared/core/src/platform/credentials.rs`, `shared/core/src/app.rs`, `shared/core/src/app/voice.rs`, `shared/core/src/voice.rs`, `shared/core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the plugin, what they do and the hooks the app gives the host (admission, events, keys: `shared/core`'s `AppHost`, `desktop/tauri/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `shared/core` (unit-tested), and the keychain the engine reads provider keys from. |
 | `desktop/tauri/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
@@ -30,7 +30,7 @@ The page's script is three function expressions, each owned by the crate it belo
 |---|---|---|
 | Transport, `(win) => transport` | `shared/tauri/js/transport.js`, as `sidevoice_shared_tauri::js::TRANSPORT` | How the page reaches the plugin's commands (`call`, `send`, under the plugin's name), receives a channel's messages (`channel`, in index order) and reaches the app's own commands (`own.call`, `own.send`). All the page's code knows of Tauri. |
 | Members, `(win, transport) => members` | `shared/tauri/js/members.js`, as `sidevoice_shared_tauri::js::MEMBERS` | What every app shares, and nothing of any shell: `engine()`, `voice()`, `microphone(settingsPage)`, `pairings()` and `room(…)`, the call state the page reports (`snapshot`, `report`) and the commands it runs for the app (`toggle-mute`, `hang-up`, `skip-reply`, `keep-alive`, `cancel-input`). An app adds to the snapshot (`extend`), to the commands (`commands`) and to what it follows in the room (`attached`). The members are tested against a transport of the tests' own (`test/members.test.mjs`). |
-| Desktop, the file itself | `desktop/tauri/js/desktop-bridge.js` | What only the desktop has: the local host, the updater, the mute shortcut, the developer options, the call controls card's settings and its projection of the call (its participants and devices, the commands that select a conversation or a device, the levels sent to it), the reset, and the assembly of `host`. |
+| Desktop, the file itself | `desktop/tauri/js/desktop-bridge.js` | What only the desktop has: the local host, the updater, the global shortcuts, the developer options, the call controls card's settings and its projection of the call (its participants and devices, the commands that select a conversation or a device, the levels sent to it), the reset, and the assembly of `host`. |
 
 `script_for_origin` gives the desktop's part its placeholders and wraps it as `(function (transportOf, membersOf) { … })(transport, members);`:
 the desktop's part makes the transport for its window, hands it to the members, and keeps the app's own commands for itself.
@@ -232,6 +232,9 @@ window.__sidevoiceHost.run({ command: "open-settings" })    // card (the app bri
 window.__sidevoiceHost.run({ command: "show-settings" })    // tray (the app brings the room in front first)
 window.__sidevoiceHost.run({ command: "cancel-input" })     // card
 window.__sidevoiceHost.run({ command: "keep-alive" })       // card
+window.__sidevoiceHost.run({ command: "hold-start" })       // global hold to talk, down
+window.__sidevoiceHost.run({ command: "hold-end" })         // global hold to talk, let go (by the key, or the app's safety net)
+window.__sidevoiceHost.run({ command: "one-turn" })         // global say one thing
 ```
 
 Evaluated by the app with `webview.eval` (works with the window hidden); the command travels as JSON (core
@@ -252,6 +255,8 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 - `cancel-input` → `sidevoiceActions.cancelInput()`: the room's "Cancel sending", taking the person's turn back.
 - `keep-alive` → `sidevoiceActions.keepVoiceOn()`: the idle warning's Keep on the card, a sign of the person that keeps
   the call on.
+- `hold-start` → `sidevoiceActions.holdStart()`, `hold-end` → `holdEnd()` and `one-turn` → `oneTurn()`: the global shortcuts' hold to talk
+  and say one thing (below, "The shortcuts"). The page's own Space hold is released when it loses focus; this one is not.
 - `open-conversations` (the mobile app: the stack of conversations on the call's surfaces) →
   `sidevoiceUI.openConversations()`, where the page has it.
 
@@ -286,7 +291,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `reach` | always | `{ plainHttpPrivate: true }`: the webview, at the app's own origin, sends plain http to a private address; whom it may send a secret to, and with whose consent, stay the page's policy. |
 | `localHost` | always | This computer's own core (below). |
 | `reset` | always | `deleteAll`, `resetReport`, and `uninstall` only where the app can remove itself (macOS). |
-| `muteShortcut`, `callControls` | always | The app's own settings, set from the page's Settings. |
+| `shortcuts`, `muteShortcut`, `callControls` | always | The app's own settings, set from the page's Settings: the global shortcuts, the headset's press and, where the app captures keys itself, `record` (below); `muteShortcut` is the mute one alone. |
 | `mediaDuck` | always | What happens to other apps' media while the microphone is open or the agent is speaking in a call: `get()`, `set(mode)`, `setLevel(level)` (how far Lower goes: `half`, `quarter`, the default, or `mute`; applied at once while lowered), `allow(permission)` (the person's own request, from the list of permissions, to let the app do what `permission` names, macOS `capture` (System Audio Recording) or `automation` (Music and Spotify): when the system may ask) `openSettings(permission)` (macOS: that permission's page in System Settings) and `restart()` (macOS: quits and reopens the app once `capture` is `restart`, that is System Audio Recording allowed but not yet seen by the running process; rejected with the key `media_duck.restart-in-call` during a call, `media_duck.restart-not-needed` otherwise; optional, so a page offers it only where present), `mode` `lower` (the default), `pause` or `off`. Each answers `{mode, level, lower, pause, access?, capture?}`, `capture` being `granted`, `denied`, `undetermined`, `unknown` or `restart` ([MEDIA_DUCK.md](MEDIA_DUCK.md)). Not offered by the mobile app yet. |
 | `updater` | a release or nightly that can update itself | Below. |
 | `debug` | a nightly or a dev build | The developer options (below). |
@@ -572,7 +577,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it worked; a `preload` that could not load a slot |
 | `engine_unavailable` | — | the engine did not start with the app |
 | `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
-| `shortcut_invalid` | — | `host.muteShortcut.set(accelerator)` with one that is not a shortcut (below) |
+| `shortcut_invalid` | — | `host.shortcuts.set(action, accelerator)` or `host.muteShortcut.set(accelerator)` with one that is not a shortcut, or that the action cannot be done with (below) |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
 
@@ -835,41 +840,95 @@ device, a missing device beats everything else, and a grant needs a readable dev
   an empty one: it is unavailable. On iOS cpal lists one `default` input (the route follows the audio session), and on
   Android the devices `AudioManager` reports (through `ndk-context`, which Tauri initialises).
 
-## The mute shortcut
+## The shortcuts
 
-The global shortcut that mutes and unmutes the microphone (docs/SHORTCUTS.md), set from the web's Settings. Always
-there.
+The global shortcuts, the headset's press and the page's way of recording a key (docs/SHORTCUTS.md), set from the web's
+Settings › Shortcuts. `host.shortcuts` is always there on the desktop; `host.muteShortcut`, the older seam of the mute
+shortcut alone, stays as a thin view of it, so a page that has only that keeps working.
 
 ```ts
-interface MuteShortcutBridge {
-  get(): Promise<MuteShortcut>;
-  set(accelerator: string | null): Promise<MuteShortcut>;   // null: none
-  subscribe?(listener: (shortcut: MuteShortcut) => void): () => void;
+type ShortcutAction = "mute" | "holdToTalk" | "oneTurn";   // oneTurn: "Say one thing"
+interface ShortcutsBridge {
+  get(): Promise<ShortcutsStatus>;
+  set(action: ShortcutAction, accelerator: string | null): Promise<GlobalShortcut>;   // null: none
+  subscribe?(listener: (status: ShortcutsStatus) => void): () => void;
+  request?(permission?: "inputMonitoring"): Promise<ShortcutsStatus>;     // the person's own Allow
+  setHeadset?(change: Partial<HeadsetStatus>): Promise<ShortcutsStatus>;
+  record?(action: ShortcutAction): Promise<string | null>;               // only where the app captures keys itself
 }
-interface MuteShortcut {
-  accelerator: string | null;   // as the app keeps it: "Ctrl+Alt+M"; null when there is none
-  label: string | null;         // as this system writes it: "⌃⌥M" on macOS, "Ctrl+Alt+M" elsewhere
-  state: "on" | "off" | "refused" | "unavailable";  // refused: the system would not take it (another app may hold it)
-  alternatives: string[];       // refused: accelerators the system does take, to offer instead (set one as it is)
+interface ShortcutsStatus {
+  shortcuts: Record<ShortcutAction, GlobalShortcut>;
+  permission: { kind: "inputMonitoring"; state: "granted" | "notAsked" | "denied" } | null;
+  headset: HeadsetStatus | null;                                          // null: no headset path the app owns
+}
+interface GlobalShortcut {
+  accelerator: string | null;   // as the app keeps it: "Ctrl+Alt+Shift+M", "Fn:hold"; null when there is none
+  label: string | null;         // as this system writes it: "⌃⌥M" on macOS, "Ctrl+Alt+Shift+M" elsewhere
+  state: "on" | "off" | "refused" | "needsPermission" | "unavailable";
+  alternatives: string[];       // refused: accelerators the system takes and nothing of ours holds (set one as it is)
   voiceOver: boolean;           // macOS: VoiceOver is on and the shortcut holds Control and Option together
+  managedBySystem: boolean;     // always false here: the keys are the app's (a Wayland portal's would be true)
+}
+interface HeadsetStatus {
+  press: "mute" | "oneTurn" | "skip" | "none";
+  doublePress: "mute" | "oneTurn" | "skip" | "none" | null;   // null: this path cannot send one (always, today)
+  outsideCall: "leave" | "join";                               // "leave" (always, today)
+}
+interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
+  get(): Promise<GlobalShortcut>;
+  set(accelerator: string | null): Promise<GlobalShortcut>;
+  subscribe?(listener: (shortcut: GlobalShortcut) => void): () => void;
 }
 ```
 
-- `set` takes the web's form as it is: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`,
-  `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key as the browser names it (`event.key`: `M`, `7`, `F5`, `Space`,
-  `ArrowUp`, `;`, `+`). With Shift, a character Shift makes on a US keyboard is read as its key (`Ctrl+Shift+?` is
-  Ctrl+Shift+/, `Cmd+Shift++` is Cmd+Shift+=). The app keeps it in one form,
-  modifiers in the order `Cmd+Ctrl+Alt+Shift` and the key's first letter upper case (`shift+cmd+m` → `Cmd+Shift+M`;
-  core `settings::normalize_shortcut`), and answers it as `accelerator`. `Cmd` is the Command key (Super elsewhere).
-  Anything else — no modifier, no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key) —
-  rejects `{key: "shortcut_invalid", message}` and changes nothing. One the system refuses is kept, and answered `refused`.
-- `unavailable` means no global shortcut backend in this session (including native Wayland). The saved
-  accelerator and label remain present, with no alternatives and `voiceOver: false`; disabling still returns `off`.
-- Kept with the app's settings (`muteShortcut`), set only from the page.
-- App → page: `window.__sidevoiceHost.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
-  (set from the page), to `subscribe`'s listeners. `voiceOver` is read when asked: VoiceOver
-  turned on or off tells no one.
-- Command behind it: `mute_shortcut {action, accelerator?}`, `action` `get` or `set`.
+- **An accelerator** is keys pressed together, or a single key with how it is pressed.
+  - Keys together are the web's form as it is: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`,
+    `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key as the browser names it (`event.key`: `M`, `7`, `F5`,
+    `Space`, `ArrowUp`, `;`, `+`), or an F-key on its own (`F9`). With Shift, a character Shift makes on a US keyboard is read
+    as its key (`Ctrl+Shift+?` is Ctrl+Shift+/, `Cmd+Shift++` is Cmd+Shift+=). The app keeps them in one form, modifiers in the order
+    `Cmd+Ctrl+Alt+Shift` and the key's first letter upper case (`shift+cmd+m` → `Cmd+Shift+M`; core
+    `settings::normalize_shortcut`). `Cmd` is the Command key (Super elsewhere). A key with no modifier that is not an F-key,
+    no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key): `shortcut_invalid`.
+  - A single key is `Fn`, `RightAlt`, `RightCommand`, `RightControl`, `RightShift`, or `F1` to `F24`, then `:hold`, `:tap`
+    or `:double` (`Fn:hold`, `RightControl:double`, `F13:tap`; core `shortcuts::parse`). `hold` is down to up; `tap` is
+    down and up within 400 ms with no other key between; `double` is two taps, the second within 400 ms of the first.
+  - What each action can be done with: **hold to talk** a combination or a key held (`:hold`); **mute** and **say one thing** a
+    combination or a key tapped or double tapped. Any other pair is `shortcut_invalid`.
+- `set` answers how the system took it. A refusal is an answer, not a rejection: the accelerator is kept and `state` says
+  `refused` (the system would not register it, or the same keys are set for another action: the first of mute, hold to talk and say one thing
+  holds them), with `alternatives` for the page to offer. `unavailable` is no global shortcut backend in this session
+  (including native Wayland), or a single key the system gives the app no way to hear (Windows and Linux: Fn and the
+  modifiers; F-keys work). `needsPermission` is a single key waiting for Input Monitoring. `off` is none set; a rejection
+  changes nothing. The accelerator and label stay present, and disabling still returns `off`.
+- `permission` is `null` unless a single key is set on a system that listens for them (macOS). With an F-key alone nothing
+  is needed and it says `granted`; with Fn or a modifier it is the system's: `notAsked` until the person chooses Allow,
+  `denied` after the system did not grant it. Asking is only ever `request()`; reading never asks, and nothing is asked
+  at launch. The status is read again when `get` is called, so a permission turned on in System Settings is found.
+- `record(action)` is there only where the app can hear keys itself with no permission (macOS: a local monitor of the
+  app's own windows): it answers the accelerator of the next shortcut (a combination with a modifier or an F-key, or a
+  lone Fn or modifier as the action allows: hold to talk when it is let go, mute once, say one thing once or twice),
+  or `null` for Escape or no key for a minute. The keys are swallowed meanwhile, and the app's hot keys are let go of so the
+  chord being recorded does not fire what it is bound to. A second `record` ends the first with `null`.
+- `setHeadset({press})` is the one writer of the headset's choice, kept with the app's settings. It is offered where the
+  app owns the headset's buttons (macOS: `host.presence`): the single press (the system's play/pause, and the AirPods gesture)
+  does what it says. `doublePress` and `outsideCall: "join"` are refused `bad_request`: the path sends no double press, and the app
+  leaves the buttons to other apps outside a call.
+- Kept with the app's settings (`muteShortcut`, `holdToTalkShortcut`, `oneTurnShortcut`, `headsetPress`), set only from the
+  page. A person still on the old mute default (Ctrl+Alt+M) is moved once to this system's (core
+  `shortcuts::migrated_mute`).
+- App → page: `window.__sidevoiceHost.shortcutsEvent(status)` (`webview.eval`) whenever the app registers a shortcut (set from the
+  page), to `shortcuts.subscribe`'s listeners and, with the mute one, `muteShortcut.subscribe`'s. `voiceOver` is read when
+  asked: VoiceOver turned on or off tells no one.
+- The keys act through the page's own actions, as commands of `run` (above): `toggle-mute` → `sidevoiceActions.toggleMic()`
+  (mute), `hold-start` and `hold-end` → `holdStart()` and `holdEnd()` (hold to talk: the Space hold, kept down by the app,
+  not let go of when the page loses focus), `one-turn` → `oneTurn()` (say one thing). A page without them ignores them.
+  `hold-start`, `hold-end` and `one-turn` are the app's own: the call controls card is refused them.
+- A hold with no release is let go by the app: after 60 seconds, after the machine sleeps, behind a locked screen (macOS
+  and Windows), when the call ends or when its keys are changed; the page is told `hold-end`.
+- Commands behind it: `global_shortcuts {action, target?, accelerator?, permission?, headset?}`, `action` `get`, `set`
+  (with `target` the shortcut's action and `accelerator`), `request`, `headset` or `record` (with `target`).
+- Everything the page is told is English or a key; the app's own texts for it (a right-hand key's "Right" in the card's tooltip)
+  are core `i18n` keys.
 
 ## The call controls settings
 
@@ -1046,9 +1105,9 @@ interface UpdaterStatus {
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm run web && npm test` (the pinned page's media controls and the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
+- Tests: `npm run web && npm test` (the pinned page's media controls and the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.shortcuts`, `host.muteShortcut`,
   `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the media rule, the
-  updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-shared` (the call host, the voice call's builds and the engine
+  updater's status and the shortcuts' form, gestures, registrations and safety net among the rest) and `cargo test -p sidevoice-shared` (the call host, the voice call's builds and the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in
   registry; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice

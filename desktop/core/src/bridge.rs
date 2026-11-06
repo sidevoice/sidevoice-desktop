@@ -21,6 +21,7 @@ const DEVICE_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_DEVICE_NAME__\"";
 const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS__\"";
 const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
 const UNINSTALL_PLACEHOLDER: &str = "\"__SIDEVOICE_UNINSTALL__\"";
+const CAPTURES_KEYS_PLACEHOLDER: &str = "\"__SIDEVOICE_CAPTURES_KEYS__\"";
 const SHORTCUT_MODIFIER_PLACEHOLDER: &str = "\"__SIDEVOICE_SHORTCUT_MODIFIER__\"";
 const MICROPHONE_HELP_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_HELP__\"";
 const MESSAGES_PLACEHOLDER: &str = "\"__SIDEVOICE_MESSAGES__\"";
@@ -86,6 +87,8 @@ fn compose(parts: &Parts<'_>, desktop: &str) -> String {
 /// report (`host.reset.deleteAll`, `resetReport`) are on every host.
 /// `shortcut_modifier`: the label of the modifier a shortcut is written with here, `⌘` or `Ctrl` (`host.shortcutModifier`;
 /// `platform::host::shortcut_modifier`).
+/// `captures_keys`: whether the app can capture the next key itself, Fn included, while the person records a shortcut
+/// (`host.shortcuts.record`, offered only then; `platform::key_capture::captures`).
 /// `microphone_help`: how to allow a blocked microphone here, in each language the app has words in (`host.microphone.help`;
 /// [`microphone_help], `platform::host::microphone_help`).
 /// `messages`: the app's wording of the web's texts that it changes, per language (`host.messages`; docs/BRIDGE.md ->
@@ -103,6 +106,7 @@ pub fn script_for_origin(
     media: bool,
     uninstall: bool,
     shortcut_modifier: &str,
+    captures_keys: bool,
     microphone_help: &serde_json::Value,
     messages: &serde_json::Value,
     parts: &Parts<'_>,
@@ -127,6 +131,7 @@ pub fn script_for_origin(
         .replacen(MICROPHONE_SETTINGS_PLACEHOLDER, flag(microphone_settings), 1)
         .replacen(UNINSTALL_PLACEHOLDER, flag(uninstall), 1)
         .replacen(SHORTCUT_MODIFIER_PLACEHOLDER, &serde_json::to_string(shortcut_modifier).expect("serialises"), 1)
+        .replacen(CAPTURES_KEYS_PLACEHOLDER, flag(captures_keys), 1)
         .replacen(MICROPHONE_HELP_PLACEHOLDER, &microphone_help.to_string(), 1)
         .replacen(MESSAGES_PLACEHOLDER, &messages.to_string(), 1);
     compose(parts, &desktop)
@@ -254,6 +259,12 @@ pub enum Command {
     CancelInput,
     /// The idle warning's Keep: a sign of the person, so the call stays on (`sidevoiceActions.keepVoiceOn`).
     KeepAlive,
+    /// The global hold to talk goes down (`sidevoiceActions.holdStart`): the page's Space hold, not let go of when it loses focus.
+    HoldStart,
+    /// The global hold to talk is let go (`sidevoiceActions.holdEnd`): by the key, or by the app's safety net.
+    HoldEnd,
+    /// Say one thing (`sidevoiceActions.oneTurn`): the microphone opens for one turn.
+    OneTurn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,7 +286,15 @@ impl Command {
             Command::ShowSettings => "show-settings",
             Command::CancelInput => "cancel-input",
             Command::KeepAlive => "keep-alive",
+            Command::HoldStart => "hold-start",
+            Command::HoldEnd => "hold-end",
+            Command::OneTurn => "one-turn",
         }
+    }
+
+    /// Whether only the app itself asks for it: the card's own buttons never do (src/call_controls.rs).
+    pub fn is_the_apps_own(&self) -> bool {
+        matches!(self, Command::HoldStart | Command::HoldEnd | Command::OneTurn)
     }
 
     /// The JavaScript the app evaluates in the room page. A page without the bridge ignores it. The command travels
@@ -476,6 +495,7 @@ mod tests {
             true,
             false,
             "⌘",
+            false,
             &help,
             &serde_json::json!({}),
             &parts(),
@@ -490,6 +510,7 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_SETTINGS__"));
         assert!(!s.contains("__SIDEVOICE_UNINSTALL__"));
+        assert!(!s.contains("__SIDEVOICE_CAPTURES_KEYS__"));
         assert!(!s.contains("__SIDEVOICE_SHORTCUT_MODIFIER__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_HELP__"));
         assert!(!s.contains("__SIDEVOICE_MESSAGES__"));
@@ -499,7 +520,7 @@ mod tests {
         let debug = off.state(&crate::debug_options::Switch::ALL);
         let told = help.to_string();
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false, "⌘", {told}, {{}})"#
+            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false, "⌘", false, {told}, {{}})"#
         );
         assert!(s.contains(&expected), "{expected}");
         let no_diagnostics = script_for_origin(
@@ -513,6 +534,7 @@ mod tests {
             false,
             false,
             "Ctrl",
+            false,
             &help,
             &serde_json::json!({}),
             &parts(),
@@ -532,12 +554,13 @@ mod tests {
             true,
             true,
             "⌘",
+            true,
             &help,
             &serde_json::json!({}),
             &parts(),
         );
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, "⌘", {told}, {{}})"#
+            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, "⌘", true, {told}, {{}})"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
@@ -552,13 +575,14 @@ mod tests {
             true,
             false,
             "\"); alert(1); (\"",
+            false,
             &help,
             &serde_json::json!({}),
             &parts(),
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
-        assert!(evil.contains(&format!(r#", false, "\"); alert(1); (\"", {told}, {{}})"#)));
+        assert!(evil.contains(&format!(r#", false, "\"); alert(1); (\"", false, {told}, {{}})"#)));
         // The help is JSON the catalogue wrote: whatever its texts hold stays inside the literal, as the other values do.
         let quoting = microphone_help("quote\"); alert(1); (\"", None);
         let hostile = script_for_origin(
@@ -572,6 +596,7 @@ mod tests {
             false,
             false,
             "Ctrl",
+            false,
             &quoting,
             &serde_json::json!({}),
             &parts(),
@@ -597,6 +622,7 @@ mod tests {
             false,
             false,
             "Ctrl",
+            false,
             &help,
             &serde_json::json!({}),
             &parts(),
@@ -630,6 +656,7 @@ mod tests {
             true,
             false,
             "Ctrl",
+            false,
             &help,
             &serde_json::json!({}),
             &parts(),
@@ -656,13 +683,15 @@ mod tests {
                 false,
                 uninstall,
                 "Ctrl",
+                false,
                 &help,
                 &serde_json::json!({}),
                 &parts(),
             )
         };
         // The factory's last arguments: the microphone settings (false here), the uninstall, the shortcut modifier, then the help and the messages.
-        let call = |told: &str| format!("false, {told}, \"Ctrl\", {help}, {{}});\n}})(function installDesktopBridge(");
+        let call =
+            |told: &str| format!("false, {told}, \"Ctrl\", false, {help}, {{}});\n}})(function installDesktopBridge(");
         let (without, with) = (script(false), script(true));
         assert!(without.contains(&call("false")) && with.contains(&call("true")));
         assert_eq!(with.replacen(&call("true"), &call("false"), 1), without);
@@ -711,6 +740,18 @@ mod tests {
         assert_eq!(parse(r#"{"command":"show-settings"}"#).unwrap(), Command::ShowSettings);
         assert_eq!(parse(r#"{"command":"cancel-input"}"#).unwrap().name(), "cancel-input");
         assert_eq!(parse(r#"{"command":"keep-alive"}"#).unwrap(), Command::KeepAlive);
+        for (text, command) in
+            [("hold-start", Command::HoldStart), ("hold-end", Command::HoldEnd), ("one-turn", Command::OneTurn)]
+        {
+            assert_eq!(parse(&format!(r#"{{"command":"{text}"}}"#)).unwrap(), command);
+            assert_eq!(command.name(), text);
+            assert!(command.is_the_apps_own(), "{text} is not the card's to ask");
+            assert_eq!(
+                command.script(),
+                format!(r#"window.__sidevoiceHost && window.__sidevoiceHost.run({{"command":"{text}"}});"#)
+            );
+        }
+        assert!(!Command::ToggleMute.is_the_apps_own() && !Command::SkipReply.is_the_apps_own());
     }
 
     #[test]

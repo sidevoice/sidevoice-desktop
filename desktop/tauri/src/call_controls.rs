@@ -473,15 +473,20 @@ pub fn playback(app: &AppHandle, level: f64, thread_id: Option<String>) {
 }
 
 fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
-    let settings =
-        app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(settings::Settings::first_run);
+    let settings = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| settings::Settings::first_run(crate::platform::shortcut_access::default_mute()));
     let (level, pointer, clicks, place, size) = card(app)
         .map(|card| {
             let inner = card.0.lock().unwrap();
             (inner.level, inner.pointer_inside, inner.outside_clicks, inner.told_place, inner.told_size.flatten())
         })
         .unwrap_or((0, None, 0, None, None));
-    let shortcut = crate::shortcut_status(&app.state::<AppState>());
+    let shortcut = crate::shortcuts::shortcut_of(app, sidevoice_desktop_core::shortcuts::Action::Mute);
     let mut state = serde_json::json!({
         "call": call,
         "level": level,
@@ -604,8 +609,14 @@ pub async fn call_controls_settings(
         stage_seen_by_page(&app, visible, rect);
         return Ok(serde_json::Value::Null);
     }
-    let stored =
-        || app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(settings::Settings::first_run);
+    let stored = || {
+        app.state::<AppState>()
+            .settings
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| settings::Settings::first_run(crate::platform::shortcut_access::default_mute()))
+    };
     match (action.as_str(), enabled, corner) {
         ("settings", _, _) => {
             let s = stored();
@@ -724,6 +735,10 @@ pub fn call_controls_run(app: AppHandle, webview: Webview, command: serde_json::
     debug(&format!("call-controls run {} {}", command.name(), NativeCardWindow::app_active()));
     if command == Command::OpenSettings {
         crate::show_room(&app);
+    }
+    // Holding to talk and saying one thing are the shortcuts' (src/shortcuts.rs), never the card's.
+    if command.is_the_apps_own() {
+        return Err("not a card command".into());
     }
     crate::send(&app, command);
     Ok(())

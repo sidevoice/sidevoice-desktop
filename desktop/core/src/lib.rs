@@ -12,4 +12,5 @@ pub mod media;
 pub mod media_duck;
 pub mod memory;
 pub mod settings;
+pub mod shortcuts;
 pub mod updater;

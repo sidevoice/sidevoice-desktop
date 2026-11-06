@@ -1382,11 +1382,11 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset", "shortcuts"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, true, true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "updater", "voice"]);
+  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "shortcuts", "updater", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
@@ -1466,14 +1466,14 @@ test("the app's updaterEvent hands each listener the status, until it stops", ()
 test("host.microphone.help is the app's words for a blocked microphone, asked in the page's language", () => {
   const install = loadFactory();
   const words = { en: { steps: ["Open Settings."], openSettings: "Open Windows Settings" }, es: { steps: ["Abre Configuración."], openSettings: "Abrir Configuración de Windows" } };
-  const microphone = install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, true, false, "Ctrl", words).host.microphone;
+  const microphone = install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, true, false, "Ctrl", false, words).host.microphone;
   assert.deepEqual(Object.keys(microphone).sort(), ["help", "onChange", "openSettings", "request", "state"]);
   assert.ok(Object.isFrozen(microphone));
   assert.deepEqual(plain(microphone.help("es-ES")), words.es);
   assert.deepEqual(plain(microphone.help("fr")), words.en, "English where the app has no words");
   // A system with no settings page names no button.
   const linux = { en: { steps: ["Check your settings."] } };
-  const without = install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "Ctrl", linux).host.microphone;
+  const without = install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "Ctrl", false, linux).host.microphone;
   assert.deepEqual(plain(without.help("en")), linux.en);
   assert.equal(without.openSettings, undefined);
 });
@@ -1562,21 +1562,80 @@ function settingsWindow(answers) {
   return { win, calls, tick: fake.tick };
 }
 
-test("host.muteShortcut and host.callControls are exactly the web's seams", () => {
+const SHORTCUT_OFF = { accelerator: null, label: null, state: "off", alternatives: [], voiceOver: false, managedBySystem: false };
+const shortcutOf = (accelerator, state = "on", label = accelerator) => ({ ...SHORTCUT_OFF, accelerator, label, state });
+const statusOf = (mute, rest = {}) => ({
+  shortcuts: { mute, holdToTalk: SHORTCUT_OFF, oneTurn: SHORTCUT_OFF, ...rest.shortcuts },
+  permission: rest.permission ?? null,
+  headset: rest.headset ?? null,
+});
+
+test("host.shortcuts and host.callControls are exactly the web's seams, host.muteShortcut stays", () => {
   const install = loadFactory();
   const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
   assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
+  assert.deepEqual(Object.keys(host.shortcuts).sort(), ["get", "request", "set", "setHeadset", "subscribe"], "no record where the app cannot capture a key");
   assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "endPreview", "preview", "resetPlace", "setAlwaysShown", "setCorner", "setEnabled", "setStageVisible", "settings"]);
-  assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
+  assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.shortcuts) && Object.isFrozen(host.callControls));
 });
 
-test("host.muteShortcut gets and sets through the mute_shortcut command, refusing what is not a shortcut", async () => {
+test("host.shortcuts.record is there only where the app captures the next key itself", async () => {
   const install = loadFactory();
-  const on = { accelerator: "Cmd+Shift+M", label: "⇧⌘M", state: "on", alternatives: [], voiceOver: false };
-  const off = { accelerator: null, label: null, state: "off", alternatives: [], voiceOver: false };
+  const withCapture = (captures) => install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "⌘", captures).host.shortcuts;
+  for (const captures of [false, undefined, "true", 1]) assert.ok(!("record" in withCapture(captures)), String(captures));
+  assert.deepEqual(Object.keys(withCapture(true)).sort(), ["get", "record", "request", "set", "setHeadset", "subscribe"]);
+  const { win, calls } = settingsWindow({ global_shortcuts: ({ action }) => (action === "record" ? "Fn:hold" : undefined) });
+  const { host } = install(win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "⌘", true);
+  assert.equal(await host.shortcuts.record("holdToTalk"), "Fn:hold");
+  await assert.rejects(host.shortcuts.record("nope"), (e) => e.key === "bad_request");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "global_shortcuts").map(([, args]) => args), [{ action: "record", target: "holdToTalk" }]);
+});
+
+test("host.shortcuts gets, sets, asks and sets the headset through the global_shortcuts command", async () => {
+  const install = loadFactory();
+  const mute = shortcutOf("Ctrl+Alt+Shift+M", "on");
+  const status = statusOf(mute, { permission: { kind: "inputMonitoring", state: "notAsked" }, headset: { press: "mute", doublePress: null, outsideCall: "leave" } });
+  const taken = Object.assign(new Error(), { refusal: { key: "shortcut_invalid", message: "Not a shortcut: M" } });
+  const refused = { ...shortcutOf("Ctrl+Alt+Shift+M", "refused"), alternatives: ["Ctrl+Alt+Shift+K"] };
+  const { win, calls } = settingsWindow({
+    global_shortcuts: ({ action, target, accelerator }) => {
+      if (action === "get" || action === "request" || action === "headset") return status;
+      if (accelerator === "M") return taken;
+      return accelerator === "Ctrl+Alt+Shift+M" && target === "holdToTalk" ? refused : shortcutOf(accelerator, accelerator ? "on" : "off");
+    },
+  });
+  const { host } = install(win, ORIGIN);
+  assert.deepEqual(await host.shortcuts.get(), status);
+  assert.equal((await host.shortcuts.set("mute", "Fn:tap")).accelerator, "Fn:tap");
+  assert.deepEqual(await host.shortcuts.set("holdToTalk", "Ctrl+Alt+Shift+M"), refused, "a refusal is an answer, with the keys to offer");
+  assert.equal((await host.shortcuts.set("oneTurn", null)).state, "off");
+  await assert.rejects(host.shortcuts.set("mute", "M"), (e) => e.key === "shortcut_invalid");
+  assert.deepEqual(await host.shortcuts.request("inputMonitoring"), status);
+  assert.deepEqual(await host.shortcuts.request(), status, "the page may not name it");
+  assert.deepEqual(await host.shortcuts.setHeadset({ press: "oneTurn" }), status);
+  for (const wrong of [undefined, 5, {}]) await assert.rejects(host.shortcuts.set("mute", wrong), (e) => e.key === "shortcut_invalid", String(wrong));
+  for (const wrong of ["", "everything", undefined]) await assert.rejects(host.shortcuts.set(wrong, "Ctrl+Alt+M"), (e) => e.key === "bad_request", String(wrong));
+  await assert.rejects(host.shortcuts.request(5), (e) => e.key === "bad_request");
+  for (const wrong of [undefined, null, "mute"]) await assert.rejects(host.shortcuts.setHeadset(wrong), (e) => e.key === "bad_request", String(wrong));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "global_shortcuts").map(([, args]) => args), [
+    { action: "get" },
+    { action: "set", target: "mute", accelerator: "Fn:tap" },
+    { action: "set", target: "holdToTalk", accelerator: "Ctrl+Alt+Shift+M" },
+    { action: "set", target: "oneTurn", accelerator: null },
+    { action: "set", target: "mute", accelerator: "M" },
+    { action: "request", permission: "inputMonitoring" },
+    { action: "request" },
+    { action: "headset", headset: { press: "oneTurn" } },
+  ], "a wrong argument asks the app nothing");
+});
+
+test("host.muteShortcut is the mute one of the same command, so the pinned web keeps working", async () => {
+  const install = loadFactory();
+  const on = shortcutOf("Cmd+Shift+M", "on", "⇧⌘M");
+  const off = SHORTCUT_OFF;
   const invalid = Object.assign(new Error(), { refusal: { key: "shortcut_invalid", message: "Not a shortcut: M" } });
   const { win, calls } = settingsWindow({
-    mute_shortcut: ({ action, accelerator }) => action === "get" ? on : accelerator === null ? off : accelerator === "M" ? invalid : on,
+    global_shortcuts: ({ action, accelerator }) => action === "get" ? statusOf(on) : accelerator === null ? off : accelerator === "M" ? invalid : on,
   });
   const shortcut = install(win, ORIGIN).host.muteShortcut;
   assert.deepEqual(await shortcut.get(), on);
@@ -1586,12 +1645,12 @@ test("host.muteShortcut gets and sets through the mute_shortcut command, refusin
   for (const wrong of [undefined, 5, { accelerator: "Cmd+M" }]) {
     await assert.rejects(shortcut.set(wrong), (e) => e.key === "shortcut_invalid", String(wrong));
   }
-  assert.deepEqual(calls.filter(([cmd]) => cmd === "mute_shortcut").map(([, args]) => args), [
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "global_shortcuts").map(([, args]) => args), [
     { action: "get" },
-    { action: "set", accelerator: "cmd+shift+m" },
-    { action: "set", accelerator: null },
-    { action: "set", accelerator: "M" },
-  ], "a wrong argument asks the app nothing");
+    { action: "set", target: "mute", accelerator: "cmd+shift+m" },
+    { action: "set", target: "mute", accelerator: null },
+    { action: "set", target: "mute", accelerator: "M" },
+  ], "a wrong argument asks the app nothing, and the mute alias is the mute action");
 });
 
 test("host.mediaDuck gets, sets, levels, asks and opens settings through the media_duck command, strings only", async () => {
@@ -1625,29 +1684,56 @@ test("host.mediaDuck gets, sets, levels, asks and opens settings through the med
   ], "a wrong argument asks the app nothing");
 });
 
-test("the app's muteShortcutEvent reaches host.muteShortcut's listeners, until they stop", () => {
+test("the app's shortcutsEvent reaches host.shortcuts' listeners, and host.muteShortcut's with the mute one, until they stop", () => {
   const install = loadFactory();
   const api = install(fakeWindow(ORIGIN).win, ORIGIN);
-  const seen = [];
-  const stop = api.host.muteShortcut.subscribe((shortcut) => seen.push(shortcut.state));
-  api.muteShortcutEvent({ accelerator: "Ctrl+Alt+M", label: "⌃⌥M", state: "refused", alternatives: ["Ctrl+Alt+Shift+M"], voiceOver: false });
-  stop();
-  api.muteShortcutEvent({ accelerator: null, label: null, state: "off", alternatives: [], voiceOver: false });
-  assert.deepEqual(seen, ["refused"]);
+  const all = [];
+  const mute = [];
+  const stopAll = api.host.shortcuts.subscribe((status) => all.push(status.shortcuts.holdToTalk.accelerator));
+  const stopMute = api.host.muteShortcut.subscribe((shortcut) => mute.push(shortcut.state));
+  api.shortcutsEvent(statusOf({ ...shortcutOf("Ctrl+Alt+M", "refused"), alternatives: ["Ctrl+Alt+Shift+M"] }, { shortcuts: { holdToTalk: shortcutOf("Fn:hold") } }));
+  stopAll();
+  api.shortcutsEvent(statusOf(SHORTCUT_OFF));
+  stopMute();
+  api.shortcutsEvent(statusOf(shortcutOf("Ctrl+Alt+M")));
+  assert.deepEqual(all, ["Fn:hold"]);
+  assert.deepEqual(mute, ["refused", "off"]);
+  assert.equal(api.muteShortcutEvent, undefined, "one event, not two");
+  api.shortcutsEvent(null); // a malformed event breaks nothing
 });
 
 test("an unavailable shortcut backend reaches get, set and subscription without losing the saved chord", async () => {
   const install = loadFactory();
-  const unavailable = { accelerator: "Ctrl+Alt+M", label: "Ctrl+Alt+M", state: "unavailable", alternatives: [], voiceOver: false };
-  const { win } = settingsWindow({ mute_shortcut: () => unavailable });
+  const unavailable = shortcutOf("Ctrl+Alt+Shift+M", "unavailable");
+  const { win } = settingsWindow({ global_shortcuts: ({ action }) => (action === "get" ? statusOf(unavailable) : unavailable) });
   const api = install(win, ORIGIN);
   assert.deepEqual(await api.host.muteShortcut.get(), unavailable);
-  assert.deepEqual(await api.host.muteShortcut.set("Ctrl+Alt+M"), unavailable);
+  assert.deepEqual(await api.host.muteShortcut.set("Ctrl+Alt+Shift+M"), unavailable);
+  assert.deepEqual((await api.host.shortcuts.get()).shortcuts.mute, unavailable);
   const seen = [];
   const stop = api.host.muteShortcut.subscribe((shortcut) => seen.push(shortcut));
-  api.muteShortcutEvent(unavailable);
+  api.shortcutsEvent(statusOf(unavailable));
   assert.deepEqual(JSON.parse(JSON.stringify(seen)), [unavailable]);
   stop();
+});
+
+test("the global shortcuts' commands reach the room page's own actions, each only where the page has it", () => {
+  const install = loadFactory();
+  const { win } = fakeWindow(ORIGIN);
+  const ran = [];
+  win.sidevoiceActions = { toggleMic: () => ran.push("toggle"), holdStart: () => ran.push("start"), holdEnd: () => ran.push("end"), oneTurn: () => ran.push("one") };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic: { enabled: true } }), subscribe: () => () => {} } };
+  const api = install(win, ORIGIN);
+  assert.equal(api.run({ command: "hold-start" }), true);
+  assert.equal(api.run({ command: "hold-end" }), true);
+  assert.equal(api.run({ command: "one-turn" }), true);
+  assert.equal(api.run({ command: "toggle-mute" }), true);
+  assert.deepEqual(ran, ["start", "end", "one", "toggle"]);
+  const old = fakeWindow(ORIGIN).win;
+  old.sidevoiceActions = { toggleMic() {} };
+  old.sidevoiceUI = win.sidevoiceUI;
+  const older = install(old, ORIGIN);
+  for (const command of ["hold-start", "hold-end", "one-turn"]) assert.equal(older.run({ command }), false, "a page without it ignores " + command);
 });
 
 test("host.callControls reads and sets alwaysShown through the call_controls_settings command, booleans only", async () => {
