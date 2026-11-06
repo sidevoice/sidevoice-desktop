@@ -95,7 +95,6 @@
 		2BF45AA0672154DA34102887 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		2CA4698307C9928A0B5866DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		2F7FFFBA485380A406EB4250 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
-		342E293471DA6E0AD449A563 /* es.rs */ = {isa = PBXFileReference; path = es.rs; sourceTree = "<group>"; };
 		378557AB6D08AC23E9A6D8BA /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		3AF49EB321D75CDC67E166DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		3ED59F09A85CF8FF41D62009 /* pairings.rs */ = {isa = PBXFileReference; path = pairings.rs; sourceTree = "<group>"; };
@@ -149,7 +148,6 @@
 		DEBD9545CF90786BDDD5D639 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		E1D2AC4499397F9500F40456 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		E27E72B5E5F74FCE583F823F /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
-		E35847FB1E834B1E467DF186 /* en.rs */ = {isa = PBXFileReference; path = en.rs; sourceTree = "<group>"; };
 		E47F552120DB7A20BEDF5D2E /* sidevoice-mobile_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "sidevoice-mobile_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = onnxruntime.xcframework; path = ../../frameworks/onnxruntime.xcframework; sourceTree = "<group>"; };
 		EC1438562998E34AFC61C312 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
@@ -325,7 +323,6 @@
 				C61912EDD5E1D2FB29D11EDB /* panics.rs */,
 				749529AE2409B9FB50B39312 /* platform.rs */,
 				8609C7142CEC5C4009BB8B54 /* surface.rs */,
-				AA1884F220662184B30B9C9B /* i18n */,
 				C8A96FD8F714BFFEBAC54283 /* platform */,
 			);
 			name = src;
@@ -355,15 +352,6 @@
 				B7E57CBB3A47BDAD3039528B /* ios.rs */,
 			);
 			path = tls;
-			sourceTree = "<group>";
-		};
-		AA1884F220662184B30B9C9B /* i18n */ = {
-			isa = PBXGroup;
-			children = (
-				E35847FB1E834B1E467DF186 /* en.rs */,
-				342E293471DA6E0AD449A563 /* es.rs */,
-			);
-			path = i18n;
 			sourceTree = "<group>";
 		};
 		ADC921D34DE174F794860973 /* sidevoice-mobile_iOS */ = {
