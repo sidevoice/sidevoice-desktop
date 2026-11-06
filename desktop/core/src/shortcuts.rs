@@ -490,6 +490,63 @@ pub trait Registrar {
     fn unregister(&mut self, hot_key: &str) -> bool;
 }
 
+/// The systems the app registers global hot keys on, for the keys each can and cannot carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Macos,
+    Windows,
+    Linux,
+}
+
+impl Platform {
+    /// The system this build runs on.
+    pub fn current() -> Platform {
+        if cfg!(target_os = "macos") {
+            Platform::Macos
+        } else if cfg!(target_os = "windows") {
+            Platform::Windows
+        } else {
+            Platform::Linux
+        }
+    }
+}
+
+/// What a system can do with the key of a combination, which `global-hotkey` (the backend) decides by its own tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyReach {
+    /// The key registers as the key it is.
+    Physical,
+    /// X11 registers it by the character the layout types on it, not by its position: another key, or none, under a
+    /// layout that is not US. Kept, with a warning.
+    ByLayout,
+    /// The backend cannot register this key, or registers another key in its place (Windows maps `NumpadEqual` to E and
+    /// `NumpadEnter` to Enter). Refused: never another key in its place.
+    Never,
+}
+
+/// How `platform` registers `key` (a key's name in an accelerator, as [`settings::normalize_shortcut`] writes it).
+///
+/// From `global-hotkey` 0.8's tables: no system maps `IntlBackslash` (the ISO `<>` key; macOS `kVK_ISO_Section`, Windows
+/// `VK_OEM_102`, an X11 keysym); Windows maps `NumpadEqual` to `VK_E` and `NumpadEnter` to `VK_RETURN`; X11 has no keysym
+/// for either keypad key and registers the punctuation keys by keysym.
+pub fn key_reach(platform: Platform, key: &str) -> KeyReach {
+    match (platform, key) {
+        (_, "IntlBackslash") => KeyReach::Never,
+        (Platform::Windows | Platform::Linux, "NumpadEqual" | "NumpadEnter") => KeyReach::Never,
+        (
+            Platform::Linux,
+            "Minus" | "Equal" | "Comma" | "Period" | "Slash" | "Backslash" | "Semicolon" | "Quote" | "BracketLeft"
+            | "BracketRight" | "Backquote",
+        ) => KeyReach::ByLayout,
+        _ => KeyReach::Physical,
+    }
+}
+
+/// [`key_reach`] of the key of a hot key (`Ctrl+Alt+BracketRight`, `F9`).
+pub fn hot_key_reach(platform: Platform, hot_key: &str) -> KeyReach {
+    key_reach(platform, hot_key.rsplit('+').next().unwrap_or(hot_key))
+}
+
 /// The hot keys the app holds now, one slot per action (in [`Action::ALL`] order).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Held([Option<String>; 3]);
@@ -908,6 +965,7 @@ fn key_name(code: u16, character: Option<&str>) -> Option<String> {
         33 => "BracketLeft",
         30 => "BracketRight",
         50 => "Backquote",
+        10 => "IntlBackslash",
         69 => "NumpadAdd",
         78 => "NumpadSubtract",
         67 => "NumpadMultiply",
@@ -1326,6 +1384,50 @@ mod tests {
 
     /// The four keypad operators a mechanical keyboard sends with Cmd+Alt (macOS key codes 69, 78, 67 and 75): four
     /// shortcuts, each registered as its own physical key, none of them reported as another's duplicate.
+    /// What each system registers, decided by `global-hotkey`'s own tables: pure, so every system is tested here.
+    #[test]
+    fn each_system_registers_only_the_keys_it_can_carry_as_themselves() {
+        use KeyReach::*;
+        use Platform::*;
+        // The ISO key registers nowhere; nothing else is bound in its place.
+        for platform in [Macos, Windows, Linux] {
+            assert_eq!(key_reach(platform, "IntlBackslash"), Never, "{platform:?}");
+            assert_eq!(hot_key_reach(platform, "Ctrl+Alt+IntlBackslash"), Never);
+        }
+        // Windows: NumpadEqual is VK_E and NumpadEnter is VK_RETURN in the backend; Ctrl+NumpadEqual must not be Ctrl+E.
+        assert_eq!(hot_key_reach(Windows, "Ctrl+NumpadEqual"), Never);
+        assert_eq!(hot_key_reach(Windows, "Ctrl+NumpadEnter"), Never);
+        assert_eq!(hot_key_reach(Windows, "Ctrl+E"), Physical);
+        assert_eq!(hot_key_reach(Windows, "Ctrl+Enter"), Physical);
+        assert_eq!(hot_key_reach(Windows, "Cmd+Alt+NumpadAdd"), Physical);
+        assert_eq!(hot_key_reach(Windows, "Cmd+Alt+BracketRight"), Physical);
+        // macOS has all the keypad.
+        assert_eq!(hot_key_reach(Macos, "Ctrl+NumpadEqual"), Physical);
+        assert_eq!(hot_key_reach(Macos, "Ctrl+NumpadEnter"), Physical);
+        assert_eq!(hot_key_reach(Macos, "Ctrl+BracketRight"), Physical);
+        // X11: no keysym for those two; punctuation is by keysym, so by layout; letters, F-keys and the keypad operators are not.
+        assert_eq!(hot_key_reach(Linux, "Ctrl+NumpadEqual"), Never);
+        assert_eq!(hot_key_reach(Linux, "Ctrl+NumpadEnter"), Never);
+        for key in [
+            "Minus",
+            "Equal",
+            "Comma",
+            "Period",
+            "Slash",
+            "Backslash",
+            "Semicolon",
+            "Quote",
+            "BracketLeft",
+            "BracketRight",
+            "Backquote",
+        ] {
+            assert_eq!(hot_key_reach(Linux, &format!("Ctrl+{key}")), ByLayout, "{key}");
+        }
+        for hot in ["Ctrl+M", "F9", "Ctrl+Alt+NumpadAdd", "Ctrl+Numpad5", "Ctrl+Space"] {
+            assert_eq!(hot_key_reach(Linux, hot), Physical, "{hot}");
+        }
+    }
+
     #[test]
     fn the_keypad_operators_are_four_different_shortcuts() {
         use global_hotkey::hotkey::{Code, HotKey, Modifiers};
@@ -1374,10 +1476,14 @@ mod tests {
         assert_eq!(key_name(76, Some("\r")).as_deref(), Some("NumpadEnter"));
         assert_eq!(key_name(36, Some("\r")).as_deref(), Some("Enter"));
         // A key with no code here is named by its character, but never by one the accelerator cannot carry.
-        assert_eq!(key_name(10, Some("<")).as_deref(), Some("<"));
-        assert_eq!(key_name(10, Some("+")), None);
-        assert_eq!(key_name(10, Some(":")), None);
-        assert_eq!(key_name(10, None), None);
+        assert_eq!(key_name(110, Some("<")).as_deref(), Some("<"));
+        assert_eq!(key_name(110, Some("+")), None);
+        assert_eq!(key_name(110, Some(":")), None);
+        assert_eq!(key_name(110, None), None);
+        // The ISO key (`<>` beside the left Shift on Spanish, German and French keyboards) is its own key, never its character.
+        assert_eq!(key_name(10, Some("<")).as_deref(), Some("IntlBackslash"));
+        assert_eq!(key_name(10, Some("+")).as_deref(), Some("IntlBackslash"));
+        assert_eq!(key_name(10, None).as_deref(), Some("IntlBackslash"));
     }
 
     #[test]
@@ -1459,9 +1565,9 @@ mod tests {
             serde_json::to_value(status).unwrap(),
             json!({
                 "shortcuts": {
-                    "mute": {"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "managedBySystem": false},
-                    "holdToTalk": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "managedBySystem": false},
-                    "oneTurn": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "managedBySystem": false},
+                    "mute": {"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
+                    "holdToTalk": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
+                    "oneTurn": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
                 },
                 "permission": {"kind": "inputMonitoring", "state": "notAsked"},
                 "headset": {"press": "oneTurn", "doublePress": "skip", "outsideCall": "leave"},

@@ -3,7 +3,7 @@
 //! The system's hot keys are registered through the maintained global-shortcut plugin; which of them the app holds follows
 //! what the settings say by a diff (core `shortcuts::reconcile`), never by letting go of everything and registering again.
 
-use sidevoice_desktop_core::shortcuts::{self, Action, Edge, Held, Parsed, Registrar, Taken};
+use sidevoice_desktop_core::shortcuts::{self, Action, Edge, Held, KeyReach, Parsed, Platform, Registrar, Taken};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcut, Shortcut, ShortcutState};
@@ -97,6 +97,11 @@ struct Plugin<'a, R: Runtime>(&'a GlobalShortcut<R>);
 
 impl<R: Runtime> Registrar for Plugin<'_, R> {
     fn register(&mut self, hot_key: &str) -> bool {
+        // The backend would bind another key for these (Windows: Ctrl+NumpadEqual as Ctrl+E) or none.
+        if shortcuts::hot_key_reach(Platform::current(), hot_key) == KeyReach::Never {
+            log::debug!("shortcut {hot_key} not registered: this system cannot register that key");
+            return false;
+        }
         match self.0.register(hot_key) {
             Ok(()) => true,
             Err(error) => {

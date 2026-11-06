@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::Command;
 use sidevoice_desktop_core::settings::{GlobalShortcut, Registration, Settings};
 use sidevoice_desktop_core::shortcuts::{
-    self, Action, Edge, Effect, Headset, HeadsetPress, Heard, Held, Hold, Listened, Machine, Parsed, Permission,
-    PermissionKind, PermissionState, Recorded, Recorder, Release, Status, Watch, WATCH_TICK,
+    self, Action, Edge, Effect, Headset, HeadsetPress, Heard, Held, Hold, KeyReach, Listened, Machine, Parsed,
+    Permission, PermissionKind, PermissionState, Platform, Recorded, Recorder, Release, Status, Watch, WATCH_TICK,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -221,6 +221,8 @@ fn snapshot(app: &AppHandle) -> Status {
     for shortcut in &mut all {
         let accelerator = shortcut.accelerator.as_deref().unwrap_or_default();
         shortcut.voice_over = shortcut.state == Registration::On && shortcut_access::reserved_chord_active(accelerator);
+        shortcut.layout_bound = shortcut.state == Registration::On
+            && shortcuts::hot_key_reach(Platform::current(), accelerator) == KeyReach::ByLayout;
     }
     Status {
         shortcuts: shortcuts::Shortcuts::from_array(all),
@@ -254,7 +256,16 @@ pub(crate) fn set(app: &AppHandle, action: Action, text: &str) -> Result<GlobalS
     let invalid = || refusal("shortcut_invalid", format!("Not a shortcut: {text}"));
     let parsed = shortcuts::parse(text).ok_or_else(invalid)?;
     if let Some(parsed) = &parsed {
-        if !shortcuts::suits(action, parsed) || !shortcut_access::accepts(parsed) {
+        if !shortcuts::suits(action, parsed) {
+            return Err(invalid());
+        }
+        // A key this system cannot register as itself (the ISO `<>` key, a keypad key Windows maps to another): refused,
+        // and never bound as another key. The page says why.
+        if parsed.hot_key().is_some_and(|keys| shortcuts::hot_key_reach(Platform::current(), &keys) == KeyReach::Never)
+        {
+            return Err(refusal("shortcut_unsupported", format!("This system cannot register that key: {text}")));
+        }
+        if !shortcut_access::accepts(parsed) {
             return Err(invalid());
         }
     }

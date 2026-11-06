@@ -29,7 +29,7 @@ use objc2_media_player::{
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use crate::headset::{media_command_action, mute_gesture_action, Changed};
+use crate::headset::{media_dispatch, mute_gesture_action, registered_commands, Changed, Dispatch, ALL_COMMANDS};
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -81,23 +81,17 @@ fn on_media_command(app: &AppHandle, command: &str) {
     let headset = app.state::<Headset>();
     let snapshot = headset.call.lock().unwrap().clone();
     let in_call = snapshot.ready && snapshot.joined;
-    if command == "next" {
-        if in_call {
+    match media_dispatch(command, in_call, snapshot.mic_enabled) {
+        Dispatch::NextTrack => {
             (headset.sink)(MediaCommand::NextTrack);
             headset.record("remote:next", "double press");
-        } else {
-            headset.record("remote:next", "sin llamada: solo registrado");
         }
-        return;
-    }
-    let action = if in_call { media_command_action(command, snapshot.mic_enabled) } else { None };
-    match action {
-        Some(what) => {
+        Dispatch::ToggleMute(what) => {
             (headset.sink)(MediaCommand::ToggleMute);
             headset.record(&format!("remote:{command}"), what);
         }
-        None if in_call => headset.record(&format!("remote:{command}"), "ya estaba así"),
-        None => headset.record(&format!("remote:{command}"), "sin llamada: solo registrado"),
+        Dispatch::Unchanged => headset.record(&format!("remote:{command}"), "ya estaba así"),
+        Dispatch::NoCall => headset.record(&format!("remote:{command}"), "sin llamada: solo registrado"),
     }
 }
 
@@ -175,57 +169,52 @@ fn set_muted(shared: &AVAudioApplication, muted: bool) {
     }
 }
 
-/// The commands the app answers: the single press's, and on macOS the double press's (`nextTrackCommand`).
+/// The commands the app answers ([`registered_commands`]: the single press's, and on macOS the double press's
+/// `nextTrackCommand`), each with its name.
 fn commands<N: Os>() -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
-    // SAFETY: the shared command center exists for the process's lifetime.
+    registered_commands(N::NEXT_TRACK).into_iter().map(|name| (command_named(name), name)).collect()
+}
+
+/// The command of the shared command center that `name` ([`ALL_COMMANDS`]) names.
+fn command_named(name: &str) -> Retained<MPRemoteCommand> {
+    // SAFETY: the shared command center exists for the process's lifetime; each subclass is a command.
     let center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };
-    let mut answered = unsafe {
-        vec![
-            (center.playCommand(), "play"),
-            (center.pauseCommand(), "pause"),
-            (center.togglePlayPauseCommand(), "toggle"),
-        ]
-    };
-    if N::NEXT_TRACK {
-        // SAFETY: as above.
-        answered.push((unsafe { center.nextTrackCommand() }, "next"));
+    unsafe {
+        match name {
+            "play" => center.playCommand(),
+            "pause" => center.pauseCommand(),
+            "toggle" => center.togglePlayPauseCommand(),
+            "stop" => center.stopCommand(),
+            "next" => center.nextTrackCommand(),
+            "previous" => center.previousTrackCommand(),
+            "skipForward" => Retained::into_super(center.skipForwardCommand()),
+            "skipBackward" => Retained::into_super(center.skipBackwardCommand()),
+            "seekForward" => center.seekForwardCommand(),
+            "seekBackward" => center.seekBackwardCommand(),
+            "changePlaybackPosition" => Retained::into_super(center.changePlaybackPositionCommand()),
+            "changePlaybackRate" => Retained::into_super(center.changePlaybackRateCommand()),
+            "changeRepeatMode" => Retained::into_super(center.changeRepeatModeCommand()),
+            "changeShuffleMode" => Retained::into_super(center.changeShuffleModeCommand()),
+            "rating" => Retained::into_super(center.ratingCommand()),
+            "like" => Retained::into_super(center.likeCommand()),
+            "dislike" => Retained::into_super(center.dislikeCommand()),
+            "bookmark" => Retained::into_super(center.bookmarkCommand()),
+            "enableLanguageOption" => center.enableLanguageOptionCommand(),
+            "disableLanguageOption" => center.disableLanguageOptionCommand(),
+            other => unreachable!("no command is named {other}: see ALL_COMMANDS"),
+        }
     }
-    answered
 }
 
 fn gesture_api() -> bool {
     AnyClass::get(c"AVAudioApplication").is_some()
 }
 
-/// Every command of the shared command center, by name: the app registers only [`commands`], but any of them with a
-/// target, or enabled, keeps the app the Now Playing app as much (HANDOVER-live-activity R2-6), so all of them are let go.
+/// Every command of the shared command center, by name ([`ALL_COMMANDS`]): the app registers only [`commands`], but any of
+/// them with a target, or enabled, keeps the app the Now Playing app as much (HANDOVER-live-activity R2-6), so all of them
+/// are let go.
 fn every_command() -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
-    // SAFETY: as in `commands`; each subclass is a command.
-    let center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };
-    unsafe {
-        vec![
-            (center.playCommand(), "play"),
-            (center.pauseCommand(), "pause"),
-            (center.togglePlayPauseCommand(), "toggle"),
-            (center.stopCommand(), "stop"),
-            (center.nextTrackCommand(), "next"),
-            (center.previousTrackCommand(), "previous"),
-            (Retained::into_super(center.skipForwardCommand()), "skipForward"),
-            (Retained::into_super(center.skipBackwardCommand()), "skipBackward"),
-            (center.seekForwardCommand(), "seekForward"),
-            (center.seekBackwardCommand(), "seekBackward"),
-            (Retained::into_super(center.changePlaybackPositionCommand()), "changePlaybackPosition"),
-            (Retained::into_super(center.changePlaybackRateCommand()), "changePlaybackRate"),
-            (Retained::into_super(center.changeRepeatModeCommand()), "changeRepeatMode"),
-            (Retained::into_super(center.changeShuffleModeCommand()), "changeShuffleMode"),
-            (Retained::into_super(center.ratingCommand()), "rating"),
-            (Retained::into_super(center.likeCommand()), "like"),
-            (Retained::into_super(center.dislikeCommand()), "dislike"),
-            (Retained::into_super(center.bookmarkCommand()), "bookmark"),
-            (center.enableLanguageOptionCommand(), "enableLanguageOption"),
-            (center.disableLanguageOptionCommand(), "disableLanguageOption"),
-        ]
-    }
+    ALL_COMMANDS.into_iter().map(|name| (command_named(name), name)).collect()
 }
 
 /// Whether the command handlers are registered now: only while Now Playing shows the call. A handler registered is what

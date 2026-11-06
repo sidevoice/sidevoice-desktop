@@ -578,6 +578,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `engine_unavailable` | — | the engine did not start with the app |
 | `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
 | `shortcut_invalid` | — | `host.shortcuts.set(action, accelerator)` or `host.muteShortcut.set(accelerator)` with one that is not a shortcut, or that the action cannot be done with (below) |
+| `shortcut_unsupported` | — | `host.shortcuts.set(action, accelerator)` with a key this system cannot register as itself: the ISO `<>` key (`IntlBackslash`) everywhere, and `NumpadEqual` and `NumpadEnter` on Windows and Linux (Windows would register E and Enter in their place). The accelerator is not kept |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
 
@@ -867,6 +868,7 @@ interface GlobalShortcut {
   state: "on" | "off" | "refused" | "needsPermission" | "unavailable";
   alternatives: string[];       // refused: accelerators the system takes and nothing of ours holds (set one as it is)
   voiceOver: boolean;           // macOS: VoiceOver is on and the shortcut holds Control and Option together
+  layoutBound: boolean;         // Linux (X11): the key registers by the character the layout types on it, so under a non-US layout it may be another key, or none
   managedBySystem: boolean;     // always false here: the keys are the app's (a Wayland portal's would be true)
 }
 interface HeadsetStatus {
@@ -884,7 +886,7 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
 - **An accelerator** is keys pressed together, or a single key with how it is pressed.
   - Keys together are the web's form as it is: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`,
     `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key, named by the physical key and never by the character it types: `M`, `7`, `F5`, `Space`, `ArrowUp`, the
-    main row's punctuation (`Minus`, `Equal`, `Comma`, `Period`, `Slash`, `Backslash`, `Semicolon`, `Quote`, `BracketLeft`, `BracketRight`,
+    main row's punctuation (`Minus`, `Equal`, `Comma`, `Period`, `Slash`, `Backslash`, `Semicolon`, `Quote`, `BracketLeft`, `BracketRight`, `IntlBackslash` (the ISO `<>` key),
     `Backquote`) and the keypad (`NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`, `NumpadEqual`,
     `NumpadEnter`, `Numpad0` to `Numpad9`): the names `global-hotkey` registers, so the keypad's `-` and the main row's are two
     keys and `+` is never a key. Written the old way (`;`, `-`, `+` or `*` alone for the keypad's) they are read as those keys, or an F-key on its own (`F9`). With Shift, a character Shift makes on a US keyboard is read

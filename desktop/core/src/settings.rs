@@ -180,7 +180,7 @@ fn is_function_key(key: &str) -> bool {
 /// The keys the app names by the physical key, never by the character they type, as `global-hotkey` names them: the main
 /// row's punctuation and the keypad. A character can be two keys (`-` is the main row's and the keypad's) and `+` is the
 /// accelerator's own separator; a name is one key, on any layout.
-const PHYSICAL_KEYS: [&str; 28] = [
+const PHYSICAL_KEYS: [&str; 29] = [
     "Minus",
     "Equal",
     "Comma",
@@ -192,6 +192,7 @@ const PHYSICAL_KEYS: [&str; 28] = [
     "BracketLeft",
     "BracketRight",
     "Backquote",
+    "IntlBackslash",
     "NumpadAdd",
     "NumpadSubtract",
     "NumpadMultiply",
@@ -237,6 +238,7 @@ pub fn keycap(name: &str) -> Option<String> {
         "Quote" => "'",
         "BracketLeft" => "[",
         "BracketRight" => "]",
+        "IntlBackslash" => "<",
         _ => "`",
     };
     Some(character.to_owned())
@@ -318,6 +320,9 @@ pub struct GlobalShortcut {
     pub alternatives: Vec<String>,
     /// macOS: VoiceOver is on, and the shortcut holds its keys (Control and Option together).
     pub voice_over: bool,
+    /// Linux (X11): the key registers by the character the layout types on it, not by its position, so under a layout other
+    /// than US it may be another key, or none ([`crate::shortcuts::KeyReach::ByLayout`]). A warning, not a refusal.
+    pub layout_bound: bool,
     /// The system owns the keys and the label is its text (a Wayland portal): never here, the keys are the app's.
     pub managed_by_system: bool,
 }
@@ -340,6 +345,7 @@ impl GlobalShortcut {
             state,
             alternatives,
             voice_over: false,
+            layout_bound: false,
             managed_by_system: false,
         }
     }
@@ -536,6 +542,11 @@ mod tests {
             assert_eq!(hotkey.key, code, "{name}");
             assert_eq!(keycap(name).as_deref(), Some(cap), "{name}");
         }
+        // The ISO key is a key the app names, but `global-hotkey` does not know it on any system: it is refused as unsupported
+        // (`shortcuts::key_reach`) and never registered as another key.
+        assert!("Cmd+Alt+IntlBackslash".parse::<HotKey>().is_err());
+        assert_eq!(normalize_shortcut("Cmd+Alt+IntlBackslash").as_deref(), Some("Cmd+Alt+IntlBackslash"));
+        assert_eq!(keycap("IntlBackslash").as_deref(), Some("<"));
         assert_eq!(keycap("M"), None);
         assert_eq!(keycap("F5"), None);
     }
@@ -561,18 +572,18 @@ mod tests {
     fn the_mute_shortcut_reads_as_the_seam_says() {
         assert_eq!(
             serde_json::to_value(GlobalShortcut::new("", Registration::On, vec![], true, "en")).unwrap(),
-            json!({"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "managedBySystem": false})
+            json!({"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
         );
         assert_eq!(
             serde_json::to_value(GlobalShortcut::new("Ctrl+Alt+M", Registration::On, vec![], true, "en")).unwrap(),
-            json!({"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "managedBySystem": false})
+            json!({"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
         );
         let refused =
             GlobalShortcut::new("Cmd+Shift+M", Registration::Refused, vec!["Ctrl+Alt+Shift+M".into()], false, "en");
         assert_eq!(
             serde_json::to_value(refused).unwrap(),
             json!({"accelerator": "Cmd+Shift+M", "label": "Super+Shift+M", "state": "refused",
-                   "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false, "managedBySystem": false})
+                   "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
         );
     }
 
