@@ -422,6 +422,9 @@ pub fn shortcut_label(accelerator: &str, macos: bool) -> String {
         match modifier {
             Some((symbol, word)) => (if macos { symbol } else { word }).to_string(),
             None => {
+                if let Some(cap) = crate::settings::keycap(part) {
+                    return cap;
+                }
                 let key = part.strip_prefix("Key").filter(|k| k.len() == 1).unwrap_or(part);
                 key.to_uppercase()
             }

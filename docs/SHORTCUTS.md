@@ -22,6 +22,11 @@ section was hidden in the page until now, so nobody could have chosen Ctrl+Alt+M
 
 ## How a shortcut is written
 
+A key is named by the physical key, never by the character it types (core `shortcuts::key_name`, from macOS's virtual key code): `NumpadAdd`,
+`NumpadSubtract`, `NumpadMultiply`, `NumpadDivide` for the keypad (read `Num +`, `Num -`, `Num *`, `Num /`) and `Minus`, `Slash`,
+`BracketRight` and the like for the main row, as `global-hotkey` registers them (docs/BRIDGE.md lists them). Older accelerators written
+with the character still read as the same keys.
+
 Keys together (`Ctrl+Alt+Shift+M`, `Cmd+Shift+M`, `F9`) or a single key with how it is pressed (`Fn:hold`,
 `RightControl:double`, `F13:tap`), the same strings the page writes (docs/BRIDGE.md has the grammar). Press and release:
 
@@ -40,7 +45,7 @@ Keys together (`Ctrl+Alt+Shift+M`, `Cmd+Shift+M`, `F9`) or a single key with how
 | F-keys on their own (`F9`, `F13:hold`) | the same hot key: no permission | the same | the same | `unavailable` |
 | Fn and Right Command / Alt / Control / Shift | a **listen-only `CGEventTap`** on `flagsChanged` and `keyDown`, made only while one is set and **Input Monitoring** is granted | `unavailable` | `unavailable` | `unavailable` |
 | Recording a key in the page (`record`) | the app's own local monitor of keys in its windows (Fn included, **no permission**) | the page records | the page records | the page records |
-| Headset's press | `MPRemoteCommandCenter` (the system's play/pause) and the AirPods gesture: what the person chose | no path (`headset: null`) | no path | no path |
+| Headset's press | `MPRemoteCommandCenter` (the system's play/pause; a double press is `nextTrackCommand`) and the AirPods gesture: what the person chose | no path (`headset: null`) | no path | no path |
 | Screen locked → a hold is let go | yes (`CGSessionCopyCurrentDictionary`) | yes (the input desktop cannot be opened) | no observation | no observation |
 
 Single modifier keys on Windows and Linux are `unavailable` on purpose: `RegisterHotKey` and an X11 grab take a key with its
@@ -107,7 +112,7 @@ Operator, 2026-11-05. The questions are those of the design document.
 | 2 | Default for global mute | ⌃⌥M on macOS; **Ctrl+Alt+Shift+M on Windows and Linux** (this closes desktop#10) |
 | 3 | Single keys (Fn, a lone modifier) | **Yes**, on macOS, through the listen-only tap and Input Monitoring asked only when one is chosen; F-keys everywhere; no permission asked otherwise |
 | 4 | Wayland | `unavailable` for now (portal client later) |
-| 5 | Headset presses | Single press: mute (as now), selectable; double press: only where the path can send it (none on the desktop today) |
+| 5 | Headset presses | Single press: mute (as now), selectable; double press: the system's next track (macOS), `none` until chosen |
 | 6 | Headset outside a call | Leave the buttons to other apps |
 | 7 | What release means for hold to talk | Mute only, as the in-app Space |
 | 8 | Stuck-hold timeout | 60 s, and on call end, screen lock and sleep |

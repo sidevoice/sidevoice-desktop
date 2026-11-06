@@ -7,6 +7,9 @@
 //!   microphone: play → unmute, pause → toggle (a click may arrive as pause while muted), toggle → toggle. On iOS the
 //!   same commands come from the lock screen and Control Center, where the call is shown, and the app is the Now Playing
 //!   app while its audio session is active (the mobile app's host activates it).
+//! - **Double press**: a headset's or AirPods' double press of play/pause arrives as `nextTrackCommand`, registered on macOS
+//!   only (`Os::NEXT_TRACK`), under the same condition as the single press: while the app shows the call as Now Playing.
+//!   The app sends it as `MediaCommand::NextTrack`; a keyboard's next-track key arrives the same way.
 //! - **Extra, AirPods / Beats** (macOS 14+, iOS 17+): the stem-press mute gesture arrives through
 //!   `AVAudioApplication.setInputMuteStateChangeHandler`; the app keeps that state in step with its own mute.
 //! - No CallKit: neither needs it.
@@ -26,7 +29,7 @@ use objc2_media_player::{
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use crate::headset::{media_command_action, mute_gesture_action, Changed};
+use crate::headset::{media_dispatch, mute_gesture_action, registered_commands, Changed, Dispatch, ALL_COMMANDS};
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -37,6 +40,10 @@ pub(super) trait Os {
     /// Says whether the app plays (`MPNowPlayingInfoCenter.playbackState`). Only macOS reads it, and requires it whenever
     /// playback starts or stops; iOS takes it from the app's audio session.
     fn set_playback_state(_center: &MPNowPlayingInfoCenter, _state: MPNowPlayingPlaybackState) {}
+
+    /// Whether the next-track command is registered too: a headset's or AirPods' double press of play/pause arrives as it
+    /// (macOS). iOS leaves it alone, so that the lock screen shows no next-track button. False by default.
+    const NEXT_TRACK: bool = false;
 
     /// Starts hearing the AirPods / Beats mute gesture, each one handed to [`heard`]; whether it does. Called on the main
     /// thread, with `AVAudioApplication` present. None by default.
@@ -74,14 +81,17 @@ fn on_media_command(app: &AppHandle, command: &str) {
     let headset = app.state::<Headset>();
     let snapshot = headset.call.lock().unwrap().clone();
     let in_call = snapshot.ready && snapshot.joined;
-    let action = if in_call { media_command_action(command, snapshot.mic_enabled) } else { None };
-    match action {
-        Some(what) => {
+    match media_dispatch(command, in_call, snapshot.mic_enabled) {
+        Dispatch::NextTrack => {
+            (headset.sink)(MediaCommand::NextTrack);
+            headset.record("remote:next", "double press");
+        }
+        Dispatch::ToggleMute(what) => {
             (headset.sink)(MediaCommand::ToggleMute);
             headset.record(&format!("remote:{command}"), what);
         }
-        None if in_call => headset.record(&format!("remote:{command}"), "ya estaba así"),
-        None => headset.record(&format!("remote:{command}"), "sin llamada: solo registrado"),
+        Dispatch::Unchanged => headset.record(&format!("remote:{command}"), "ya estaba así"),
+        Dispatch::NoCall => headset.record(&format!("remote:{command}"), "sin llamada: solo registrado"),
     }
 }
 
@@ -159,11 +169,40 @@ fn set_muted(shared: &AVAudioApplication, muted: bool) {
     }
 }
 
-fn commands() -> [(Retained<MPRemoteCommand>, &'static str); 3] {
-    // SAFETY: the shared command center exists for the process's lifetime.
+/// The commands the app answers ([`registered_commands`]: the single press's, and on macOS the double press's
+/// `nextTrackCommand`), each with its name.
+fn commands<N: Os>() -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
+    registered_commands(N::NEXT_TRACK).into_iter().map(|name| (command_named(name), name)).collect()
+}
+
+/// The command of the shared command center that `name` ([`ALL_COMMANDS`]) names.
+fn command_named(name: &str) -> Retained<MPRemoteCommand> {
+    // SAFETY: the shared command center exists for the process's lifetime; each subclass is a command.
     let center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };
     unsafe {
-        [(center.playCommand(), "play"), (center.pauseCommand(), "pause"), (center.togglePlayPauseCommand(), "toggle")]
+        match name {
+            "play" => center.playCommand(),
+            "pause" => center.pauseCommand(),
+            "toggle" => center.togglePlayPauseCommand(),
+            "stop" => center.stopCommand(),
+            "next" => center.nextTrackCommand(),
+            "previous" => center.previousTrackCommand(),
+            "skipForward" => Retained::into_super(center.skipForwardCommand()),
+            "skipBackward" => Retained::into_super(center.skipBackwardCommand()),
+            "seekForward" => center.seekForwardCommand(),
+            "seekBackward" => center.seekBackwardCommand(),
+            "changePlaybackPosition" => Retained::into_super(center.changePlaybackPositionCommand()),
+            "changePlaybackRate" => Retained::into_super(center.changePlaybackRateCommand()),
+            "changeRepeatMode" => Retained::into_super(center.changeRepeatModeCommand()),
+            "changeShuffleMode" => Retained::into_super(center.changeShuffleModeCommand()),
+            "rating" => Retained::into_super(center.ratingCommand()),
+            "like" => Retained::into_super(center.likeCommand()),
+            "dislike" => Retained::into_super(center.dislikeCommand()),
+            "bookmark" => Retained::into_super(center.bookmarkCommand()),
+            "enableLanguageOption" => center.enableLanguageOptionCommand(),
+            "disableLanguageOption" => center.disableLanguageOptionCommand(),
+            other => unreachable!("no command is named {other}: see ALL_COMMANDS"),
+        }
     }
 }
 
@@ -171,35 +210,11 @@ fn gesture_api() -> bool {
     AnyClass::get(c"AVAudioApplication").is_some()
 }
 
-/// Every command of the shared command center, by name: the app registers only [`commands`], but any of them with a
-/// target, or enabled, keeps the app the Now Playing app as much (HANDOVER-live-activity R2-6), so all of them are let go.
+/// Every command of the shared command center, by name ([`ALL_COMMANDS`]): the app registers only [`commands`], but any of
+/// them with a target, or enabled, keeps the app the Now Playing app as much (HANDOVER-live-activity R2-6), so all of them
+/// are let go.
 fn every_command() -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
-    // SAFETY: as in `commands`; each subclass is a command.
-    let center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };
-    unsafe {
-        vec![
-            (center.playCommand(), "play"),
-            (center.pauseCommand(), "pause"),
-            (center.togglePlayPauseCommand(), "toggle"),
-            (center.stopCommand(), "stop"),
-            (center.nextTrackCommand(), "next"),
-            (center.previousTrackCommand(), "previous"),
-            (Retained::into_super(center.skipForwardCommand()), "skipForward"),
-            (Retained::into_super(center.skipBackwardCommand()), "skipBackward"),
-            (center.seekForwardCommand(), "seekForward"),
-            (center.seekBackwardCommand(), "seekBackward"),
-            (Retained::into_super(center.changePlaybackPositionCommand()), "changePlaybackPosition"),
-            (Retained::into_super(center.changePlaybackRateCommand()), "changePlaybackRate"),
-            (Retained::into_super(center.changeRepeatModeCommand()), "changeRepeatMode"),
-            (Retained::into_super(center.changeShuffleModeCommand()), "changeShuffleMode"),
-            (Retained::into_super(center.ratingCommand()), "rating"),
-            (Retained::into_super(center.likeCommand()), "like"),
-            (Retained::into_super(center.dislikeCommand()), "dislike"),
-            (Retained::into_super(center.bookmarkCommand()), "bookmark"),
-            (center.enableLanguageOptionCommand(), "enableLanguageOption"),
-            (center.disableLanguageOptionCommand(), "disableLanguageOption"),
-        ]
-    }
+    ALL_COMMANDS.into_iter().map(|name| (command_named(name), name)).collect()
 }
 
 /// Whether the command handlers are registered now: only while Now Playing shows the call. A handler registered is what
@@ -236,8 +251,8 @@ fn census(when: &str) {
 }
 
 /// Registers the handlers of the commands, enabled, once.
-fn register(app: &AppHandle) {
-    for (command, name) in commands() {
+fn register<N: Os>(app: &AppHandle) {
+    for (command, name) in commands::<N>() {
         let app = app.clone();
         let handler = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
             on_media_command(&app, name);
@@ -288,9 +303,9 @@ fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool,
         }
     }
     if now_playing && !*REGISTERED.lock().unwrap() {
-        register(app);
+        register::<N>(app);
         *REGISTERED.lock().unwrap() = true;
-        for (command, _) in commands() {
+        for (command, _) in commands::<N>() {
             // SAFETY: main thread; plain property set.
             unsafe { command.setEnabled(true) };
         }

@@ -1,8 +1,11 @@
 use super::{LabelStyle, Os};
+use sidevoice_desktop_core::shortcuts::Platform;
 
 pub(super) struct Native;
 
 impl Os for Native {
+    const PLATFORM: Platform = Platform::Macos;
+
     const DEFAULT_MUTE: &'static str = sidevoice_desktop_core::shortcuts::DEFAULT_MUTE_MACOS;
 
     fn reserved_chord_active(chord: &str) -> bool {

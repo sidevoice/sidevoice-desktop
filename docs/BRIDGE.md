@@ -578,6 +578,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `engine_unavailable` | — | the engine did not start with the app |
 | `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
 | `shortcut_invalid` | — | `host.shortcuts.set(action, accelerator)` or `host.muteShortcut.set(accelerator)` with one that is not a shortcut, or that the action cannot be done with (below) |
+| `shortcut_unsupported` | — | `host.shortcuts.set(action, accelerator)` with a key this system cannot register as itself: the ISO `<>` key (`IntlBackslash`) everywhere, and `NumpadEqual` and `NumpadEnter` on Windows and Linux (Windows would register E and Enter in their place). The accelerator is not kept |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
 
@@ -867,11 +868,12 @@ interface GlobalShortcut {
   state: "on" | "off" | "refused" | "needsPermission" | "unavailable";
   alternatives: string[];       // refused: accelerators the system takes and nothing of ours holds (set one as it is)
   voiceOver: boolean;           // macOS: VoiceOver is on and the shortcut holds Control and Option together
+  layoutBound: boolean;         // Linux (X11): the key registers by the character the layout types on it, so under a non-US layout it may be another key, or none
   managedBySystem: boolean;     // always false here: the keys are the app's (a Wayland portal's would be true)
 }
 interface HeadsetStatus {
   press: "mute" | "oneTurn" | "skip" | "none";
-  doublePress: "mute" | "oneTurn" | "skip" | "none" | null;   // null: this path cannot send one (always, today)
+  doublePress: "mute" | "oneTurn" | "skip" | "none" | null;   // the system's next track; null: this path cannot send one (not on macOS)
   outsideCall: "leave" | "join";                               // "leave" (always, today)
 }
 interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
@@ -883,8 +885,11 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
 
 - **An accelerator** is keys pressed together, or a single key with how it is pressed.
   - Keys together are the web's form as it is: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`,
-    `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key as the browser names it (`event.key`: `M`, `7`, `F5`,
-    `Space`, `ArrowUp`, `;`, `+`), or an F-key on its own (`F9`). With Shift, a character Shift makes on a US keyboard is read
+    `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key, named by the physical key and never by the character it types: `M`, `7`, `F5`, `Space`, `ArrowUp`, the
+    main row's punctuation (`Minus`, `Equal`, `Comma`, `Period`, `Slash`, `Backslash`, `Semicolon`, `Quote`, `BracketLeft`, `BracketRight`, `IntlBackslash` (the ISO `<>` key),
+    `Backquote`) and the keypad (`NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`, `NumpadEqual`,
+    `NumpadEnter`, `Numpad0` to `Numpad9`): the names `global-hotkey` registers, so the keypad's `-` and the main row's are two
+    keys and `+` is never a key. Written the old way (`;`, `-`, `+` or `*` alone for the keypad's) they are read as those keys, or an F-key on its own (`F9`). With Shift, a character Shift makes on a US keyboard is read
     as its key (`Ctrl+Shift+?` is Ctrl+Shift+/, `Cmd+Shift++` is Cmd+Shift+=). The app keeps them in one form, modifiers in the order
     `Cmd+Ctrl+Alt+Shift` and the key's first letter upper case (`shift+cmd+m` → `Cmd+Shift+M`; core
     `settings::normalize_shortcut`). `Cmd` is the Command key (Super elsewhere). A key with no modifier that is not an F-key,
@@ -909,11 +914,11 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
   lone Fn or modifier as the action allows: hold to talk when it is let go, mute once, say one thing once or twice),
   or `null` for Escape or no key for a minute. The keys are swallowed meanwhile, and the app's hot keys are let go of so the
   chord being recorded does not fire what it is bound to. A second `record` ends the first with `null`.
-- `setHeadset({press})` is the one writer of the headset's choice, kept with the app's settings. It is offered where the
+- `setHeadset({press, doublePress})` is the one writer of the headset's choice, kept with the app's settings. It is offered where the
   app owns the headset's buttons (macOS: `host.presence`): the single press (the system's play/pause, and the AirPods gesture)
-  does what it says. `doublePress` and `outsideCall: "join"` are refused `bad_request`: the path sends no double press, and the app
+  and the double press (the system's next track) do what they say; the double press is `none` until chosen. `outsideCall: "join"` is refused `bad_request`: the app
   leaves the buttons to other apps outside a call.
-- Kept with the app's settings (`muteShortcut`, `holdToTalkShortcut`, `oneTurnShortcut`, `headsetPress`), set only from the
+- Kept with the app's settings (`muteShortcut`, `holdToTalkShortcut`, `oneTurnShortcut`, `headsetPress`, `headsetDoublePress`), set only from the
   page. A person still on the old mute default (Ctrl+Alt+M) is moved once to this system's (core
   `shortcuts::migrated_mute`).
 - App → page: `window.__sidevoiceHost.shortcutsEvent(status)` (`webview.eval`) whenever the app registers a shortcut (set from the

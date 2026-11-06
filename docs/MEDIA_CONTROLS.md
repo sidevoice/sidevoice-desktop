@@ -27,15 +27,19 @@ set) and how the gesture is heard.
 Where the app owns the headset's buttons (macOS, `available()`), the one command it hears, `MediaCommand::ToggleMute` (the system's
 play/pause, **and** the AirPods mute gesture, which arrive the same way), does what the person chose in Settings › Shortcuts › Headset
 buttons (`host.shortcuts.setHeadset({press})`, kept with the app's settings): **mute** (the default, as always), **say one thing**, **skip what
-is playing**, or **nothing** (desktop `src/shortcuts.rs` `headset_press`; the shared plugin is not changed). `HeadsetStatus` is `null` on
-Windows and Linux, where the page owns the media session and the app has nothing to map. The double press (`doublePress`) is `null`: the
-path the app listens on sends no next-track command (see below), so it cannot send one. Outside a call the app leaves the buttons to other apps
+is playing**, or **nothing** (desktop `src/shortcuts.rs` `headset_press`). `HeadsetStatus` is `null` on
+Windows and Linux, where the page owns the media session and the app has nothing to map. The double press (`doublePress`) is there on macOS: a
+headset's or AirPods' double press of play/pause arrives through `MPRemoteCommandCenter` as `nextTrackCommand`, which `apple.rs` registers on
+macOS only (`Os::NEXT_TRACK`; iOS leaves it, so the lock screen shows no next-track button), under the same condition as the single press (while
+the app shows the call as Now Playing; the handler is removed with the others), and sends as `MediaCommand::NextTrack`. It does what the person chose
+(`host.shortcuts.setHeadset({doublePress})`, `headset_double_press`), **nothing** until chosen. A keyboard's next-track key arrives as the same command, so while
+the app holds the session it triggers the double press's action too. Outside a call the app leaves the buttons to other apps
 (`outsideCall`: `leave`), as the handlers are only attached while a call is on. A headset's hold to talk stays ruled out (desktop#447).
 Mobile is out of scope here: it is owned by the call's surface (Live Activity, Android's session).
 
 On a phone the same rule holds for the native commands: play unmutes, pause toggles. On Android a headset's single press
 arrives as pause while the session plays (the microphone is open) and as play while it is paused (muted). There is no
-next-track mapping (skip the reply) on any host: the desktop has none, and adding one is its own decision.
+next-track mapping on the phones: only the desktop has one (above).
 
 `npm run web && npm test` runs the pinned page's Media Session and microphone fan-out bodies,
 verbatim from its release bundle, against a live native-call bridge object with Tauri commands

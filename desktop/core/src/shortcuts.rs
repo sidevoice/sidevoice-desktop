@@ -490,6 +490,50 @@ pub trait Registrar {
     fn unregister(&mut self, hot_key: &str) -> bool;
 }
 
+/// The systems the app registers global hot keys on, for the keys each can and cannot carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Macos,
+    Windows,
+    Linux,
+}
+
+/// What a system can do with the key of a combination, which `global-hotkey` (the backend) decides by its own tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyReach {
+    /// The key registers as the key it is.
+    Physical,
+    /// X11 registers it by the character the layout types on it, not by its position: another key, or none, under a
+    /// layout that is not US. Kept, with a warning.
+    ByLayout,
+    /// The backend cannot register this key, or registers another key in its place (Windows maps `NumpadEqual` to E and
+    /// `NumpadEnter` to Enter). Refused: never another key in its place.
+    Never,
+}
+
+/// How `platform` registers `key` (a key's name in an accelerator, as [`settings::normalize_shortcut`] writes it).
+///
+/// From `global-hotkey` 0.8's tables: no system maps `IntlBackslash` (the ISO `<>` key; macOS `kVK_ISO_Section`, Windows
+/// `VK_OEM_102`, an X11 keysym); Windows maps `NumpadEqual` to `VK_E` and `NumpadEnter` to `VK_RETURN`; X11 has no keysym
+/// for either keypad key and registers the punctuation keys by keysym.
+pub fn key_reach(platform: Platform, key: &str) -> KeyReach {
+    match (platform, key) {
+        (_, "IntlBackslash") => KeyReach::Never,
+        (Platform::Windows | Platform::Linux, "NumpadEqual" | "NumpadEnter") => KeyReach::Never,
+        (
+            Platform::Linux,
+            "Minus" | "Equal" | "Comma" | "Period" | "Slash" | "Backslash" | "Semicolon" | "Quote" | "BracketLeft"
+            | "BracketRight" | "Backquote",
+        ) => KeyReach::ByLayout,
+        _ => KeyReach::Physical,
+    }
+}
+
+/// [`key_reach`] of the key of a hot key (`Ctrl+Alt+BracketRight`, `F9`).
+pub fn hot_key_reach(platform: Platform, hot_key: &str) -> KeyReach {
+    key_reach(platform, hot_key.rsplit('+').next().unwrap_or(hot_key))
+}
+
 /// The hot keys the app holds now, one slot per action (in [`Action::ALL`] order).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Held([Option<String>; 3]);
@@ -625,7 +669,7 @@ pub struct Permission {
     pub state: PermissionState,
 }
 
-/// What a headset's single press does, and the press it cannot send.
+/// What a headset's press does: the single press (play/pause) or the double press (the system's next track).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum HeadsetPress {
@@ -653,15 +697,16 @@ impl HeadsetPress {
 #[serde(rename_all = "camelCase")]
 pub struct Headset {
     pub press: HeadsetPress,
-    /// `null`: this path (the system's play/pause) cannot send a double press.
+    /// A double press arrives as the system's next-track command, which the app answers while it holds the media session.
+    /// Always there where the app owns the headset; `Option` is the page's `null`: a path that cannot send one.
     pub double_press: Option<HeadsetPress>,
     /// The headset only acts in a call: the app leaves the buttons to other apps outside one.
     pub outside_call: &'static str,
 }
 
 impl Headset {
-    pub fn new(press: HeadsetPress) -> Headset {
-        Headset { press, double_press: None, outside_call: "leave" }
+    pub fn new(press: HeadsetPress, double_press: HeadsetPress) -> Headset {
+        Headset { press, double_press: Some(double_press), outside_call: "leave" }
     }
 }
 
@@ -854,10 +899,77 @@ impl Recorder {
 
 const KEY_ESCAPE: u16 = 53;
 
-/// The key's name in an accelerator, from a macOS virtual key code and the character it types: the keys with no character of
-/// their own by code, the others by their character.
+/// The key's name in an accelerator, from a macOS virtual key code: the key itself, never the character it types. A
+/// character does not say which key it came from (keypad `-` and the main row's are both `-`, `+` is the accelerator's own
+/// separator) and moves with the layout; the code does not. Only a key this table has no code for (an ISO section key, say)
+/// is named by its character, when that is one the accelerator can carry.
 fn key_name(code: u16, character: Option<&str>) -> Option<String> {
     let named = match code {
+        0 => "A",
+        11 => "B",
+        8 => "C",
+        2 => "D",
+        14 => "E",
+        3 => "F",
+        5 => "G",
+        4 => "H",
+        34 => "I",
+        38 => "J",
+        40 => "K",
+        37 => "L",
+        46 => "M",
+        45 => "N",
+        31 => "O",
+        35 => "P",
+        12 => "Q",
+        15 => "R",
+        1 => "S",
+        17 => "T",
+        32 => "U",
+        9 => "V",
+        13 => "W",
+        7 => "X",
+        16 => "Y",
+        6 => "Z",
+        29 => "0",
+        18 => "1",
+        19 => "2",
+        20 => "3",
+        21 => "4",
+        23 => "5",
+        22 => "6",
+        26 => "7",
+        28 => "8",
+        25 => "9",
+        27 => "Minus",
+        24 => "Equal",
+        43 => "Comma",
+        47 => "Period",
+        44 => "Slash",
+        42 => "Backslash",
+        41 => "Semicolon",
+        39 => "Quote",
+        33 => "BracketLeft",
+        30 => "BracketRight",
+        50 => "Backquote",
+        10 => "IntlBackslash",
+        69 => "NumpadAdd",
+        78 => "NumpadSubtract",
+        67 => "NumpadMultiply",
+        75 => "NumpadDivide",
+        65 => "NumpadDecimal",
+        81 => "NumpadEqual",
+        76 => "NumpadEnter",
+        82 => "Numpad0",
+        83 => "Numpad1",
+        84 => "Numpad2",
+        85 => "Numpad3",
+        86 => "Numpad4",
+        87 => "Numpad5",
+        88 => "Numpad6",
+        89 => "Numpad7",
+        91 => "Numpad8",
+        92 => "Numpad9",
         122 => "F1",
         120 => "F2",
         99 => "F3",
@@ -879,7 +991,7 @@ fn key_name(code: u16, character: Option<&str>) -> Option<String> {
         80 => "F19",
         90 => "F20",
         49 => "Space",
-        36 | 76 => "Enter",
+        36 => "Enter",
         48 => "Tab",
         51 => "Backspace",
         117 => "Delete",
@@ -898,7 +1010,8 @@ fn key_name(code: u16, character: Option<&str>) -> Option<String> {
     }
     let mut chars = character?.chars();
     let first = chars.next()?;
-    (chars.next().is_none() && !first.is_control()).then(|| first.to_uppercase().collect())
+    (chars.next().is_none() && !first.is_control() && !matches!(first, '+' | ':'))
+        .then(|| first.to_uppercase().collect())
 }
 
 #[cfg(test)]
@@ -1256,6 +1369,110 @@ mod tests {
         );
     }
 
+    /// The four keypad operators a mechanical keyboard sends with Cmd+Alt (macOS key codes 69, 78, 67 and 75): four
+    /// shortcuts, each registered as its own physical key, none of them reported as another's duplicate.
+    /// What each system registers, decided by `global-hotkey`'s own tables: pure, so every system is tested here.
+    #[test]
+    fn each_system_registers_only_the_keys_it_can_carry_as_themselves() {
+        use KeyReach::*;
+        use Platform::*;
+        // The ISO key registers nowhere; nothing else is bound in its place.
+        for platform in [Macos, Windows, Linux] {
+            assert_eq!(key_reach(platform, "IntlBackslash"), Never, "{platform:?}");
+            assert_eq!(hot_key_reach(platform, "Ctrl+Alt+IntlBackslash"), Never);
+        }
+        // Windows: NumpadEqual is VK_E and NumpadEnter is VK_RETURN in the backend; Ctrl+NumpadEqual must not be Ctrl+E.
+        assert_eq!(hot_key_reach(Windows, "Ctrl+NumpadEqual"), Never);
+        assert_eq!(hot_key_reach(Windows, "Ctrl+NumpadEnter"), Never);
+        assert_eq!(hot_key_reach(Windows, "Ctrl+E"), Physical);
+        assert_eq!(hot_key_reach(Windows, "Ctrl+Enter"), Physical);
+        assert_eq!(hot_key_reach(Windows, "Cmd+Alt+NumpadAdd"), Physical);
+        assert_eq!(hot_key_reach(Windows, "Cmd+Alt+BracketRight"), Physical);
+        // macOS has all the keypad.
+        assert_eq!(hot_key_reach(Macos, "Ctrl+NumpadEqual"), Physical);
+        assert_eq!(hot_key_reach(Macos, "Ctrl+NumpadEnter"), Physical);
+        assert_eq!(hot_key_reach(Macos, "Ctrl+BracketRight"), Physical);
+        // X11: no keysym for those two; punctuation is by keysym, so by layout; letters, F-keys and the keypad operators are not.
+        assert_eq!(hot_key_reach(Linux, "Ctrl+NumpadEqual"), Never);
+        assert_eq!(hot_key_reach(Linux, "Ctrl+NumpadEnter"), Never);
+        for key in [
+            "Minus",
+            "Equal",
+            "Comma",
+            "Period",
+            "Slash",
+            "Backslash",
+            "Semicolon",
+            "Quote",
+            "BracketLeft",
+            "BracketRight",
+            "Backquote",
+        ] {
+            assert_eq!(hot_key_reach(Linux, &format!("Ctrl+{key}")), ByLayout, "{key}");
+        }
+        for hot in ["Ctrl+M", "F9", "Ctrl+Alt+NumpadAdd", "Ctrl+Numpad5", "Ctrl+Space"] {
+            assert_eq!(hot_key_reach(Linux, hot), Physical, "{hot}");
+        }
+    }
+
+    #[test]
+    fn the_keypad_operators_are_four_different_shortcuts() {
+        use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+        let cmd_alt = mods(true, false, true, false);
+        let operators = [
+            (69, "+", "Cmd+Alt+NumpadAdd", Code::NumpadAdd),
+            (78, "-", "Cmd+Alt+NumpadSubtract", Code::NumpadSubtract),
+            (67, "*", "Cmd+Alt+NumpadMultiply", Code::NumpadMultiply),
+            (75, "/", "Cmd+Alt+NumpadDivide", Code::NumpadDivide),
+        ];
+        let mut recorded = Vec::new();
+        for (code, character, accelerator, key) in operators {
+            let done = Recorder::new(Action::Mute).hear(self::key(code, character, cmd_alt), at(0));
+            assert_eq!(done, Recorded::Done(Some(accelerator.into())), "{character}");
+            let hotkey: HotKey = accelerator.parse().unwrap();
+            assert_eq!((hotkey.mods, hotkey.key), (Modifiers::SUPER | Modifiers::ALT, key), "{accelerator}");
+            let parsed = parse(accelerator).unwrap().unwrap();
+            assert_eq!(parsed.accelerator(), accelerator, "parses back");
+            assert_eq!(parsed.hot_key().as_deref(), Some(accelerator));
+            assert_eq!(label(accelerator, true, "en"), format!("⌘⌥Num {character}"));
+            recorded.push(accelerator);
+        }
+        for (i, a) in recorded.iter().enumerate() {
+            for (j, b) in recorded.iter().enumerate() {
+                assert_eq!(settings::same_shortcut(a, b), i == j, "{a} / {b}");
+            }
+        }
+        // The main row's keys with the same characters are other keys.
+        for (code, character, accelerator) in
+            [(24, "=", "Cmd+Alt+Equal"), (27, "-", "Cmd+Alt+Minus"), (44, "/", "Cmd+Alt+Slash")]
+        {
+            let done = Recorder::new(Action::Mute).hear(self::key(code, character, cmd_alt), at(0));
+            assert_eq!(done, Recorded::Done(Some(accelerator.into())));
+            assert!(!recorded.contains(&accelerator));
+        }
+    }
+
+    /// A key is named by its code, whatever the layout types on it: a Spanish layout's `+` is on BracketRight.
+    #[test]
+    fn a_key_is_named_by_its_code_and_not_by_its_character() {
+        assert_eq!(key_name(30, Some("+")).as_deref(), Some("BracketRight"));
+        assert_eq!(key_name(46, Some("ñ")).as_deref(), Some("M"));
+        assert_eq!(key_name(41, Some("ñ")).as_deref(), Some("Semicolon"));
+        assert_eq!(key_name(82, Some("0")).as_deref(), Some("Numpad0"));
+        assert_eq!(key_name(29, Some("0")).as_deref(), Some("0"));
+        assert_eq!(key_name(76, Some("\r")).as_deref(), Some("NumpadEnter"));
+        assert_eq!(key_name(36, Some("\r")).as_deref(), Some("Enter"));
+        // A key with no code here is named by its character, but never by one the accelerator cannot carry.
+        assert_eq!(key_name(110, Some("<")).as_deref(), Some("<"));
+        assert_eq!(key_name(110, Some("+")), None);
+        assert_eq!(key_name(110, Some(":")), None);
+        assert_eq!(key_name(110, None), None);
+        // The ISO key (`<>` beside the left Shift on Spanish, German and French keyboards) is its own key, never its character.
+        assert_eq!(key_name(10, Some("<")).as_deref(), Some("IntlBackslash"));
+        assert_eq!(key_name(10, Some("+")).as_deref(), Some("IntlBackslash"));
+        assert_eq!(key_name(10, None).as_deref(), Some("IntlBackslash"));
+    }
+
     #[test]
     fn the_recorder_captures_a_lone_key_the_way_its_action_allows() {
         let down = |key| Heard::Modifier { key, down: true };
@@ -1329,18 +1546,18 @@ mod tests {
         let status = Status {
             shortcuts: Shortcuts { mute, ..Shortcuts::default() },
             permission: Some(Permission { kind: PermissionKind::InputMonitoring, state: PermissionState::NotAsked }),
-            headset: Some(Headset::new(HeadsetPress::OneTurn)),
+            headset: Some(Headset::new(HeadsetPress::OneTurn, HeadsetPress::Skip)),
         };
         assert_eq!(
             serde_json::to_value(status).unwrap(),
             json!({
                 "shortcuts": {
-                    "mute": {"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "managedBySystem": false},
-                    "holdToTalk": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "managedBySystem": false},
-                    "oneTurn": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "managedBySystem": false},
+                    "mute": {"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
+                    "holdToTalk": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
+                    "oneTurn": {"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false},
                 },
                 "permission": {"kind": "inputMonitoring", "state": "notAsked"},
-                "headset": {"press": "oneTurn", "doublePress": null, "outsideCall": "leave"},
+                "headset": {"press": "oneTurn", "doublePress": "skip", "outsideCall": "leave"},
             })
         );
     }

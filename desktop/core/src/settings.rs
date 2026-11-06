@@ -31,6 +31,10 @@ pub struct Settings {
     /// What a headset's single press does where the app answers one (`host.shortcuts.setHeadset`).
     #[serde(default)]
     pub headset_press: crate::shortcuts::HeadsetPress,
+    /// What a headset's double press does (it arrives as the system's next-track command): nothing by default, so that a
+    /// keyboard's next-track key, which arrives the same way, does nothing until the person chooses (`host.shortcuts.setHeadset`).
+    #[serde(default = "default_double_press")]
+    pub headset_double_press: crate::shortcuts::HeadsetPress,
     /// Whether the person chose Allow for Input Monitoring: the system says only granted or not, and this tells a
     /// permission never asked for from one refused.
     #[serde(default)]
@@ -67,13 +71,20 @@ fn default_true() -> bool {
     true
 }
 
+fn default_double_press() -> crate::shortcuts::HeadsetPress {
+    crate::shortcuts::HeadsetPress::None
+}
+
 fn legacy_shortcut() -> String {
     crate::shortcuts::LEGACY_MUTE_SHORTCUT.to_string()
 }
 
 /// Whether two accelerators are the same keys, however each is written.
 pub fn same_shortcut(a: &str, b: &str) -> bool {
-    shortcut_keys(a) == shortcut_keys(b)
+    match (normalize_shortcut(a), normalize_shortcut(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => shortcut_keys(a) == shortcut_keys(b),
+    }
 }
 
 /// Whether the shortcut holds Control and Option together: VoiceOver's own keys on macOS (its "VO" modifier), so with
@@ -166,17 +177,115 @@ fn is_function_key(key: &str) -> bool {
     key.strip_prefix('F').is_some_and(|n| !n.starts_with('0') && n.parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)))
 }
 
-/// One key as the browser names it, as the app writes it: one character upper case (a character Shift made, its key);
-/// a name (`F5`, `space`, `ArrowUp`) with its first letter upper case. `None` for no key, or more than one.
+/// The keys the app names by the physical key, never by the character they type, as `global-hotkey` names them: the main
+/// row's punctuation and the keypad. A character can be two keys (`-` is the main row's and the keypad's) and `+` is the
+/// accelerator's own separator; a name is one key, on any layout.
+const PHYSICAL_KEYS: [&str; 29] = [
+    "Minus",
+    "Equal",
+    "Comma",
+    "Period",
+    "Slash",
+    "Backslash",
+    "Semicolon",
+    "Quote",
+    "BracketLeft",
+    "BracketRight",
+    "Backquote",
+    "IntlBackslash",
+    "NumpadAdd",
+    "NumpadSubtract",
+    "NumpadMultiply",
+    "NumpadDivide",
+    "NumpadDecimal",
+    "NumpadEqual",
+    "NumpadEnter",
+    "Numpad0",
+    "Numpad1",
+    "Numpad2",
+    "Numpad3",
+    "Numpad4",
+    "Numpad5",
+    "Numpad6",
+    "Numpad7",
+    "Numpad8",
+    "Numpad9",
+];
+
+/// How a physical key reads on a keycap: `-` for `Minus`, `Num +` for `NumpadAdd`; `None` for any other name.
+pub fn keycap(name: &str) -> Option<String> {
+    let key = PHYSICAL_KEYS.iter().find(|known| known.eq_ignore_ascii_case(name))?;
+    if let Some(on_pad) = key.strip_prefix("Numpad") {
+        let symbol = match on_pad {
+            "Add" => "+",
+            "Subtract" => "-",
+            "Multiply" => "*",
+            "Divide" => "/",
+            "Decimal" => ".",
+            "Equal" => "=",
+            other => other,
+        };
+        return Some(format!("Num {symbol}"));
+    }
+    let character = match *key {
+        "Minus" => "-",
+        "Equal" => "=",
+        "Comma" => ",",
+        "Period" => ".",
+        "Slash" => "/",
+        "Backslash" => "\\",
+        "Semicolon" => ";",
+        "Quote" => "'",
+        "BracketLeft" => "[",
+        "BracketRight" => "]",
+        "IntlBackslash" => "<",
+        _ => "`",
+    };
+    Some(character.to_owned())
+}
+
+/// The key a character has always meant in an accelerator saved before keys were named by the physical key: the main row's.
+/// `+` and `*` alone were never a main-row key (they need Shift there), so they were the keypad's.
+fn legacy_key(character: char, shift: bool) -> Option<&'static str> {
+    Some(match character {
+        '-' => "Minus",
+        '=' => "Equal",
+        ',' => "Comma",
+        '.' => "Period",
+        '/' => "Slash",
+        '\\' => "Backslash",
+        ';' => "Semicolon",
+        '\'' => "Quote",
+        '[' => "BracketLeft",
+        ']' => "BracketRight",
+        '`' => "Backquote",
+        '+' if !shift => "NumpadAdd",
+        '*' if !shift => "NumpadMultiply",
+        _ => return None,
+    })
+}
+
+/// One key as the page or an older version writes it, as the app writes it: a physical key by its name (`-` is `Minus`,
+/// `NumpadSubtract` stays the keypad's; a character Shift made, its key); any other single character upper case; any other
+/// name with its first letter upper case. `None` for no key, or more than one.
 fn native_key(key: &str, shift: bool) -> Option<String> {
     let mut chars = key.chars();
     let first = chars.next()?;
     if chars.next().is_none() {
         let unshifted = SHIFTED.iter().find(|(made, _)| shift && *made == first).map_or(first, |(_, key)| *key);
+        if let Some(name) = legacy_key(unshifted, shift) {
+            return Some(name.to_owned());
+        }
         return Some(unshifted.to_uppercase().collect());
     }
     if key.contains(['+', ' ']) {
         return None;
+    }
+    if key.eq_ignore_ascii_case("return") {
+        return Some("Enter".to_owned());
+    }
+    if let Some(known) = PHYSICAL_KEYS.iter().find(|known| known.eq_ignore_ascii_case(key)) {
+        return Some((*known).to_owned());
     }
     Some(first.to_uppercase().chain(key.chars().skip(1)).collect())
 }
@@ -211,6 +320,9 @@ pub struct GlobalShortcut {
     pub alternatives: Vec<String>,
     /// macOS: VoiceOver is on, and the shortcut holds its keys (Control and Option together).
     pub voice_over: bool,
+    /// Linux (X11): the key registers by the character the layout types on it, not by its position, so under a layout other
+    /// than US it may be another key, or none ([`crate::shortcuts::KeyReach::ByLayout`]). A warning, not a refusal.
+    pub layout_bound: bool,
     /// The system owns the keys and the label is its text (a Wayland portal): never here, the keys are the app's.
     pub managed_by_system: bool,
 }
@@ -233,6 +345,7 @@ impl GlobalShortcut {
             state,
             alternatives,
             voice_over: false,
+            layout_bound: false,
             managed_by_system: false,
         }
     }
@@ -260,6 +373,7 @@ impl Settings {
             one_turn_shortcut: String::new(),
             shortcuts_migrated: true,
             headset_press: crate::shortcuts::HeadsetPress::Mute,
+            headset_double_press: crate::shortcuts::HeadsetPress::None,
             input_monitoring_asked: false,
             call_controls_always_shown: false,
             call_controls_enabled: true,
@@ -325,7 +439,11 @@ mod tests {
         assert_eq!(normalize_shortcut(" shift + command+m ").as_deref(), Some("Cmd+Shift+M"));
         assert_eq!(normalize_shortcut("Option+Control+f5").as_deref(), Some("Ctrl+Alt+F5"));
         assert_eq!(normalize_shortcut("CTRL+ALT+space").as_deref(), Some("Ctrl+Alt+Space"));
-        assert_eq!(normalize_shortcut("Alt+Ctrl+Ctrl+;").as_deref(), Some("Ctrl+Alt+;"), "a modifier held twice");
+        assert_eq!(
+            normalize_shortcut("Alt+Ctrl+Ctrl+;").as_deref(),
+            Some("Ctrl+Alt+Semicolon"),
+            "a modifier held twice"
+        );
         for kept in [crate::shortcuts::DEFAULT_MUTE_MACOS, crate::shortcuts::DEFAULT_MUTE_OTHER] {
             assert_eq!(normalize_shortcut(kept).as_deref(), Some(kept), "a default is in the kept form");
         }
@@ -351,18 +469,26 @@ mod tests {
         for (recorded, kept, mods, code) in [
             ("Cmd+Shift+M", "Cmd+Shift+M", cmd | shift, Code::KeyM),
             ("Ctrl+Alt+M", "Ctrl+Alt+M", ctrl | alt, Code::KeyM),
-            ("Cmd+Shift++", "Cmd+Shift+=", cmd | shift, Code::Equal),
-            ("Ctrl+=", "Ctrl+=", ctrl, Code::Equal),
-            ("Ctrl+Shift+?", "Ctrl+Shift+/", ctrl | shift, Code::Slash),
+            ("Cmd+Shift++", "Cmd+Shift+Equal", cmd | shift, Code::Equal),
+            ("Ctrl+=", "Ctrl+Equal", ctrl, Code::Equal),
+            ("Ctrl+Shift+?", "Ctrl+Shift+Slash", ctrl | shift, Code::Slash),
             ("Ctrl+Shift+!", "Ctrl+Shift+1", ctrl | shift, Code::Digit1),
-            ("Cmd+Shift+_", "Cmd+Shift+-", cmd | shift, Code::Minus),
-            ("Ctrl+Shift+:", "Ctrl+Shift+;", ctrl | shift, Code::Semicolon),
-            ("Ctrl+Alt+;", "Ctrl+Alt+;", ctrl | alt, Code::Semicolon),
+            ("Cmd+Shift+_", "Cmd+Shift+Minus", cmd | shift, Code::Minus),
+            ("Ctrl+Shift+:", "Ctrl+Shift+Semicolon", ctrl | shift, Code::Semicolon),
+            ("Ctrl+Alt+;", "Ctrl+Alt+Semicolon", ctrl | alt, Code::Semicolon),
             ("Cmd+7", "Cmd+7", cmd, Code::Digit7),
             ("Cmd+F5", "Cmd+F5", cmd, Code::F5),
             ("Ctrl+F13", "Ctrl+F13", ctrl, Code::F13),
             ("Ctrl+Alt+Space", "Ctrl+Alt+Space", ctrl | alt, Code::Space),
             ("Cmd+ArrowUp", "Cmd+ArrowUp", cmd, Code::ArrowUp),
+            // What an earlier version wrote for the keys named by their characters, and the names now.
+            ("Cmd+Alt+-", "Cmd+Alt+Minus", cmd | alt, Code::Minus),
+            ("Cmd+Alt+/", "Cmd+Alt+Slash", cmd | alt, Code::Slash),
+            ("Cmd+Alt++", "Cmd+Alt+NumpadAdd", cmd | alt, Code::NumpadAdd),
+            ("Cmd+Alt+*", "Cmd+Alt+NumpadMultiply", cmd | alt, Code::NumpadMultiply),
+            ("Ctrl+Shift+*", "Ctrl+Shift+8", ctrl | shift, Code::Digit8),
+            ("Cmd+Alt+numpadadd", "Cmd+Alt+NumpadAdd", cmd | alt, Code::NumpadAdd),
+            ("Alt+Return", "Alt+Enter", alt, Code::Enter),
             ("Ctrl+Shift+PageDown", "Ctrl+Shift+PageDown", ctrl | shift, Code::PageDown),
             ("Alt+Enter", "Alt+Enter", alt, Code::Enter),
         ] {
@@ -378,6 +504,63 @@ mod tests {
         }
     }
 
+    /// Every name the app writes for a physical key is a key `global-hotkey` parses, and the one it names.
+    #[test]
+    fn the_names_of_physical_keys_register_as_those_keys() {
+        use global_hotkey::hotkey::{Code, HotKey};
+        for (name, code, cap) in [
+            ("Minus", Code::Minus, "-"),
+            ("Equal", Code::Equal, "="),
+            ("Comma", Code::Comma, ","),
+            ("Period", Code::Period, "."),
+            ("Slash", Code::Slash, "/"),
+            ("Backslash", Code::Backslash, "\\"),
+            ("Semicolon", Code::Semicolon, ";"),
+            ("Quote", Code::Quote, "'"),
+            ("BracketLeft", Code::BracketLeft, "["),
+            ("BracketRight", Code::BracketRight, "]"),
+            ("Backquote", Code::Backquote, "`"),
+            ("NumpadAdd", Code::NumpadAdd, "Num +"),
+            ("NumpadSubtract", Code::NumpadSubtract, "Num -"),
+            ("NumpadMultiply", Code::NumpadMultiply, "Num *"),
+            ("NumpadDivide", Code::NumpadDivide, "Num /"),
+            ("NumpadDecimal", Code::NumpadDecimal, "Num ."),
+            ("NumpadEqual", Code::NumpadEqual, "Num ="),
+            ("NumpadEnter", Code::NumpadEnter, "Num Enter"),
+            ("Numpad0", Code::Numpad0, "Num 0"),
+            ("Numpad5", Code::Numpad5, "Num 5"),
+            ("Numpad9", Code::Numpad9, "Num 9"),
+        ] {
+            let kept = normalize_shortcut(&format!("Cmd+Alt+{name}")).unwrap();
+            assert_eq!(kept, format!("Cmd+Alt+{name}"), "{name} is kept as it is");
+            assert_eq!(
+                normalize_shortcut(&format!("cmd+alt+{}", name.to_lowercase())).unwrap(),
+                kept,
+                "{name}: any case"
+            );
+            let hotkey: HotKey = kept.parse().unwrap_or_else(|e| panic!("{kept}: {e}"));
+            assert_eq!(hotkey.key, code, "{name}");
+            assert_eq!(keycap(name).as_deref(), Some(cap), "{name}");
+        }
+        // The ISO key is a key the app names, but `global-hotkey` does not know it on any system: it is refused as unsupported
+        // (`shortcuts::key_reach`) and never registered as another key.
+        assert!("Cmd+Alt+IntlBackslash".parse::<HotKey>().is_err());
+        assert_eq!(normalize_shortcut("Cmd+Alt+IntlBackslash").as_deref(), Some("Cmd+Alt+IntlBackslash"));
+        assert_eq!(keycap("IntlBackslash").as_deref(), Some("<"));
+        assert_eq!(keycap("M"), None);
+        assert_eq!(keycap("F5"), None);
+    }
+
+    #[test]
+    fn a_shortcut_saved_in_the_old_form_is_the_same_as_in_the_new() {
+        assert!(same_shortcut("Cmd+Alt+-", "Cmd+Alt+Minus"));
+        assert!(same_shortcut("Ctrl+;", "ctrl+semicolon"));
+        assert!(same_shortcut("Cmd+Alt++", "Cmd+Alt+NumpadAdd"));
+        assert!(!same_shortcut("Cmd+Alt+-", "Cmd+Alt+NumpadSubtract"), "the main row's - is not the keypad's");
+        assert!(!same_shortcut("Cmd+Alt+NumpadAdd", "Cmd+Alt+NumpadSubtract"));
+        assert!(same_shortcut("Ctrl+Alt+M", "alt+control+m"));
+    }
+
     #[test]
     fn what_is_not_a_shortcut() {
         for text in ["M", "Cmd", "Cmd+Shift", "Cmd+", "+M", "Cmd++M", "Cmd+M+K", "Hyper+M", "M+Cmd", "CmdOrCtrl+M"] {
@@ -389,18 +572,18 @@ mod tests {
     fn the_mute_shortcut_reads_as_the_seam_says() {
         assert_eq!(
             serde_json::to_value(GlobalShortcut::new("", Registration::On, vec![], true, "en")).unwrap(),
-            json!({"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "managedBySystem": false})
+            json!({"accelerator": null, "label": null, "state": "off", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
         );
         assert_eq!(
             serde_json::to_value(GlobalShortcut::new("Ctrl+Alt+M", Registration::On, vec![], true, "en")).unwrap(),
-            json!({"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "managedBySystem": false})
+            json!({"accelerator": "Ctrl+Alt+M", "label": "⌃⌥M", "state": "on", "alternatives": [], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
         );
         let refused =
             GlobalShortcut::new("Cmd+Shift+M", Registration::Refused, vec!["Ctrl+Alt+Shift+M".into()], false, "en");
         assert_eq!(
             serde_json::to_value(refused).unwrap(),
             json!({"accelerator": "Cmd+Shift+M", "label": "Super+Shift+M", "state": "refused",
-                   "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false, "managedBySystem": false})
+                   "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false, "layoutBound": false, "managedBySystem": false})
         );
     }
 
@@ -436,6 +619,7 @@ mod tests {
             one_turn_shortcut: "RightControl:double".into(),
             shortcuts_migrated: true,
             headset_press: crate::shortcuts::HeadsetPress::OneTurn,
+            headset_double_press: crate::shortcuts::HeadsetPress::Skip,
             input_monitoring_asked: true,
             call_controls_always_shown: true,
             call_controls_enabled: false,

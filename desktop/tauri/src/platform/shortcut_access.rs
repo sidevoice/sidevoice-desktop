@@ -3,7 +3,7 @@
 //! The system's hot keys are registered through the maintained global-shortcut plugin; which of them the app holds follows
 //! what the settings say by a diff (core `shortcuts::reconcile`), never by letting go of everything and registering again.
 
-use sidevoice_desktop_core::shortcuts::{self, Action, Edge, Held, Parsed, Registrar, Taken};
+use sidevoice_desktop_core::shortcuts::{self, Action, Edge, Held, KeyReach, Parsed, Platform, Registrar, Taken};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcut, Shortcut, ShortcutState};
@@ -22,6 +22,9 @@ enum LabelStyle {
 
 /// The only parts of shortcut handling that differ per OS; everything else is the plain functions below.
 trait Os {
+    /// The system this is, for the keys it can and cannot register (core `shortcuts::key_reach`).
+    const PLATFORM: Platform;
+
     /// ⌃⌥M on macOS; elsewhere Ctrl+Alt+Shift+M (Ctrl+Alt+letter is AltGr on many Windows layouts).
     const DEFAULT_MUTE: &'static str = shortcuts::DEFAULT_MUTE_OTHER;
 
@@ -41,6 +44,11 @@ trait Os {
     fn label_style() -> LabelStyle {
         LabelStyle::Names
     }
+}
+
+/// The system this build runs on.
+pub fn platform() -> Platform {
+    Native::PLATFORM
 }
 
 /// The mute shortcut this system starts with.
@@ -97,6 +105,11 @@ struct Plugin<'a, R: Runtime>(&'a GlobalShortcut<R>);
 
 impl<R: Runtime> Registrar for Plugin<'_, R> {
     fn register(&mut self, hot_key: &str) -> bool {
+        // The backend would bind another key for these (Windows: Ctrl+NumpadEqual as Ctrl+E) or none.
+        if shortcuts::hot_key_reach(platform(), hot_key) == KeyReach::Never {
+            log::debug!("shortcut {hot_key} not registered: this system cannot register that key");
+            return false;
+        }
         match self.0.register(hot_key) {
             Ok(()) => true,
             Err(error) => {
@@ -203,7 +216,9 @@ mod tests {
     #[test]
     fn accessibility_is_not_fabricated() {
         struct Baseline;
-        impl Os for Baseline {}
+        impl Os for Baseline {
+            const PLATFORM: Platform = Platform::Linux;
+        }
         assert!(!<Baseline as Os>::reserved_chord_active("Ctrl+Alt+M"));
         assert!(!<Baseline as Os>::reserved_chord_active("Shift+M"));
         assert!(<Baseline as Os>::label_style() == LabelStyle::Names);
