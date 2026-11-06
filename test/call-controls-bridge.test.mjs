@@ -153,3 +153,14 @@ test("the app hears when the pointer moves on or off something clickable, once p
   assert.deepEqual(calls.map(([, args]) => args.hand), [true, false, true, false]);
   assert.ok(calls.every(([cmd]) => cmd === "call_controls_cursor"));
 });
+
+test("the room to the work area's sides is part of the state the card hears, and a later patch keeps it", async () => {
+  const { win } = fakeWindow(APP);
+  const api = load()(win, APP);
+  const heard = [];
+  win.__sidevoiceHost.host.callControls.subscribe((state) => heard.push(state.room));
+  api.receive({ call: { joined: true }, room: { left: 0, right: 640 } });
+  api.receive({ level: 10 });
+  api.receive({ room: { left: 120, right: 520 } });
+  assert.deepEqual(heard, [{ left: 0, right: 640 }, { left: 0, right: 640 }, { left: 120, right: 520 }]);
+});

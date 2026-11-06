@@ -554,6 +554,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == call_controls::LABEL {
+                if let WindowEvent::ScaleFactorChanged { .. } = event {
+                    call_controls::scale_changed(window.app_handle());
+                }
+                return;
+            }
             if !window.label().starts_with(ROOM_PREFIX) {
                 return;
             }
