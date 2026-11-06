@@ -245,9 +245,9 @@ struct StateGlyph: View {
                 symbol("mic.fill", effect: .pulse)
             case .transcribing:
                 // The bars, at full tone, breathing while the words are transcribed (operator, 2026-11-05).
-                GlyphBars(breathe: true).frame(width: size, height: size)
+                GlyphBars(breathe: true).frame(width: size, height: size).foregroundStyle(Ink.voice(dark: true))
             case .said:
-                GlyphBars().frame(width: size, height: size)
+                GlyphBars().frame(width: size, height: size).foregroundStyle(Ink.voice(dark: true))
             case .working:
                 symbol("ellipsis", effect: .bounce)
             case .speaking:
