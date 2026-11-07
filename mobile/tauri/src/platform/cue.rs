@@ -111,9 +111,9 @@ mod tests {
         let wav = wav(Cue::Thinking);
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
-        let samples: Vec<i16> = wav[44..]
-            .chunks_exact(2)
-            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+        let samples: Vec<i16> = (44..wav.len())
+            .step_by(2)
+            .map(|at| i16::from_le_bytes([wav[at], wav[at + 1]]))
             .collect();
         assert_eq!(samples.len(), (RATE as f32 * BREATH_SECONDS) as usize);
         assert_eq!(
