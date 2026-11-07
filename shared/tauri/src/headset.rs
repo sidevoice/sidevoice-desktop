@@ -23,6 +23,15 @@ pub fn registered_commands(next_track: bool) -> Vec<&'static str> {
     names
 }
 
+/// How long after the app set the system's input mute itself (`setInputMuted`) a report of that same state is its echo.
+pub const ECHO_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Whether the input mute the system reports (`muted`) is the echo of the app's own `setInputMuted` (`set`: the state it set,
+/// and how long ago): the same state within [`ECHO_WINDOW`]. An echo is neither recorded nor acted on, and is taken once.
+pub fn is_echo(set: Option<(bool, std::time::Duration)>, muted: bool) -> bool {
+    matches!(set, Some((value, ago)) if value == muted && ago < ECHO_WINDOW)
+}
+
 /// What the AirPods / Beats mute gesture's listening does at a report of the call ([`gesture_step`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GestureStep {
@@ -147,6 +156,15 @@ mod tests {
         }
         let mut seen = std::collections::HashSet::new();
         assert!(ALL_COMMANDS.iter().all(|name| seen.insert(*name)), "each command once");
+    }
+
+    #[test]
+    fn only_the_same_state_shortly_after_the_app_set_it_is_its_echo() {
+        use std::time::Duration;
+        assert!(is_echo(Some((true, Duration::from_millis(40))), true), "the app muted: iOS reports it back");
+        assert!(!is_echo(Some((true, Duration::from_millis(40))), false), "the other state is a press");
+        assert!(!is_echo(Some((false, ECHO_WINDOW)), false), "too late: a press");
+        assert!(!is_echo(None, true), "the app set nothing: a press");
     }
 
     #[test]

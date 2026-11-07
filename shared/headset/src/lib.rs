@@ -2,7 +2,7 @@
 //! (`mute`, say one thing, skip what is playing, nothing), the change `host.shortcuts.setHeadset` asks for and the
 //! `HeadsetStatus` `host.shortcuts.get` reports (docs/BRIDGE.md → "The shortcuts"). Pure: how a press reaches the app
 //! (Now Playing, a media session) is `sidevoice-shared-tauri`'s, and where the choice is kept is each app's.
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 /// What a headset's press does: the single press (play/pause) or the double press (the system's next track).
@@ -113,11 +113,32 @@ fn within(chosen: HeadsetPress, actions: &[HeadsetPress], fallback: HeadsetPress
 
 /// What the person chose, as an app keeps it: the single press mutes by default and the double press does nothing, so that
 /// a keyboard's next-track key, which arrives the same way, does nothing until chosen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HeadsetChoice {
     pub press: HeadsetPress,
     pub double_press: HeadsetPress,
+}
+
+/// A kept record is read field by field: a field that is missing, or holds a value this build does not know (a later build's
+/// action, a hand edit), is that field's default, and the others stay as kept. Only what is not JSON at all is the app's to
+/// replace with the defaults.
+impl<'de> Deserialize<'de> for HeadsetChoice {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let record = Value::deserialize(deserializer)?;
+        let defaults = HeadsetChoice::default();
+        let field = |name: &str, fallback: HeadsetPress| {
+            record
+                .get(name)
+                .and_then(Value::as_str)
+                .and_then(HeadsetPress::parse)
+                .unwrap_or(fallback)
+        };
+        Ok(HeadsetChoice {
+            press: field("press", defaults.press),
+            double_press: field("doublePress", defaults.double_press),
+        })
+    }
 }
 
 impl Default for HeadsetChoice {
@@ -454,6 +475,39 @@ mod tests {
         assert_eq!(kept(r#"{"press":"mute"}"#).double_press, HeadsetPress::None);
         assert_eq!(kept(r#"{"press":"skip"}"#).double_press, HeadsetPress::None);
         assert_eq!(kept(r#"{"doublePress":"skip"}"#).press, HeadsetPress::Mute);
+    }
+
+    #[test]
+    fn a_value_this_build_does_not_know_is_that_field_s_default_and_the_other_stays() {
+        let kept = |text: &str| serde_json::from_str::<HeadsetChoice>(text).unwrap();
+        assert_eq!(
+            kept(r#"{"press":"skip","doublePress":"say-one"}"#),
+            HeadsetChoice {
+                press: HeadsetPress::Skip,
+                double_press: HeadsetPress::None
+            }
+        );
+        assert_eq!(
+            kept(r#"{"press":3,"doublePress":"oneTurn"}"#),
+            HeadsetChoice {
+                press: HeadsetPress::Mute,
+                double_press: HeadsetPress::OneTurn
+            }
+        );
+        assert_eq!(
+            kept("[]"),
+            HeadsetChoice::default(),
+            "not a record: the defaults"
+        );
+        let every = HeadsetChoice {
+            press: HeadsetPress::OneTurn,
+            double_press: HeadsetPress::Skip,
+        };
+        assert_eq!(
+            kept(&serde_json::to_string(&every).unwrap()),
+            every,
+            "what it writes it reads back"
+        );
     }
 
     #[test]

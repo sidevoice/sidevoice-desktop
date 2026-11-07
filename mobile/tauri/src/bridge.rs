@@ -151,7 +151,8 @@ pub mod headset {
     }
 
     impl HeadsetSettings {
-        /// The choice kept in the app's own files; a record that is missing or unreadable is the defaults.
+        /// The choice kept in the app's own files, read field by field (`HeadsetChoice`: a value this build does not know is that
+        /// field's default, the other stays); a record that is missing or not JSON is the defaults.
         pub fn of_app<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Self> {
             Ok(Self::new(
                 &crate::own_files(app)?,
@@ -448,6 +449,24 @@ pub mod headset {
                 HeadsetSettings::new(files.path(), EVERY).choice(),
                 HeadsetChoice::default()
             );
+            fs::write(
+                files.path().join(FILE),
+                br#"{"press":"skip","doublePress":"say-one"}"#,
+            )
+            .unwrap();
+            let kept = HeadsetSettings::new(files.path(), EVERY);
+            assert_eq!(
+                kept.command(Presses::Single, false),
+                Some("skip-reply"),
+                "an unknown value resets only its own field"
+            );
+            assert_eq!(kept.command(Presses::Double, false), None);
+            assert!(
+                kept.set(Some(&json!({"doublePress": "say-one"})), false)
+                    .is_err(),
+                "and an unknown value from a page is refused, not taken"
+            );
+            assert_eq!(kept.command(Presses::Single, false), Some("skip-reply"));
         }
 
         #[test]

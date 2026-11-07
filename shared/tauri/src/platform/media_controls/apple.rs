@@ -28,10 +28,10 @@ use objc2_media_player::{
     MPRemoteCommand, MPRemoteCommandCenter, MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
 };
 use std::ptr::NonNull;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::headset::{
-    gesture_step, media_dispatch, mute_gesture_action, registered_commands, Changed, Dispatch, ALL_COMMANDS,
+    gesture_step, is_echo, media_dispatch, mute_gesture_action, registered_commands, Changed, Dispatch, ALL_COMMANDS,
 };
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
@@ -165,15 +165,14 @@ static GESTURE_HELD: Mutex<bool> = Mutex::new(false);
 /// too, and such an echo is neither a gesture to record nor one to act on.
 static SET_BY_APP: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
 
+/// Whether `muted` is the echo of the app's own last `setInputMuted` ([`is_echo`]); an echo is taken once.
 fn echo(muted: bool) -> bool {
     let mut last = SET_BY_APP.lock().unwrap();
-    match *last {
-        Some((value, at)) if value == muted && at.elapsed() < Duration::from_secs(3) => {
-            *last = None;
-            true
-        }
-        _ => false,
+    let echoed = is_echo(last.map(|(value, at)| (value, at.elapsed())), muted);
+    if echoed {
+        *last = None;
     }
+    echoed
 }
 
 fn set_muted(shared: &AVAudioApplication, muted: bool) {
