@@ -200,6 +200,57 @@ fn global_shortcuts(
     }
 }
 
+/// `host.cue`'s one command (docs/BRIDGE.md -> "The cues"): `action` `available` (whether this phone plays the page's cues
+/// itself), or `start` and `stop` with the cue's `name`. The player belongs to the main thread.
+#[tauri::command]
+fn cue(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    name: Option<String>,
+) -> Result<bool, serde_json::Value> {
+    use sidevoice_mobile_plugin::{cue_available, cue_ticket, start_cue, stop_cue, Cue};
+    let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
+    the_page(&app, &webview).map_err(|why| refusal(&why))?;
+    if action == "available" {
+        return Ok(cue_available());
+    }
+    let cue = name
+        .as_deref()
+        .and_then(Cue::named)
+        .ok_or_else(|| refusal("cue takes the name of a cue the app knows"))?;
+    let start = match action.as_str() {
+        "start" => true,
+        "stop" => false,
+        _ => return Err(refusal("cue takes available, start or stop")),
+    };
+    if !start {
+        app.run_on_main_thread(move || stop_cue(cue))
+            .map_err(|error| refusal(&error.to_string()))?;
+        return Ok(true);
+    }
+    // Only in a call whose audio session is open: a page outside a call plays nothing and touches no session. Asked in the room's
+    // own order, so that a start after the call's end finds it ended (and the call's end stops what played: `Room::stop_cue`).
+    let room = app
+        .try_state::<call::RoomCall>()
+        .ok_or_else(|| refusal("no call"))?;
+    let handle = app.clone();
+    // Bound to the call it is asked for in: an end (or a page's teardown) before it runs makes it a no-op, in `start_cue`.
+    let ticket = cue_ticket();
+    room.then(move |room| {
+        if ticket != cue_ticket() || !room.cue_allowed() {
+            log::info!("cue {cue:?} refused: no call's audio is open");
+            return;
+        }
+        let _ = handle.run_on_main_thread(move || {
+            if let Err(error) = start_cue(cue, ticket) {
+                log::warn!("cue {cue:?} did not start: {error}");
+            }
+        });
+    });
+    Ok(true)
+}
+
 /// The page's number (the host's page generation), asked once by the page's script when it loads (the app's own
 /// command): it sends it back with every report, so that a report of a page that has since been replaced, reaching the
 /// app late, is told from the current page's.
@@ -353,6 +404,7 @@ fn run_app() {
             call_state,
             call_still,
             call_forget,
+            cue,
             developer_options,
             global_shortcuts
         ])
