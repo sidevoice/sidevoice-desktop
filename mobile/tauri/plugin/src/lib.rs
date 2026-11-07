@@ -34,7 +34,7 @@ pub use call_surface::{
     SpokenPage, Still, StillError, SurfaceAction, SurfaceWords, STILLS_CAP, STILL_ID_LIMIT,
     STILL_LIMIT, STILL_MAX_PX, URL_SCHEME,
 };
-pub use cue::{cue_available, start_cue, stop_cue, Cue};
+pub use cue::{cue_available, cue_ticket, end_cues, start_cue, stop_cue, Cue};
 pub use screen::{keep_screen_on, ScreenError};
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {

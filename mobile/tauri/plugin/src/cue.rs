@@ -20,13 +20,32 @@ impl Cue {
     }
 }
 
+/// Which call's cues may still start. A start is asked for under the generation of its request ([`cue_ticket`]); every call end
+/// and page teardown moves it on ([`end_cues`]), and a start whose generation is past is a no-op ([`start_cue`]).
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The generation a start asked for now belongs to.
+pub fn cue_ticket() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The call is over, or the page gone: every start asked for before is stale. Does not stop the player: [`stop_cue`] does, on the
+/// main thread, in order after the starts already queued there.
+pub fn end_cues() {
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Whether this phone plays the page's cues itself.
 pub fn cue_available() -> bool {
     platform::available()
 }
 
-/// Plays `cue` as a loop until [`stop_cue`]; starting one that plays changes nothing. On the main thread.
-pub fn start_cue(cue: Cue) -> Result<(), String> {
+/// Plays `cue` as a loop until [`stop_cue`]; starting one that plays changes nothing. On the main thread. Nothing if `ticket`
+/// (from [`cue_ticket`], when the start was asked for) is stale: a call ended in between.
+pub fn start_cue(cue: Cue, ticket: u64) -> Result<(), String> {
+    if ticket != cue_ticket() {
+        return Ok(());
+    }
     platform::start(cue, &wav(cue))
 }
 
@@ -118,6 +137,20 @@ mod tests {
             f32::from(loudest) < f32::from(i16::MAX) * 0.9,
             "far from clipping: {loudest}"
         );
+    }
+
+    #[test]
+    fn a_start_asked_for_before_a_call_ended_is_stale() {
+        let asked = cue_ticket();
+        assert_eq!(asked, cue_ticket(), "nothing ended: still current");
+        end_cues();
+        assert_ne!(
+            asked,
+            cue_ticket(),
+            "an end between the request and its run"
+        );
+        // Past the end, the start is a no-op (it never reaches the player), whatever the OS.
+        assert_eq!(start_cue(Cue::Thinking, asked), Ok(()));
     }
 
     #[test]

@@ -553,14 +553,17 @@ impl RoomCall {
 }
 
 impl Room {
-    /// Whether a voice call's audio is open (the cue plays only then, `cue` in lib.rs).
-    pub fn audio_open(&self) -> bool {
-        self.phone.audio_open()
+    /// Whether a cue may start: a call is held and its audio is open (`cue` in lib.rs). The audio stays open a moment after a
+    /// call's end, so the held call is what tells an ended one.
+    pub fn cue_allowed(&self) -> bool {
+        self.holding.is_some() && self.phone.audio_open()
     }
 
     /// Stops the page's cue (`host.cue`): the call it played in is over, and the page may not run to stop it (a hang-up of the
     /// system's or the service's, a page that reloaded).
     fn stop_cue(&self) {
+        // Every start asked for before this end is stale from now on, wherever it waits; the stop follows them on the main thread.
+        sidevoice_mobile_plugin::end_cues();
         let _ = self.app.run_on_main_thread(|| {
             sidevoice_mobile_plugin::stop_cue(sidevoice_mobile_plugin::Cue::Thinking)
         });

@@ -213,7 +213,7 @@ fn cue(
     action: String,
     name: Option<String>,
 ) -> Result<bool, serde_json::Value> {
-    use sidevoice_mobile_plugin::{cue_available, start_cue, stop_cue, Cue};
+    use sidevoice_mobile_plugin::{cue_available, cue_ticket, start_cue, stop_cue, Cue};
     let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
     if action == "available" {
@@ -239,13 +239,15 @@ fn cue(
         .try_state::<call::RoomCall>()
         .ok_or_else(|| refusal("no call"))?;
     let handle = app.clone();
+    // Bound to the call it is asked for in: an end (or a page's teardown) before it runs makes it a no-op, in `start_cue`.
+    let ticket = cue_ticket();
     room.then(move |room| {
-        if !room.audio_open() {
+        if ticket != cue_ticket() || !room.cue_allowed() {
             log::info!("cue {cue:?} refused: no call's audio is open");
             return;
         }
         let _ = handle.run_on_main_thread(move || {
-            if let Err(error) = start_cue(cue) {
+            if let Err(error) = start_cue(cue, ticket) {
                 log::warn!("cue {cue:?} did not start: {error}");
             }
         });
