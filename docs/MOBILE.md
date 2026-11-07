@@ -37,7 +37,7 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   Backups).
 - **Permission texts.** `NSMicrophoneUsageDescription`, `NSLocalNetworkUsageDescription` and `NSCameraUsageDescription` (the pairing code's scanner, below) are in
   `mobile/tauri/Info.ios.plist` in English, the base (App Store validation looks for them there), and in the languages the web
-  interface ships (de, es, fr, it, ja, pl, zh-Hans) in `mobile/tauri/ios/<language>.lproj/InfoPlist.strings`, which `generate`
+  interface ships (de, es, fr, it, ja, pl, zh-Hans, pt, ko, hi; `pt.lproj` holds the Brazilian strings so every Portuguese device, pt-PT included, gets them) in `mobile/tauri/ios/<language>.lproj/InfoPlist.strings`, which `generate`
   puts into the iOS project. `CFBundleLocalizations` in the plist is the list of languages iOS offers the app in. Adding
   a language is a folder in `mobile/tauri/ios` and an entry in that list; a test checks that they agree, and that the English
   of `en.lproj` is the plist's.
@@ -69,7 +69,7 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `host.*` | What |
 |---|---|
 | `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
-| `microphone` | The system's own permission, never the webview's: AVFoundation's on iOS, the runtime permission on Android (`sidevoice-shared-tauri`'s `platform/microphone`). `openSettings` opens the app's page of the system's settings, and `help(language)` gives the app's own words for a blocked microphone on this phone (`mobile/tauri/i18n/native/<language>.json`, all eight languages, English the fallback; D-HOST-OS). |
+| `microphone` | The system's own permission, never the webview's: AVFoundation's on iOS, the runtime permission on Android (`sidevoice-shared-tauri`'s `platform/microphone`). `openSettings` opens the app's page of the system's settings, and `help(language)` gives the app's own words for a blocked microphone on this phone (`mobile/tauri/i18n/native/<language>.json`, all eleven languages, English the fallback; D-HOST-OS). |
 | `pairings` | The pairings in the app's private storage (`mobile/tauri/src/pairings.rs`), not the webview's. |
 | `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `shortcuts` | The headset's presses, the only shortcuts a phone has (docs/BRIDGE.md → "The shortcuts" → "The mobile app"): `get`, `subscribe` and `setHeadset`, reporting the `headset` group alone (`shortcuts: {}`, `inApp: false`) with what each press can do on this phone (`actions`, from the shared media controls' `presses`), so Settings › Shortcuts shows only that, with no platform check in the page. Single press: mute, and the double press: nothing, until chosen (say one thing, skip what is playing, or mute), where the press can do it. Kept in `headset.json` of the app's own files (`mobile/tauri/src/bridge.rs` (`headset`)), untouched by what a press can do; what the presses do is `shared/headset`'s, shared with the desktop. **iOS**: in a call only the AirPods / Beats Press to Mute reaches the app (a headset's other presses are hands-free call control, which goes to CallKit), opted in at launch through `AVAudioApplication` (docs/MEDIA_CONTROLS.md): the single press is reported as the system's mute alone and there is no double press, so the page shows a line and no choice. No Now Playing, no remote commands, at any time. **Android**: both presses, every action: the call service's `MediaSession` (`onPlay`, `onPause`, and `onSkipToNext` for the double press: the framework turns a headset's PLAY_PAUSE or HEADSETHOOK pressed twice within the system's double-tap time into it, with skip-to-next advertised only while the double press has an action, so that a single press is immediate otherwise), released with the service at hang-up. With "Treat calls as system calls" on, the system mutes: `managedBySystem`, the rows are read-only. |
@@ -179,7 +179,7 @@ stays as it was (sidevoice-desktop#405).
 - **The viewfinder is the page's.** The scan is windowed: the camera is drawn behind the web view and the page shows it through
   (the plugin makes the web view transparent for the length of the scan), so the page draws the frame and its Cancel.
 - **The camera permission** is the system's own, asked by the plugin when the person taps Scan (iOS: `NSCameraUsageDescription`, in
-  the eight languages like the others; Android: the runtime `CAMERA` permission the plugin's manifest merges in, with its
+  the eleven languages like the others; Android: the runtime `CAMERA` permission the plugin's manifest merges in, with its
   `VIBRATE`, which nothing calls). A denial is an answer the page words, with `openSettings()` where the system will not ask
   again; typing the code is always there.
 - **No device is left out for lacking a camera.** The plugin's manifest declares `android.hardware.camera.any` (and asks for
@@ -362,7 +362,7 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   for a Lock Screen that hides sensitive content ("Sidevoice", "In call"). The tile and the stack of faces are bitmaps
   drawn by the plugin (`CallCardArt`: the tone's glow, the creature enlarged by its `k` so an accessory stands out, grey
   while offline, the red mic badge), from the stills folder; DM Sans is bundled (`res/font`). The words are the page's;
-  the plugin's `res/values*` (the eight languages the app ships) hold only what shows before the page's words come, the
+  the plugin's `res/values*` (the eleven languages the app ships) hold only what shows before the page's words come, the
   public version and the channel. The buttons are PendingIntents to the service, so they work on the Lock Screen without
   unlocking: hang up ends the service (`hang-up`), mute (with the value the button shows) and skip are reported as
   actions, the stack opens the app's activity with an extra the plugin turns into `open-conversations`, and the audio

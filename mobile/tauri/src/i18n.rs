@@ -1,6 +1,6 @@
 //! The mobile app's own texts, the ones the page shows but the app words (docs/MOBILE.md -> "The bridge"): how to allow a
 //! blocked microphone on this phone, and the button that opens that settings page (D-HOST-OS: each app words its own
-//! system's help). One JSON table per language (`i18n/native/<language>.json`, the eight the web offers), English the
+//! system's help). One JSON table per language (`i18n/native/<language>.json`, the eleven the web offers), English the
 //! fallback; adding a text means adding its key to English. The loader is sidevoice-shared-i18n's.
 use sidevoice_shared_i18n::{Bundles, Texts};
 
@@ -16,6 +16,9 @@ const BUNDLES: Bundles = [
     ("ja", include_str!("../i18n/native/ja.json")),
     ("pl", include_str!("../i18n/native/pl.json")),
     ("zh-Hans", include_str!("../i18n/native/zh-Hans.json")),
+    ("pt-BR", include_str!("../i18n/native/pt-BR.json")),
+    ("ko", include_str!("../i18n/native/ko.json")),
+    ("hi", include_str!("../i18n/native/hi.json")),
 ];
 
 static TEXTS: Texts = Texts::new(&BUNDLES);

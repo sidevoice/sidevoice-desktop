@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The call's notification, where the page's words are not there yet (and its public version, its channel). Taken from
+     the web app's catalogue (state.inCall, card.mute, card.unmute, card.hangUp). -->
+<resources>
+    <string name="call_channel_name">통화</string>
+    <string name="call_notification_text">통화 중</string>
+    <string name="call_notification_hang_up">통화 종료</string>
+    <string name="call_notification_mute">음소거</string>
+    <string name="call_notification_unmute">음소거 해제</string>
+    <string name="call_notification_skip">건너뛰기</string>
+    <string name="call_notification_cancel_send">전송 취소</string>
+    <string name="call_route_speaker">스피커</string>
+    <string name="call_route_earpiece">휴대폰</string>
+</resources>

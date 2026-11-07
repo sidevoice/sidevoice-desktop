@@ -99,6 +99,7 @@
 		3AF49EB321D75CDC67E166DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		3ED59F09A85CF8FF41D62009 /* pairings.rs */ = {isa = PBXFileReference; path = pairings.rs; sourceTree = "<group>"; };
 		3FCF79E06190BD77E1F527F8 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
+		42BDDF330419D9291C71C3D7 /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		438F566187470C3B8979F853 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		46B600F3D87A8B86B45A62C9 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		48772D858001537DA0BAD70F /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
@@ -107,6 +108,7 @@
 		5110D95F2FDA8A4F485C96AA /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		5146689FF402E85DE500476B /* backup.rs */ = {isa = PBXFileReference; path = backup.rs; sourceTree = "<group>"; };
 		536BB1C7D959EB9FF56EB28A /* device_name.rs */ = {isa = PBXFileReference; path = device_name.rs; sourceTree = "<group>"; };
+		539DAEF902F22CA8CAA4B247 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		5721EA507184E736863684BC /* entry.rs */ = {isa = PBXFileReference; path = entry.rs; sourceTree = "<group>"; };
 		58C2E83A04B6987A0D4453C7 /* app_files.rs */ = {isa = PBXFileReference; path = app_files.rs; sourceTree = "<group>"; };
 		5B34888E35B7881216856F13 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
@@ -118,6 +120,7 @@
 		7717DC1AC675EE5C22703A85 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		78DA3D5C4ABD3C61CB5AAB0F /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		7D0D2F377196B00F1647880E /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		851D65E8B65D3DFF2188B5A7 /* pt */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pt; path = pt.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		8609C7142CEC5C4009BB8B54 /* surface.rs */ = {isa = PBXFileReference; path = surface.rs; sourceTree = "<group>"; };
 		86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		8807C52FB04E7019B2BC1690 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
@@ -512,9 +515,12 @@
 				en,
 				es,
 				fr,
+				hi,
 				it,
 				ja,
+				ko,
 				pl,
+				pt,
 				"zh-Hans",
 			);
 			mainGroup = B0271E212E475EE881D927B7;
@@ -629,9 +635,12 @@
 				9B99011EAA107BB9AD2AA47E /* en */,
 				A113CAD3D1FD380DEEE3CE26 /* es */,
 				A3D98CD41CC1FB03FA370222 /* fr */,
+				42BDDF330419D9291C71C3D7 /* hi */,
 				F5C816DDD53EA53511CBA66B /* it */,
 				D53EC9AD147484E515EBA7F0 /* ja */,
+				539DAEF902F22CA8CAA4B247 /* ko */,
 				C9DA64017592563391BEB038 /* pl */,
+				851D65E8B65D3DFF2188B5A7 /* pt */,
 				5B34888E35B7881216856F13 /* zh-Hans */,
 			);
 			name = InfoPlist.strings;

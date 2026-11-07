@@ -101,7 +101,7 @@ impl ConfirmationKind {
     }
 }
 
-// Kept verbatim from data.rs: do not merge these eight languages into the tray's smaller catalogue.
+// Kept verbatim from data.rs: do not merge these eleven languages into the tray's smaller catalogue.
 fn native_reset_words(locale: &str) -> (&'static str, &'static str, &'static str, &'static str) {
     match locale.split(['-', '_']).next().unwrap_or("en") {
         "de" => ("Alle Sidevoice-Daten löschen?", "Der Sidevoice-Dienst wird deinstalliert; lokale App-Daten, Modelle und gespeicherte Schlüssel werden gelöscht. Eigene Profile, ein separat installierter Core, andere Geräte, Backups und diese .app bleiben erhalten. Dies kann nicht rückgängig gemacht werden.", "Abbrechen", "Alle Sidevoice-Daten löschen"),
@@ -110,6 +110,9 @@ fn native_reset_words(locale: &str) -> (&'static str, &'static str, &'static str
         "it" => ("Eliminare tutti i dati di Sidevoice?", "Il servizio Sidevoice verrà disinstallato; i dati locali dell’app, i modelli e le chiavi salvate verranno eliminati. Restano i profili personalizzati, un core installato separatamente, gli altri dispositivi, i backup e questa .app. L’azione non può essere annullata.", "Annulla", "Elimina tutti i dati di Sidevoice"),
         "ja" => ("Sidevoice の全データを削除しますか？", "Sidevoice サービスをアンインストールし、アプリ内のデータ、モデル、保存したキーを削除します。カスタムプロファイル、別途インストールしたコア、ほかの端末、バックアップ、この .app は残ります。この操作は取り消せません。", "キャンセル", "Sidevoice の全データを削除"),
         "pl" => ("Usunąć wszystkie dane Sidevoice?", "Usługa Sidevoice zostanie odinstalowana, a lokalne dane aplikacji, modele i zapisane klucze usunięte. Niestandardowe profile, osobno zainstalowany rdzeń, inne urządzenia, kopie zapasowe i ta aplikacja .app pozostaną. Nie można tego cofnąć.", "Anuluj", "Usuń wszystkie dane Sidevoice"),
+        "pt" => ("Apagar todos os dados do Sidevoice?", "O serviço do Sidevoice será desinstalado e os dados locais do app, os modelos e as chaves salvas serão apagados. Perfis personalizados, um núcleo instalado separadamente, outros dispositivos, backups e este pacote .app permanecem. Esta ação não pode ser desfeita.", "Cancelar", "Apagar todos os dados do Sidevoice"),
+        "ko" => ("Sidevoice 데이터를 모두 삭제할까요?", "Sidevoice 서비스를 제거하고 이 앱의 로컬 데이터, 모델, 저장된 키를 삭제합니다. 사용자 지정 프로필, 따로 설치한 코어, 다른 기기, 백업, 그리고 이 .app 번들은 그대로 남습니다. 이 작업은 되돌릴 수 없습니다.", "취소", "Sidevoice 데이터 모두 삭제"),
+        "hi" => ("Sidevoice का सारा डेटा हटाएँ?", "इससे Sidevoice सेवा अनइंस्टॉल हो जाएगी और इस ऐप का लोकल डेटा, मॉडल और सहेजी गई कुंजियाँ हट जाएँगी। कस्टम प्रोफ़ाइल, अलग से इंस्टॉल किया गया कोर, दूसरे डिवाइस, बैकअप और यह .app बंडल बने रहेंगे। इसे पहले जैसा नहीं किया जा सकता।", "रद्द करें", "Sidevoice का सारा डेटा हटाएँ"),
         "zh" => ("删除所有 Sidevoice 数据？", "将卸载 Sidevoice 服务，并删除本应用的本地数据、模型和保存的密钥。自定义配置、单独安装的核心、其他设备、备份和此 .app 应用程序包会保留。此操作无法撤销。", "取消", "删除所有 Sidevoice 数据"),
         _ => ("Delete all Sidevoice data?", "This uninstalls the Sidevoice service and deletes this app’s local data, models and saved keys. Custom profiles, a separately installed core, other devices, backups and this .app bundle remain. This cannot be undone.", "Cancel", "Delete all Sidevoice data"),
     }
@@ -123,6 +126,9 @@ fn native_uninstall_words(locale: &str) -> (&'static str, &'static str, &'static
         "it" => ("Disinstallare Sidevoice?", "Verranno eliminati tutti i dati di Sidevoice: il servizio Sidevoice, i dati locali dell’app, i modelli e le chiavi salvate. Poi Sidevoice si chiuderà e verrà spostato nel Cestino. Restano i profili personalizzati, un core installato separatamente, gli altri dispositivi e i backup. L’azione non può essere annullata.", "Annulla", "Disinstalla Sidevoice"),
         "ja" => ("Sidevoice をアンインストールしますか？", "Sidevoice のすべてのデータ（Sidevoice サービス、アプリ内のデータ、モデル、保存したキー）を削除します。その後 Sidevoice は終了し、ゴミ箱に移動されます。カスタムプロファイル、別途インストールしたコア、ほかの端末、バックアップは残ります。この操作は取り消せません。", "キャンセル", "Sidevoice をアンインストール"),
         "pl" => ("Odinstalować Sidevoice?", "Wszystkie dane Sidevoice zostaną usunięte: usługa Sidevoice, lokalne dane aplikacji, modele i zapisane klucze. Następnie Sidevoice zamknie się i zostanie przeniesiony do Kosza. Niestandardowe profile, osobno zainstalowany rdzeń, inne urządzenia i kopie zapasowe pozostaną. Nie można tego cofnąć.", "Anuluj", "Odinstaluj Sidevoice"),
+        "pt" => ("Desinstalar o Sidevoice?", "Todos os dados do Sidevoice serão apagados: o serviço do Sidevoice, os dados locais do app, os modelos e as chaves salvas. Em seguida, o Sidevoice será encerrado e movido para a Lixeira. Perfis personalizados, um núcleo instalado separadamente, outros dispositivos e backups permanecem. Esta ação não pode ser desfeita.", "Cancelar", "Desinstalar o Sidevoice"),
+        "ko" => ("Sidevoice를 제거할까요?", "Sidevoice 서비스, 이 앱의 로컬 데이터, 모델, 저장된 키 등 모든 Sidevoice 데이터를 삭제합니다. 그런 다음 Sidevoice가 종료되고 휴지통으로 이동됩니다. 사용자 지정 프로필, 따로 설치한 코어, 다른 기기, 백업은 그대로 남습니다. 이 작업은 되돌릴 수 없습니다.", "취소", "Sidevoice 제거"),
+        "hi" => ("Sidevoice अनइंस्टॉल करें?", "इससे Sidevoice का सारा डेटा हट जाएगा: Sidevoice सेवा, इस ऐप का लोकल डेटा, मॉडल और सहेजी गई कुंजियाँ। इसके बाद Sidevoice बंद हो जाएगा और ट्रैश में चला जाएगा। कस्टम प्रोफ़ाइल, अलग से इंस्टॉल किया गया कोर, दूसरे डिवाइस और बैकअप बने रहेंगे। इसे पहले जैसा नहीं किया जा सकता।", "रद्द करें", "Sidevoice अनइंस्टॉल करें"),
         "zh" => ("卸载 Sidevoice？", "将删除所有 Sidevoice 数据：Sidevoice 服务、本应用的本地数据、模型和保存的密钥。随后 Sidevoice 会退出并移到废纸篓。自定义配置、单独安装的核心、其他设备和备份会保留。此操作无法撤销。", "取消", "卸载 Sidevoice"),
         _ => ("Uninstall Sidevoice?", "This deletes all Sidevoice data: the Sidevoice service, this app’s local data, models and saved keys. Sidevoice then quits and moves itself to the Trash. Custom profiles, a separately installed core, other devices and backups remain. This cannot be undone.", "Cancel", "Uninstall Sidevoice"),
     }
@@ -192,7 +198,7 @@ mod tests {
 
     #[test]
     fn reset_confirmation_preserves_all_supported_languages() {
-        for locale in ["en", "es", "de", "fr", "it", "ja", "pl", "zh-Hans"] {
+        for locale in ["en", "es", "de", "fr", "it", "ja", "pl", "zh-Hans", "pt-BR", "ko", "hi"] {
             let (title, detail, cancel, delete) = ConfirmationKind::DeleteAllData.words(locale);
             assert!(!title.is_empty() && !detail.is_empty() && !cancel.is_empty() && !delete.is_empty());
             assert!(detail.contains("Sidevoice") && !detail.contains("connector"));
@@ -203,7 +209,7 @@ mod tests {
 
     #[test]
     fn native_uninstall_confirmation_names_the_trash_in_all_supported_languages() {
-        for locale in ["en", "es", "de", "fr", "it", "ja", "pl", "zh-Hans"] {
+        for locale in ["en", "es", "de", "fr", "it", "ja", "pl", "zh-Hans", "pt-BR", "ko", "hi"] {
             let (title, detail, cancel, uninstall) = ConfirmationKind::Uninstall.words(locale);
             assert!(!title.is_empty() && !detail.is_empty() && !cancel.is_empty() && !uninstall.is_empty());
             assert!(detail.contains("Sidevoice") && !detail.contains("connector"));

@@ -328,6 +328,11 @@ pub fn generated(name: &str) -> Result<()> {
         .arg(&dir)
         .dir(repo())
         .stdout()?;
+    if !changes.trim().is_empty() {
+        // What the generator wrote, to commit as it is.
+        let diff = Cmd::new("git").args(["diff", "--"]).arg(&dir).dir(repo()).stdout()?;
+        println!("{diff}");
+    }
     ensure(
         changes.trim().is_empty(),
         format!("the committed {dir} is not what `cargo xtask mobile generate {name}` writes:\n{changes}\nrun it and commit {dir}"),

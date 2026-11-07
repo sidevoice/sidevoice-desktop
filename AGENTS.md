@@ -17,7 +17,7 @@ Rules for any coding agent (and person) working in this repository.
 
 Read `README.md` and `docs/`. The bundled web interface is the sidevoice-web release `web.pin.json` names (`scripts/build-web.mjs`): its texts
 are fixed in sidevoice-web, not here. The app's own texts are the native ones (tray, …), in
-`desktop/core/i18n/<language>.json` (the desktop) and `mobile/tauri/i18n/native/<language>.json` (the phone): one file per language, the eight the web offers, English the fallback, read by `shared/i18n`.
+`desktop/core/i18n/<language>.json` (the desktop) and `mobile/tauri/i18n/native/<language>.json` (the phone): one file per language, the eleven the web offers, English the fallback, read by `shared/i18n`.
 
 ## CI
 
