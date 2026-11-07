@@ -13,7 +13,7 @@ pub fn media_command_action(command: &str, mic_enabled: bool) -> Option<&'static
 }
 
 /// The commands of the system's remote-command center the app answers while it shows a call as Now Playing: the single
-/// press's (`play`, `pause`, `toggle`) and, where the platform registers it (`next_track`, [`next_track_registered`]), the
+/// press's (`play`, `pause`, `toggle`) and, where the platform registers it (`next_track`: macOS), the
 /// double press's `next`.
 pub fn registered_commands(next_track: bool) -> Vec<&'static str> {
     let mut names = vec!["play", "pause", "toggle"];
@@ -23,11 +23,21 @@ pub fn registered_commands(next_track: bool) -> Vec<&'static str> {
     names
 }
 
-/// Whether the double press's command (`next`) is registered: always where the platform has it as a matter of course
-/// (`always`: macOS), and where it shows a button the person did not ask for (`on_demand`: iOS, whose lock screen draws a
-/// next-track button for it) only while the person has given the double press something to do (`wanted`).
-pub fn next_track_registered(always: bool, on_demand: bool, wanted: bool) -> bool {
-    always || (on_demand && wanted)
+/// What the AirPods / Beats mute gesture's listening does at a report of the call ([`gesture_step`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GestureStep {
+    /// Start hearing it: a call is on and it is not heard yet.
+    pub listen: bool,
+    /// Stop hearing it: no call, and it is heard only during calls.
+    pub stop: bool,
+    /// Give the system's input mute back unmuted: the call that held it in step has ended.
+    pub give_back: bool,
+}
+
+/// What the gesture's listening does now: `for_life`, it is heard from launch (iOS: observing the notification is the opt-in),
+/// so a call's end never stops it; `on`, it is heard; `active`, a call is on; `held`, the last call held the system's mute in step.
+pub fn gesture_step(for_life: bool, on: bool, active: bool, held: bool) -> GestureStep {
+    GestureStep { listen: active && !on, stop: !active && on && !for_life, give_back: !active && held }
 }
 
 /// Every command of the command center the app lets go of when Now Playing ends: those it registers, and the rest, which
@@ -126,11 +136,7 @@ mod tests {
     /// covers every one of them are decided here.
     #[test]
     fn the_double_press_command_is_registered_only_where_the_platform_has_it_and_is_released_with_the_rest() {
-        assert_eq!(
-            registered_commands(false),
-            ["play", "pause", "toggle"],
-            "iOS: no next-track button on the lock screen"
-        );
+        assert_eq!(registered_commands(false), ["play", "pause", "toggle"], "a platform with no double press");
         assert_eq!(
             registered_commands(true),
             ["play", "pause", "toggle", "next"],
@@ -144,11 +150,22 @@ mod tests {
     }
 
     #[test]
-    fn the_double_press_is_registered_by_the_platform_or_on_the_person_s_demand() {
-        assert!(next_track_registered(true, false, false), "macOS: always");
-        assert!(!next_track_registered(false, true, false), "iOS: no button nobody asked for");
-        assert!(next_track_registered(false, true, true), "iOS: the double press has an action");
-        assert!(!next_track_registered(false, false, true), "Android has no remote-command center");
+    fn the_mute_gesture_is_heard_during_a_call_or_from_launch_and_its_mute_is_given_back_when_the_call_ends() {
+        let step = |listen, stop, give_back| GestureStep { listen, stop, give_back };
+        // macOS: heard only while a call is on, its handler set and removed with it.
+        assert_eq!(gesture_step(false, false, true, false), step(true, false, false), "a call starts");
+        assert_eq!(gesture_step(false, true, true, true), step(false, false, false), "the call goes on");
+        assert_eq!(gesture_step(false, true, false, true), step(false, true, true), "the call ends");
+        assert_eq!(gesture_step(false, false, false, false), GestureStep::default(), "no call");
+        // iOS: opted in at launch, for the process's life; a call's end gives the mute back and keeps listening.
+        assert_eq!(gesture_step(true, true, true, false), GestureStep::default(), "a call starts, already heard");
+        assert_eq!(gesture_step(true, true, false, true), step(false, false, true), "the call ends");
+        assert_eq!(gesture_step(true, true, false, false), GestureStep::default(), "between calls");
+        assert_eq!(
+            gesture_step(true, false, true, false),
+            step(true, false, false),
+            "not heard at launch: a call tries again"
+        );
     }
 
     #[test]

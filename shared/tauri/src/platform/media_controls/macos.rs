@@ -25,6 +25,9 @@ impl Os for Native {
 }
 
 impl apple::Os for Native {
+    /// A headset's play/pause reaches the Now Playing app as a media command, also during a call.
+    const NOW_PLAYING: bool = true;
+
     /// A headset's double press of play/pause arrives as the next-track command.
     const NEXT_TRACK: bool = true;
 

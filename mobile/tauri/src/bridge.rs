@@ -117,7 +117,8 @@ fn compose(transport: &str, members: &str, mobile: &str) -> String {
 
 /// What a headset's presses do on the phone (`host.shortcuts`, docs/BRIDGE.md → "The shortcuts"): the single press (play/pause,
 /// the AirPods stem) mutes by default and the double press (the next-track command) does nothing by default; the person chooses
-/// in Settings › Shortcuts, which shows these two rows and nothing else on a phone (no global keys, no keys of the page's own).
+/// in Settings › Shortcuts, which shows these rows and nothing else on a phone (no global keys, no keys of the page's own), and
+/// only what reaches the app here (`media_controls::presses`: on iOS the single press is the system's mute, with no double press).
 /// Kept in a small file of the app's own files, as the developer options are. The press itself reaches the app through
 /// `sidevoice-shared-tauri`'s media controls (Now Playing on iOS, the call's media session on Android); what each press does,
 /// and the status the page reads, are `sidevoice-shared-headset`'s.
@@ -129,16 +130,21 @@ pub mod headset {
     };
 
     use serde_json::{json, Value};
-    use sidevoice_shared_headset::{Headset, HeadsetChange, HeadsetChoice, HeadsetPress, Presses};
+    use sidevoice_shared_headset::{
+        Headset, HeadsetCapabilities, HeadsetChange, HeadsetChoice, HeadsetPress, Presses,
+    };
+    use sidevoice_shared_tauri::platform::media_controls;
     use tauri::{AppHandle, Manager, Runtime};
 
     /// The record's file name, in the app's own files.
     const FILE: &str = "headset.json";
 
-    /// The choice the person made, kept across launches.
+    /// The choice the person made, kept across launches, and what the presses can do here.
     pub struct HeadsetSettings {
         file: PathBuf,
+        /// Kept as the person made it, whatever the presses can do here: only their own change changes it.
         choice: Mutex<HeadsetChoice>,
+        capabilities: HeadsetCapabilities,
         /// Who owns the call being held, while one is: `Some(true)` the system's (CallKit, Telecom), `Some(false)` the app's own,
         /// whatever the developer option says now (the option applies to the next call; a call the system refused is the app's).
         owner: Mutex<Option<bool>>,
@@ -147,10 +153,13 @@ pub mod headset {
     impl HeadsetSettings {
         /// The choice kept in the app's own files; a record that is missing or unreadable is the defaults.
         pub fn of_app<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Self> {
-            Ok(Self::new(&crate::own_files(app)?))
+            Ok(Self::new(
+                &crate::own_files(app)?,
+                media_controls::presses(),
+            ))
         }
 
-        fn new(files: &Path) -> Self {
+        fn new(files: &Path, capabilities: HeadsetCapabilities) -> Self {
             let file = files.join(FILE);
             let choice = fs::read(&file)
                 .ok()
@@ -159,6 +168,7 @@ pub mod headset {
             Self {
                 file,
                 choice: Mutex::new(choice),
+                capabilities,
                 owner: Mutex::new(None),
             }
         }
@@ -195,27 +205,22 @@ pub mod headset {
             Ok(())
         }
 
-        /// `host.shortcuts.get()` on a phone: only the headset group. No global shortcut is offered (`shortcuts` is empty), none
-        /// needs a permission, and the page has no keys of its own to offer (`inApp: false`). While the system's call holds the
-        /// headset (`option`, see [`Self::managed`]), the rows say so; `adds_card`: a choice other than the defaults shows a playback
-        /// card beside the call's own surface here (iOS with the Live Activity).
-        pub fn status(&self, option: bool, adds_card: bool) -> Value {
+        /// `host.shortcuts.get()` on a phone: only the headset group, with what each press can do here (`actions`; no double press
+        /// where none reaches the app). No global shortcut is offered (`shortcuts` is empty), none needs a permission, and the page
+        /// has no keys of its own to offer (`inApp: false`). While the system's call holds the headset (`option`, see
+        /// [`Self::managed`]), the rows say so.
+        pub fn status(&self, option: bool) -> Value {
             json!({
                 "shortcuts": {},
                 "permission": null,
                 "inApp": false,
-                "headset": Headset::of(self.choice(), self.managed(option), adds_card),
+                "headset": Headset::of(self.choice(), self.managed(option), self.capabilities),
             })
         }
 
         /// `host.shortcuts.setHeadset(change)`: keeps it and answers the status. Refused while the system's call holds the
-        /// headset (the system mutes; the choice is not the app's to change then).
-        pub fn set(
-            &self,
-            headset: Option<&Value>,
-            option: bool,
-            adds_card: bool,
-        ) -> Result<Value, String> {
+        /// headset (the system mutes; the choice is not the app's to change then), and for what a press cannot do here.
+        pub fn set(&self, headset: Option<&Value>, option: bool) -> Result<Value, String> {
             let object = headset
                 .and_then(Value::as_object)
                 .ok_or("setHeadset(change) takes an object.")?;
@@ -230,22 +235,24 @@ pub mod headset {
             if self.managed(option) && !change.is_empty() {
                 return Err("the system's call holds the headset's buttons".into());
             }
+            self.capabilities.allow(change)?;
             self.change(change).map_err(|error| error.to_string())?;
-            Ok(self.status(option, adds_card))
+            Ok(self.status(option))
         }
 
         /// The command of the room a press of the headset asks for (`run({command})`), or none. The single press is the mute of
         /// the native path (`call::RoomCall::toggle_mute`) when it mutes.
         pub fn command(&self, which: Presses, option: bool) -> Option<&'static str> {
             self.choice()
-                .for_press(which, self.managed(option))
+                .for_press(which, self.managed(option), self.capabilities)
                 .command()
         }
 
-        /// Whether the double press has an action: iOS registers the next-track command only then (`CallState::double_press_wanted`).
+        /// Whether the double press has an action: Android's media session advertises skip-to-next only then
+        /// (`CallState::double_press_wanted`).
         pub fn double_press_wanted(&self, option: bool) -> bool {
             self.choice()
-                .for_press(Presses::Double, self.managed(option))
+                .for_press(Presses::Double, self.managed(option), self.capabilities)
                 != HeadsetPress::None
         }
     }
@@ -276,22 +283,32 @@ pub mod headset {
     mod tests {
         use super::*;
 
+        const EVERY: HeadsetCapabilities = HeadsetCapabilities::EVERY;
+        const SYSTEM_MUTE: HeadsetCapabilities = HeadsetCapabilities::SYSTEM_MUTE;
+
+        /// A phone whose presses can do everything (Android).
         fn settings() -> (tempfile::TempDir, HeadsetSettings) {
             let files = tempfile::tempdir().unwrap();
-            let settings = HeadsetSettings::new(files.path());
+            let settings = HeadsetSettings::new(files.path(), EVERY);
             (files, settings)
         }
 
         #[test]
         fn a_phone_reports_only_the_headset_and_mutes_on_one_press_by_default() {
             let (_files, settings) = settings();
+            let every = ["mute", "oneTurn", "skip", "none"];
             assert_eq!(
-                settings.status(false, false),
+                settings.status(false),
                 json!({
                     "shortcuts": {},
                     "permission": null,
                     "inApp": false,
-                    "headset": {"press": "mute", "doublePress": "none", "outsideCall": "leave"},
+                    "headset": {
+                        "press": "mute",
+                        "doublePress": "none",
+                        "outsideCall": "leave",
+                        "actions": {"press": every, "doublePress": every},
+                    },
                 })
             );
             assert_eq!(
@@ -306,36 +323,129 @@ pub mod headset {
         fn a_choice_is_kept_across_a_restart_and_what_is_not_named_stays() {
             let (files, settings) = settings();
             let status = settings
-                .set(Some(&json!({"doublePress": "oneTurn"})), false, false)
+                .set(Some(&json!({"doublePress": "oneTurn"})), false)
                 .unwrap();
             assert_eq!(status["headset"]["doublePress"], "oneTurn");
             assert_eq!(status["headset"]["press"], "mute");
             settings
-                .set(Some(&json!({"press": "skip"})), false, false)
+                .set(Some(&json!({"press": "skip"})), false)
                 .unwrap();
-            let again = HeadsetSettings::new(files.path());
+            let again = HeadsetSettings::new(files.path(), EVERY);
             assert_eq!(again.command(Presses::Single, false), Some("skip-reply"));
             assert_eq!(again.command(Presses::Double, false), Some("one-turn"));
             assert!(again.double_press_wanted(false));
+        }
+
+        /// desktop#464: the double press set, then another setting changed, and it read Nothing. Nothing but the person's own
+        /// change changes the choice: not reading the status again, not a call's owner coming and going, not the developer option,
+        /// not a change of the other press, not a restart.
+        #[test]
+        fn the_choice_survives_everything_but_the_person_s_own_change() {
+            let (files, settings) = settings();
+            settings
+                .set(Some(&json!({"doublePress": "oneTurn"})), false)
+                .unwrap();
+            let double = |settings: &HeadsetSettings, option| {
+                settings.status(option)["headset"]["doublePress"].clone()
+            };
+            for _ in 0..3 {
+                assert_eq!(double(&settings, false), "oneTurn", "the status read again");
+            }
+            assert_eq!(
+                double(&settings, true),
+                "oneTurn",
+                "the developer option on: shown as kept"
+            );
+            settings.call_owner(Some(true));
+            settings.call_owner(Some(false));
+            settings.call_owner(None);
+            assert_eq!(
+                double(&settings, false),
+                "oneTurn",
+                "a call's owner came and went"
+            );
+            settings.set(Some(&json!({})), false).unwrap();
+            settings
+                .set(Some(&json!({"doublePress": null})), false)
+                .unwrap();
+            settings
+                .set(Some(&json!({"press": "skip"})), false)
+                .unwrap();
+            assert_eq!(
+                double(&settings, false),
+                "oneTurn",
+                "a change of nothing, or of the other press"
+            );
+            assert!(
+                settings
+                    .set(Some(&json!({"doublePress": "none"})), true)
+                    .is_err(),
+                "refused while the system holds the headset"
+            );
+            let restarted = HeadsetSettings::new(files.path(), EVERY);
+            assert_eq!(double(&restarted, false), "oneTurn", "a restart");
+            restarted
+                .set(Some(&json!({"doublePress": "none"})), false)
+                .unwrap();
+            assert_eq!(double(&restarted, false), "none", "the person's own change");
+            assert_eq!(
+                double(&HeadsetSettings::new(files.path(), EVERY), false),
+                "none"
+            );
+        }
+
+        #[test]
+        fn where_only_the_system_s_mute_reaches_the_app_the_single_press_mutes_and_there_is_no_double_press(
+        ) {
+            let files = tempfile::tempdir().unwrap();
+            // A choice kept by a build whose presses could do more (TestFlight 61 on iOS).
+            fs::write(
+                files.path().join(FILE),
+                br#"{"press":"skip","doublePress":"oneTurn"}"#,
+            )
+            .unwrap();
+            let settings = HeadsetSettings::new(files.path(), SYSTEM_MUTE);
+            assert_eq!(
+                settings.status(false)["headset"],
+                json!({"press": "mute", "doublePress": null, "outsideCall": "leave", "actions": {"press": ["mute"]}})
+            );
+            assert_eq!(
+                settings.command(Presses::Single, false),
+                Some("toggle-mute")
+            );
+            assert_eq!(settings.command(Presses::Double, false), None);
+            assert!(!settings.double_press_wanted(false));
+            assert!(settings
+                .set(Some(&json!({"press": "skip"})), false)
+                .is_err());
+            assert!(settings
+                .set(Some(&json!({"doublePress": "oneTurn"})), false)
+                .is_err());
+            assert!(settings.set(Some(&json!({"press": "mute"})), false).is_ok());
+            assert_eq!(
+                HeadsetSettings::new(files.path(), EVERY)
+                    .choice()
+                    .double_press,
+                HeadsetPress::OneTurn,
+                "what is kept is the person's, untouched"
+            );
         }
 
         #[test]
         fn what_is_not_a_press_is_refused_and_an_unreadable_record_is_the_defaults() {
             let (files, settings) = settings();
             assert!(settings
-                .set(Some(&json!({"press": "loud"})), false, false)
+                .set(Some(&json!({"press": "loud"})), false)
                 .is_err());
+            assert!(settings.set(Some(&json!({"press": 3})), false).is_err());
             assert!(settings
-                .set(Some(&json!({"press": 3})), false, false)
+                .set(Some(&json!({"outsideCall": "join"})), false)
                 .is_err());
-            assert!(settings
-                .set(Some(&json!({"outsideCall": "join"})), false, false)
-                .is_err());
-            assert!(settings.set(Some(&json!("mute")), false, false).is_err());
-            assert!(settings.set(None, false, false).is_err());
+            assert!(settings.set(Some(&json!("mute")), false).is_err());
+            assert!(settings.set(None, false).is_err());
             fs::write(files.path().join(FILE), b"not json").unwrap();
             assert_eq!(
-                HeadsetSettings::new(files.path()).choice(),
+                HeadsetSettings::new(files.path(), EVERY).choice(),
                 HeadsetChoice::default()
             );
         }
@@ -347,10 +457,9 @@ pub mod headset {
                 .set(
                     Some(&json!({"press": "skip", "doublePress": "oneTurn"})),
                     false,
-                    false,
                 )
                 .unwrap();
-            let status = settings.status(true, false);
+            let status = settings.status(true);
             assert_eq!(status["headset"]["managedBySystem"], true);
             assert_eq!(
                 status["headset"]["press"], "skip",
@@ -359,9 +468,7 @@ pub mod headset {
             assert_eq!(settings.command(Presses::Single, true), Some("toggle-mute"));
             assert_eq!(settings.command(Presses::Double, true), None);
             assert!(!settings.double_press_wanted(true));
-            assert!(settings
-                .set(Some(&json!({"press": "mute"})), true, false)
-                .is_err());
+            assert!(settings.set(Some(&json!({"press": "mute"})), true).is_err());
             assert_eq!(
                 settings.command(Presses::Single, false),
                 Some("skip-reply"),
@@ -373,18 +480,16 @@ pub mod headset {
         fn the_owner_of_the_call_in_progress_decides_not_the_option() {
             let (_files, settings) = settings();
             settings
-                .set(Some(&json!({"press": "skip"})), false, false)
+                .set(Some(&json!({"press": "skip"})), false)
                 .unwrap();
             // The option is on, but the system refused the call and it went on as the app's own: the rows are the app's.
             settings.call_owner(Some(false));
             assert!(!settings.managed(true));
-            assert!(settings.status(true, false)["headset"]
+            assert!(settings.status(true)["headset"]
                 .get("managedBySystem")
                 .is_none());
             assert_eq!(settings.command(Presses::Single, true), Some("skip-reply"));
-            assert!(settings
-                .set(Some(&json!({"press": "mute"})), true, false)
-                .is_ok());
+            assert!(settings.set(Some(&json!({"press": "mute"})), true).is_ok());
             // The option is turned off in a system's call: it applies to the next call, this one stays the system's.
             settings.call_owner(Some(true));
             assert!(settings.managed(false));
@@ -393,22 +498,12 @@ pub mod headset {
                 Some("toggle-mute")
             );
             assert!(settings
-                .set(Some(&json!({"press": "skip"})), false, false)
+                .set(Some(&json!({"press": "skip"})), false)
                 .is_err());
             // Between calls, the option says what the next one will be.
             settings.call_owner(None);
             assert!(settings.managed(true));
             assert!(!settings.managed(false));
-        }
-
-        #[test]
-        fn the_status_says_when_another_choice_adds_a_card() {
-            let (_files, settings) = settings();
-            let status = settings.status(false, true);
-            assert_eq!(status["headset"]["nonDefaultAddsCard"], true);
-            assert!(settings.status(false, false)["headset"]
-                .get("nonDefaultAddsCard")
-                .is_none());
         }
     }
 }

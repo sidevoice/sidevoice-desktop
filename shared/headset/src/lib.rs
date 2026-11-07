@@ -17,6 +17,16 @@ pub enum HeadsetPress {
 }
 
 impl HeadsetPress {
+    /// Its name in the page's `HeadsetPress`.
+    pub fn name(self) -> &'static str {
+        match self {
+            HeadsetPress::Mute => "mute",
+            HeadsetPress::OneTurn => "oneTurn",
+            HeadsetPress::Skip => "skip",
+            HeadsetPress::None => "none",
+        }
+    }
+
     pub fn parse(name: &str) -> Option<HeadsetPress> {
         match name {
             "mute" => Some(HeadsetPress::Mute),
@@ -27,6 +37,14 @@ impl HeadsetPress {
         }
     }
 
+    /// Every action a press can be given, in the order the page lists them.
+    pub const ALL: [HeadsetPress; 4] = [
+        HeadsetPress::Mute,
+        HeadsetPress::OneTurn,
+        HeadsetPress::Skip,
+        HeadsetPress::None,
+    ];
+
     /// The command of the room (`run({command})`, docs/BRIDGE.md → "Commands") this press asks for; `None` for none.
     pub fn command(self) -> Option<&'static str> {
         match self {
@@ -35,6 +53,59 @@ impl HeadsetPress {
             HeadsetPress::Skip => Some("skip-reply"),
             HeadsetPress::None => None,
         }
+    }
+}
+
+/// What a host's headset presses can do during a call (`HeadsetStatus.actions`): the actions the single press can be given, and
+/// the double press's where one reaches the app (`None`: none does, the page draws no row for it). A press with one action has
+/// nothing to choose: it does that. Each OS's media controls say which (`sidevoice-shared-tauri`'s `media_controls::presses`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeadsetCapabilities {
+    pub press: &'static [HeadsetPress],
+    pub double_press: Option<&'static [HeadsetPress]>,
+}
+
+impl HeadsetCapabilities {
+    /// Both presses reach the app, and each can do anything.
+    pub const EVERY: HeadsetCapabilities = HeadsetCapabilities {
+        press: &HeadsetPress::ALL,
+        double_press: Some(&HeadsetPress::ALL),
+    };
+
+    /// Only the system's own mute reaches the app, on the single press (iOS during a call: the AirPods and Beats Press to Mute);
+    /// no double press does.
+    pub const SYSTEM_MUTE: HeadsetCapabilities = HeadsetCapabilities {
+        press: &[HeadsetPress::Mute],
+        double_press: None,
+    };
+
+    /// Whether `change` asks only for what these presses can do; the message is the `bad_request` one.
+    pub fn allow(self, change: HeadsetChange) -> Result<(), String> {
+        if let Some(press) = change.press {
+            if !self.press.contains(&press) {
+                return Err(format!("the single press cannot do {} here", press.name()));
+            }
+        }
+        match (change.double_press, self.double_press) {
+            (None, _) => Ok(()),
+            (Some(_), None) => Err("no double press reaches the app here".into()),
+            (Some(press), Some(actions)) if !actions.contains(&press) => {
+                Err(format!("the double press cannot do {} here", press.name()))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// What `chosen` is among `actions`: itself where it is one of them, else the press's default `fallback` where that is, else
+/// the first. A choice kept from where the press could do more stays kept; this is what it does here.
+fn within(chosen: HeadsetPress, actions: &[HeadsetPress], fallback: HeadsetPress) -> HeadsetPress {
+    if actions.contains(&chosen) {
+        chosen
+    } else if actions.contains(&fallback) || actions.is_empty() {
+        fallback
+    } else {
+        actions[0]
     }
 }
 
@@ -110,7 +181,7 @@ impl HeadsetChoice {
 }
 
 /// What a headset's buttons do here: `host.shortcuts`' `HeadsetStatus`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Headset {
     pub press: HeadsetPress,
@@ -123,10 +194,20 @@ pub struct Headset {
     /// Left out when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub managed_by_system: bool,
-    /// Choosing anything but the defaults shows a playback card beside the call's own surface (iOS, with the Live Activity), so the
-    /// page says so. Left out when false.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub non_default_adds_card: bool,
+    /// What each press can do here (`HeadsetCapabilities`), where the host says: `None` (left out) is every action, as a host
+    /// that predates it reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Actions>,
+}
+
+/// `HeadsetStatus.actions`: the actions each press can be given here; the double press's left out where none reaches the app
+/// (its `doublePress` is `null` then).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Actions {
+    pub press: Vec<HeadsetPress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub double_press: Option<Vec<HeadsetPress>>,
 }
 
 impl Headset {
@@ -136,17 +217,26 @@ impl Headset {
             double_press: Some(double_press),
             outside_call: "leave",
             managed_by_system: false,
-            non_default_adds_card: false,
+            actions: None,
         }
     }
 
-    /// The status of a `choice`; `managed_by_system`: the system's call holds the headset; `adds_card`: a choice other than the
-    /// defaults shows a playback card here ([`now_playing_gives_way`]).
-    pub fn of(choice: HeadsetChoice, managed_by_system: bool, adds_card: bool) -> Headset {
+    /// The status of a `choice` on a host whose presses can do what `capabilities` says: each press as it acts here, the double
+    /// press `null` where none reaches the app, and the actions of each; `managed_by_system`: the system's call holds the headset.
+    pub fn of(
+        choice: HeadsetChoice,
+        managed_by_system: bool,
+        capabilities: HeadsetCapabilities,
+    ) -> Headset {
+        let here = choice.within(capabilities);
         Headset {
+            double_press: capabilities.double_press.map(|_| here.double_press),
             managed_by_system,
-            non_default_adds_card: adds_card,
-            ..Headset::new(choice.press, choice.double_press)
+            actions: Some(Actions {
+                press: capabilities.press.to_vec(),
+                double_press: capabilities.double_press.map(<[HeadsetPress]>::to_vec),
+            }),
+            ..Headset::new(here.press, here.double_press)
         }
     }
 }
@@ -159,27 +249,32 @@ pub enum Presses {
 }
 
 impl HeadsetChoice {
-    /// Whether this is the defaults (single press mute, double press nothing): what the system's own mute handles, with no remote
-    /// command of the app needed.
-    pub fn is_default(self) -> bool {
-        self == HeadsetChoice::default()
+    /// What the choice does on a host whose presses can do what `capabilities` says ([`within`] for each press; a double press
+    /// that does not reach the app does nothing). The choice kept is not changed: this is only what it does here.
+    pub fn within(self, capabilities: HeadsetCapabilities) -> HeadsetChoice {
+        let defaults = HeadsetChoice::default();
+        HeadsetChoice {
+            press: within(self.press, capabilities.press, defaults.press),
+            double_press: capabilities
+                .double_press
+                .map_or(HeadsetPress::None, |actions| {
+                    within(self.double_press, actions, defaults.double_press)
+                }),
+        }
     }
-}
 
-/// Whether the playback card (Now Playing, and with it the app's remote commands) gives way to the call's own surface (iOS: the
-/// Live Activity), as `replaced` says. Only the defaults give way: mute comes from the system's mute gesture and the surface's
-/// button. A choice of any other action needs the remote commands, so the card stays for it.
-pub fn now_playing_gives_way(replaced: bool, choice: HeadsetChoice) -> bool {
-    replaced && choice.is_default()
-}
-
-impl HeadsetChoice {
-    /// What `which` does now. While the system's call holds the headset (`managed_by_system`) the system mutes: the single
-    /// press is a mute, whatever was chosen, and the double press nothing.
-    pub fn for_press(self, which: Presses, managed_by_system: bool) -> HeadsetPress {
+    /// What `which` does now, on a host whose presses can do what `capabilities` says. While the system's call holds the headset
+    /// (`managed_by_system`) the system mutes: the single press is a mute, whatever was chosen, and the double press nothing.
+    pub fn for_press(
+        self,
+        which: Presses,
+        managed_by_system: bool,
+        capabilities: HeadsetCapabilities,
+    ) -> HeadsetPress {
+        let here = self.within(capabilities);
         match (which, managed_by_system) {
-            (Presses::Single, false) => self.press,
-            (Presses::Double, false) => self.double_press,
+            (Presses::Single, false) => here.press,
+            (Presses::Double, false) => here.double_press,
             (Presses::Single, true) => HeadsetPress::Mute,
             (Presses::Double, true) => HeadsetPress::None,
         }
@@ -246,15 +341,121 @@ mod tests {
 
     #[test]
     fn the_status_is_the_pages_and_says_so_only_when_the_system_holds_the_headset() {
-        let own =
-            serde_json::to_value(Headset::of(HeadsetChoice::default(), false, false)).unwrap();
+        let new =
+            serde_json::to_value(Headset::new(HeadsetPress::Mute, HeadsetPress::None)).unwrap();
         assert_eq!(
-            own,
-            json!({"press": "mute", "doublePress": "none", "outsideCall": "leave"})
+            new,
+            json!({"press": "mute", "doublePress": "none", "outsideCall": "leave"}),
+            "a host that reports no actions (the desktop) reports what it always did"
         );
-        let system =
-            serde_json::to_value(Headset::of(HeadsetChoice::default(), true, false)).unwrap();
+        let system = serde_json::to_value(Headset::of(
+            HeadsetChoice::default(),
+            true,
+            HeadsetCapabilities::EVERY,
+        ))
+        .unwrap();
         assert_eq!(system["managedBySystem"], json!(true));
+    }
+
+    #[test]
+    fn a_host_whose_presses_can_do_everything_reports_both_presses_and_every_action() {
+        let choice = HeadsetChoice {
+            press: HeadsetPress::Skip,
+            double_press: HeadsetPress::OneTurn,
+        };
+        let every = ["mute", "oneTurn", "skip", "none"];
+        assert_eq!(
+            serde_json::to_value(Headset::of(choice, false, HeadsetCapabilities::EVERY)).unwrap(),
+            json!({
+                "press": "skip",
+                "doublePress": "oneTurn",
+                "outsideCall": "leave",
+                "actions": {"press": every, "doublePress": every},
+            })
+        );
+    }
+
+    #[test]
+    fn where_only_the_system_s_mute_reaches_the_app_there_is_no_double_press_and_the_single_press_mutes(
+    ) {
+        // A choice kept from a build whose presses could do more (TestFlight 61 on iOS): what it does here, not what is kept.
+        let kept = HeadsetChoice {
+            press: HeadsetPress::Skip,
+            double_press: HeadsetPress::OneTurn,
+        };
+        let mute = HeadsetCapabilities::SYSTEM_MUTE;
+        assert_eq!(
+            serde_json::to_value(Headset::of(kept, false, mute)).unwrap(),
+            json!({"press": "mute", "doublePress": null, "outsideCall": "leave", "actions": {"press": ["mute"]}})
+        );
+        assert_eq!(
+            kept.for_press(Presses::Single, false, mute),
+            HeadsetPress::Mute
+        );
+        assert_eq!(
+            kept.for_press(Presses::Double, false, mute),
+            HeadsetPress::None
+        );
+        assert_eq!(kept.within(mute), HeadsetChoice::default());
+        assert_eq!(
+            kept.within(HeadsetCapabilities::EVERY),
+            kept,
+            "the choice itself is kept"
+        );
+    }
+
+    #[test]
+    fn a_change_asks_only_for_what_the_presses_can_do() {
+        let change =
+            |press: Option<HeadsetPress>, double_press: Option<HeadsetPress>| HeadsetChange {
+                press,
+                double_press,
+            };
+        let mute = HeadsetCapabilities::SYSTEM_MUTE;
+        assert_eq!(mute.allow(change(Some(HeadsetPress::Mute), None)), Ok(()));
+        assert_eq!(mute.allow(HeadsetChange::default()), Ok(()));
+        assert!(mute.allow(change(Some(HeadsetPress::Skip), None)).is_err());
+        assert!(
+            mute.allow(change(None, Some(HeadsetPress::None))).is_err(),
+            "no double press to set"
+        );
+        for press in HeadsetPress::ALL {
+            assert_eq!(
+                HeadsetCapabilities::EVERY.allow(change(Some(press), Some(press))),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn what_a_press_does_falls_back_to_its_default_and_then_to_the_first_action() {
+        assert_eq!(
+            within(
+                HeadsetPress::Skip,
+                &[HeadsetPress::Mute, HeadsetPress::OneTurn],
+                HeadsetPress::Mute
+            ),
+            HeadsetPress::Mute
+        );
+        assert_eq!(
+            within(
+                HeadsetPress::Skip,
+                &[HeadsetPress::OneTurn, HeadsetPress::None],
+                HeadsetPress::Mute
+            ),
+            HeadsetPress::OneTurn
+        );
+        assert_eq!(
+            within(
+                HeadsetPress::OneTurn,
+                &[HeadsetPress::OneTurn],
+                HeadsetPress::Mute
+            ),
+            HeadsetPress::OneTurn
+        );
+        for press in HeadsetPress::ALL {
+            assert_eq!(HeadsetPress::parse(press.name()), Some(press));
+        }
     }
 
     #[test]
@@ -267,46 +468,26 @@ mod tests {
     }
 
     #[test]
-    fn the_card_gives_way_to_the_call_s_surface_only_for_the_defaults() {
-        let defaults = HeadsetChoice::default();
-        let single = HeadsetChoice {
-            press: HeadsetPress::OneTurn,
-            ..defaults
-        };
-        let double = HeadsetChoice {
-            double_press: HeadsetPress::Skip,
-            ..defaults
-        };
-        assert!(
-            now_playing_gives_way(true, defaults),
-            "the Live Activity alone, as designed"
-        );
-        assert!(
-            !now_playing_gives_way(true, single),
-            "another single press needs the remote commands"
-        );
-        assert!(
-            !now_playing_gives_way(true, double),
-            "and so does a double press"
-        );
-        assert!(
-            !now_playing_gives_way(false, defaults),
-            "no surface of its own: the card stays"
-        );
-        assert!(defaults.is_default() && !single.is_default() && !double.is_default());
-    }
-
-    #[test]
     fn the_system_s_call_leaves_only_its_mute() {
         let choice = HeadsetChoice {
             press: HeadsetPress::Skip,
             double_press: HeadsetPress::OneTurn,
         };
-        assert_eq!(choice.for_press(Presses::Single, true), HeadsetPress::Mute);
-        assert_eq!(choice.for_press(Presses::Double, true), HeadsetPress::None);
-        assert_eq!(choice.for_press(Presses::Single, false), HeadsetPress::Skip);
+        let every = HeadsetCapabilities::EVERY;
         assert_eq!(
-            choice.for_press(Presses::Double, false),
+            choice.for_press(Presses::Single, true, every),
+            HeadsetPress::Mute
+        );
+        assert_eq!(
+            choice.for_press(Presses::Double, true, every),
+            HeadsetPress::None
+        );
+        assert_eq!(
+            choice.for_press(Presses::Single, false, every),
+            HeadsetPress::Skip
+        );
+        assert_eq!(
+            choice.for_press(Presses::Double, false, every),
             HeadsetPress::OneTurn
         );
     }

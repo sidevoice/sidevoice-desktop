@@ -893,7 +893,9 @@ interface HeadsetStatus {
   doublePress: "mute" | "oneTurn" | "skip" | "none" | null;   // the system's next track; null: this path cannot send one (not on macOS)
   outsideCall: "leave" | "join";                               // "leave" (always, today)
   managedBySystem?: boolean;                                            // true: the system's call holds the headset (CallKit, Telecom): the system mutes, and the page shows the rows read-only
+  actions?: { press?: HeadsetPress[]; doublePress?: HeadsetPress[] };   // what each press can do here; absent (or a press absent from it): every action
 }
+type HeadsetPress = "mute" | "oneTurn" | "skip" | "none";
 interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
   get(): Promise<GlobalShortcut>;
   set(accelerator: string | null): Promise<GlobalShortcut>;
@@ -965,10 +967,15 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
     (a modifier or Fn pressed alone where the system gives the app no way to hear one: Windows and Linux). Where there is no
     `record`, the page records itself and ignores a lone modifier the same way, with the same two hints.
 - **The page renders what the host reports (`ShortcutsStatus`), and checks no platform.** The global group shows the actions present in `shortcuts`
-  (none: no group), the headset group shows when `headset` is not `null` (its double press row when `doublePress` is not `null`), and the keys of
-  the page's own show unless `inApp` is `false`. A host that reports nothing of a group offers none of it; a page that gets `host.muteShortcut`
+  (none: no group; a host without `set` offers none, as it could set none), the headset group shows when `headset` is not `null` (its double
+  press row when `doublePress` is not `null`), and the keys of the page's own show unless `inApp` is `false`. A host that reports nothing of a group offers none of it; a page that gets `host.muteShortcut`
   alone, or neither, behaves as it did. The mobile app reports `{shortcuts: {}, permission: null, inApp: false, headset}`: the headset's
   rows and nothing else ("The mobile app", below).
+- **What each press can do (`headset.actions`)**: the host says, per press, which actions it can be given here; the page offers only those,
+  in its own order, and a press with one action is a line saying what it does, not a choice (an iPhone's single press: the system's
+  mute). Whether a double press reaches the app at all stays `doublePress` (`null`: no row), and `press`/`doublePress` are what each
+  press does here, one of its actions. `setHeadset` refuses `bad_request` an action a press cannot do here, and any double press where
+  there is none. A host that reports no `actions` (the desktop; a phone from before it) offers every action for each press, as before.
 - `setHeadset({press, doublePress})` is the one writer of the headset's choice, kept with the app's settings. It is offered where the
   app owns the headset's buttons (macOS: `host.presence`): the single press (the system's play/pause, and the AirPods gesture)
   and the double press (the system's next track) do what they say; the double press is `none` until chosen. `outsideCall: "join"` is refused `bad_request`: the app
@@ -997,16 +1004,19 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
 ### The mobile app
 
 `host.shortcuts` is there on iOS and Android with `get`, `subscribe` and `setHeadset`, and no `set`, `restore`, `request` or `record`: a phone
-has no key to set. `get()` answers `{shortcuts: {}, permission: null, inApp: false, headset: {press, doublePress, outsideCall: "leave"}}`:
+has no key to set. `get()` answers `{shortcuts: {}, permission: null, inApp: false, headset: {press, doublePress, outsideCall: "leave", actions}}`:
 `press` is `mute` and `doublePress` `none` until chosen, as on the desktop (the same `HeadsetPress` values and defaults,
-`sidevoice-shared-headset`). The choice is kept in the app's own files (`headset.json`, mobile `src/bridge.rs`, `headset`), the way the desktop keeps
+`sidevoice-shared-headset`), each within what the press can do on this phone (`actions`, from its media controls:
+`media_controls::presses`). **Android**: both presses, every action. **iOS**: `{press: "mute", doublePress: null, actions: {press:
+["mute"]}}`: in a call only the system's Press to Mute reaches the app (docs/MEDIA_CONTROLS.md), so the page shows the single press as a
+line and no double press; a choice an earlier build kept stays in the file, and acts again only where the presses can do it. The choice is kept in the app's own files (`headset.json`, mobile `src/bridge.rs`, `headset`), the way the desktop keeps
 its settings, and acts through the room's commands (`toggle-mute`, `one-turn`, `skip-reply`). It is delivered as the desktop's is: the single
 press is the system's play/pause (and the AirPods stem), the double press the system's next track (docs/MEDIA_CONTROLS.md).
 
 When the call in progress is the system's (CallKit, Telecom; the nightly developer option "Treat calls as system calls" decides what the next call is, and a call the system refused is the app's own, so the option changing mid-call changes nothing of this one), the system's call holds the headset: `get()` adds
 `headset.managedBySystem: true`, the system mutes whatever was chosen, the double press does nothing, and `setHeadset` is refused
 `bad_request`. The page shows the rows disabled with its own note. `subscribe` hears what the page set with `setHeadset` and the
-developer option's change. `headset.nonDefaultAddsCard: true` (iOS, where the Live Activity shows the call) says that choosing anything but the defaults adds a playback card to the lock screen, because the chosen actions arrive through Now Playing's remote commands; the page says so. The command behind it: `global_shortcuts {action: "get"}` or `{action: "headset", headset}`.
+developer option's change. `headset.nonDefaultAddsCard: true` was reported by iOS builds that showed Now Playing beside the Live Activity (a choice other than the defaults added a playback card); no build reports it now, and the page still says so for one that does. The command behind it: `global_shortcuts {action: "get"}` or `{action: "headset", headset}`.
 
 ## The call controls settings
 
