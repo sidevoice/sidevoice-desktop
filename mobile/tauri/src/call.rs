@@ -39,10 +39,13 @@ use sidevoice_shared_tauri::platform::media_controls::{self, CallState};
 use tauri::{AppHandle, Manager};
 
 /// How the call uses the audio session (iOS; D-AUDIO-SESSION, sidevoice-voice's `SessionConfig`): play-and-record, the
-/// system's own processing (`Default`: the voice's echo cancellation is the app's), the loudspeaker rather than the
-/// receiver when nothing else is plugged in, and a Bluetooth hands-free headset allowed.
+/// voice-chat mode, the loudspeaker rather than the receiver when nothing else is plugged in, and a Bluetooth hands-free
+/// headset allowed. The mode is what makes iOS take the audio as a call: it prefers the Bluetooth hands-free route (HFP, a
+/// car's call) over A2DP "music". Activating it interrupts other apps' audio (no mix-with-others is declared). `Default`
+/// mode was the declaration when the car kept its music (desktop#465; not verified on a device). The voice's own echo
+/// cancellation is still the app's: this mode brings none to the audio unit the call opens.
 const CALL_AUDIO: SessionConfig = SessionConfig {
-    mode: SessionMode::Default,
+    mode: SessionMode::VoiceChat,
     speaker: true,
     bluetooth: true,
 };
@@ -1487,6 +1490,22 @@ mod tests {
     }
 
     #[test]
+    fn an_app_owned_call_activates_voice_chat_and_a_system_owned_one_waits() {
+        // What the room tells the phone at a call's start is `system_call(call_activates_audio(kind))`: the app's own call
+        // is no system's call, so the app activates the session (voice chat, `CALL_AUDIO`); CallKit's is activated by the
+        // system, and the app waits for it.
+        assert!(!call_activates_audio(false));
+        let own = SystemAudio::None.call(call_activates_audio(false));
+        assert_eq!(own.gate(false), Gate::Activate);
+        assert_eq!(CALL_AUDIO.mode, SessionMode::VoiceChat);
+        assert_eq!(SystemAudio::None.call(true).gate(false), Gate::Wait);
+        // A stale system's call (it ended, or the system refused it and it went on as the app's own) never keeps the app
+        // from activating its session.
+        assert_eq!(SystemAudio::Active.call(false).gate(false), Gate::Activate);
+        assert_eq!(SystemAudio::Held.call(false).gate(false), Gate::Activate);
+    }
+
+    #[test]
     fn the_audio_of_a_system_s_call_waits_until_the_system_makes_it_ready() {
         let starting = SystemAudio::None.call(true);
         assert_eq!(starting, SystemAudio::Pending);
@@ -1541,11 +1560,11 @@ mod tests {
     }
 
     #[test]
-    fn the_session_is_play_and_record_on_the_loudspeaker_with_bluetooth() {
+    fn the_session_is_play_and_record_in_voice_chat_on_the_loudspeaker_with_bluetooth() {
         assert_eq!(
             CALL_AUDIO,
             SessionConfig {
-                mode: SessionMode::Default,
+                mode: SessionMode::VoiceChat,
                 speaker: true,
                 bluetooth: true
             }

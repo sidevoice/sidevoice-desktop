@@ -576,7 +576,7 @@ define_class!(
 
         /// The system activated the call's audio session: the app's audio may start. The call is connected from the first.
         #[unsafe(method(provider:didActivateAudioSession:))]
-        fn did_activate(&self, provider: &CXProvider, _session: &AVAudioSession) {
+        fn did_activate(&self, provider: &CXProvider, session: &AVAudioSession) {
             let first = CALLKIT.with_borrow_mut(|kit| {
                 let call = kit.as_mut()?.call.as_mut()?;
                 let first = !call.connected;
@@ -587,7 +587,19 @@ define_class!(
                 // SAFETY: the call that runs.
                 unsafe { provider.reportOutgoingCallWithUUID_connectedAtDate(&uuid, None) };
             }
-            log::info!("call: CallKit activated the audio session");
+            // What the call's route is made of (desktop#459): the category, mode and options the system activated.
+            // SAFETY: plain property reads of the session CallKit handed over.
+            let (category, mode, options) = unsafe {
+                (
+                    session.category(),
+                    session.mode(),
+                    session.categoryOptions(),
+                )
+            };
+            log::info!(
+                "call: CallKit activated the audio session (category {category}, mode {mode}, options {:#x})",
+                options.0
+            );
             if let Some(events) = running() {
                 events(CallEvent::Audio { active: true });
             }
