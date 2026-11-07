@@ -45,7 +45,7 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.equal(typeof api.snapshot, "function");
     assert.equal(typeof api.run, "function");
     const host = api.host;
-    assert.deepEqual(Object.keys(host).sort(), ["build", "callSurface", "codeScanner", "engine", "microphone", "pairings", "presence", "reach", "shortcuts", "voice"]);
+    assert.deepEqual(Object.keys(host).sort(), ["build", "callSurface", "codeScanner", "cue", "engine", "microphone", "pairings", "presence", "reach", "shortcuts", "voice"]);
     assert.equal(host.callSurface.active(), true, "the app draws the call's surfaces");
     for (const fn of ["still", "forget"]) assert.equal(typeof host.callSurface[fn], "function", fn);
     assert.equal(JSON.stringify(host.presence), JSON.stringify({ media: "app" }));
@@ -56,6 +56,37 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.ok(Object.isFrozen(host));
   });
 }
+
+test("the phone's own cue is offered only where the app says it has a player, and plays what the page asks", async () => {
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const none = install("tauri://localhost");
+  await settled();
+  assert.equal(none.invoked.filter(([command]) => command === "cue").length, 1, "asked once");
+  assert.equal(JSON.stringify(none.invoked.find(([command]) => command === "cue")[1]), JSON.stringify({ action: "available" }));
+  assert.equal(none.api.host.cue, null, "no player: the page plays its cues itself");
+
+  live.plugin.cue = (args) => (args.action === "available" ? true : null);
+  try {
+    const { api, invoked } = install("tauri://localhost");
+    assert.equal(api.host.cue, null, "until the app answers");
+    await settled();
+    const { cue } = api.host;
+    assert.equal(typeof cue.start, "function");
+    assert.equal(typeof cue.stop, "function");
+    cue.start("thinking");
+    cue.stop("thinking");
+    await settled();
+    assert.equal(JSON.stringify(invoked.filter(([command]) => command === "cue").map(([, args]) => args)),
+      JSON.stringify([{ action: "available" }, { action: "start", name: "thinking" }, { action: "stop", name: "thinking" }]));
+  } finally { delete live.plugin.cue; }
+
+  live.plugin.cue = () => { throw new Error("no audio"); };
+  try {
+    const { api } = install("tauri://localhost");
+    await settled();
+    assert.equal(api.host.cue, null, "an app that fails to answer offers none");
+  } finally { delete live.plugin.cue; }
+});
 
 test("the phone's wording of the web's texts is offered per language, and only when it has any", () => {
   const tables = { en: { "devices.speakerFixed": "Change it from Control Center." }, es: { "devices.speakerFixed": "Cámbialo en el Centro de control." } };
@@ -92,9 +123,10 @@ test("the call is reported to the app, and the app's commands run on the room", 
   const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
   await settled();
   // Before the room is up: reported once, not ready, with the page's number (asked once).
-  assert.deepEqual(invoked.map(([command]) => command), ["call_page", "call_state"]);
-  assert.equal(invoked[1][1].page, 7);
-  assert.equal(invoked[1][1].snapshot.ready, false);
+  assert.deepEqual(invoked.map(([command]) => command).filter((command) => command !== "cue"), ["call_page", "call_state"]);
+  const [report] = invoked.filter(([command]) => command === "call_state");
+  assert.equal(report[1].page, 7);
+  assert.equal(report[1].snapshot.ready, false);
   let toggled = 0;
   win.sidevoiceActions = { toggleMic: () => { toggled++; } };
   win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic: { enabled: true }, callCard: { title: "Repo" } }), subscribe: () => () => {} } };

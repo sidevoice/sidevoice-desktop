@@ -204,6 +204,41 @@ fn global_shortcuts(
     }
 }
 
+/// `host.cue`'s one command (docs/BRIDGE.md -> "The cues"): `action` `available` (whether this phone plays the page's cues
+/// itself), or `start` and `stop` with the cue's `name`. The player belongs to the main thread.
+#[tauri::command]
+fn cue(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    name: Option<String>,
+) -> Result<bool, serde_json::Value> {
+    use platform::cue::{self, Cue};
+    let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
+    the_page(&app, &webview).map_err(|why| refusal(&why))?;
+    if action == "available" {
+        return Ok(cue::available());
+    }
+    let cue = name
+        .as_deref()
+        .and_then(Cue::named)
+        .ok_or_else(|| refusal("cue takes the name of a cue the app knows"))?;
+    let start = match action.as_str() {
+        "start" => true,
+        "stop" => false,
+        _ => return Err(refusal("cue takes available, start or stop")),
+    };
+    app.run_on_main_thread(move || {
+        if !start {
+            cue::stop(cue);
+        } else if let Err(error) = cue::start(cue) {
+            log::warn!("cue {cue:?} did not start: {error}");
+        }
+    })
+    .map_err(|error| refusal(&error.to_string()))?;
+    Ok(true)
+}
+
 /// The page's number (the host's page generation), asked once by the page's script when it loads (the app's own
 /// command): it sends it back with every report, so that a report of a page that has since been replaced, reaching the
 /// app late, is told from the current page's.
@@ -358,6 +393,7 @@ fn run_app() {
             call_state,
             call_still,
             call_forget,
+            cue,
             developer_options,
             global_shortcuts
         ])
