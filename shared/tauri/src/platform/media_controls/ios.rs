@@ -1,7 +1,11 @@
-//! The iOS body: the same MediaPlayer code as macOS (`apple.rs`): the call on the lock screen and in Control Center, its
-//! play/pause from there and from a headset. iOS takes the playback state from the app's audio session, so the app sets
-//! none. The AirPods mute gesture (iOS 17 and later): iOS mutes the app's input itself and posts
-//! `AVAudioApplicationInputMuteStateChangeNotification`, which the app observes to bring the call in step.
+//! The iOS body over the macOS code (`apple.rs`), with no Now Playing: during a call a Bluetooth headset is the call's
+//! hands-free (HFP), and its presses are call control, which iOS gives to CallKit and never to the remote-command center
+//! (desktop#464); Now Playing would only make the app look like a music source to a car (desktop#465). So what reaches the app
+//! is the AirPods / Beats mute gesture, "Press to Mute and Unmute" (iOS 17 and later): an app without CallKit opts in by
+//! observing `AVAudioApplicationInputMuteStateChangeNotification` (Apple, WWDC23 "Enhance your app's audio experience with
+//! AirPods"), which this app does once, at launch, for the process's life. iOS then mutes the app's input itself, plays its tone
+//! and posts the notification, which brings the call in step; the app's own mute goes the other way through `setInputMuted`.
+//! It is posted only while a record session is active (the call's play-and-record, voice chat: `mobile/tauri` `call.rs`).
 //!
 //! The app runs on iOS 15 and 16 too, where `AVAudioApplication` and its notification do not exist: the class is looked
 //! up at run time (`apple.rs` asks before anything here runs), and the notification's name and its key are read with
@@ -12,6 +16,7 @@ use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSNumber, NSOperationQueue, NSString};
+use sidevoice_shared_headset::HeadsetCapabilities;
 use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -24,6 +29,9 @@ pub(super) struct Native;
 
 impl Os for Native {
     const NATIVE: bool = true;
+
+    /// Only the system's mute: the single press is Press to Mute (AirPods, Beats), and no double press reaches the app.
+    const PRESSES: HeadsetCapabilities = HeadsetCapabilities::SYSTEM_MUTE;
 
     fn attach(app: &AppHandle, sink: CommandSink) {
         apple::attach::<Native>(app, sink)
@@ -59,9 +67,8 @@ unsafe impl Send for Observer {}
 static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
 
 impl apple::Os for Native {
-    /// The double press (AirPods, a headset) arrives as the next-track command, registered while the person has given it something
-    /// to do: the lock screen draws a next-track button for it, which nobody asked for until then.
-    const NEXT_TRACK_ON_DEMAND: bool = true;
+    /// Opted in at launch: the notification observed before any call's audio session is active.
+    const MUTE_GESTURE_FOR_LIFE: bool = true;
 
     fn listen_for_mute_gesture(app: &AppHandle) -> bool {
         let (Some(name), Some(key)) = (

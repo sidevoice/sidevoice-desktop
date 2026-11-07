@@ -100,7 +100,6 @@ mod tests {
             joined: true,
             mic_enabled: false,
             title: " Repo ".into(),
-            now_playing_off: false,
             double_press_wanted: false,
         };
         assert_eq!(session_state(&call), json!({"active": true, "playing": false, "title": "Repo", "next": false}));

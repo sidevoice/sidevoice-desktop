@@ -184,15 +184,11 @@ fn global_shortcuts(
     let refusal = |why: String| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(refusal)?;
     let system = headset::system_call(&app);
-    // A choice other than the defaults shows a playback card beside the call's own surface (iOS, with the Live Activity).
-    let adds_card = sidevoice_mobile_plugin::call_replaces_media_controls(false);
     match (action.as_str(), headset.as_ref()) {
-        ("get", None) => Ok(settings.status(system, adds_card)),
+        ("get", None) => Ok(settings.status(system)),
         ("headset", Some(change)) => {
-            let status = settings
-                .set(Some(change), system, adds_card)
-                .map_err(refusal)?;
-            // Now Playing follows whether the double press has an action (iOS), also within a call.
+            let status = settings.set(Some(change), system).map_err(refusal)?;
+            // The media controls follow whether the double press has an action (Android's skip-to-next), also within a call.
             if let Some(room) = app.try_state::<call::RoomCall>() {
                 room.headset_changed();
             }
@@ -368,7 +364,6 @@ impl From<CallReport> for CallState {
             joined: report.joined,
             mic_enabled: report.mic_enabled,
             title: report.title,
-            now_playing_off: false,
             double_press_wanted: false,
         }
     }

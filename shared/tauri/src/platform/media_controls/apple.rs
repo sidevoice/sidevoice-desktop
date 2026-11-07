@@ -1,19 +1,18 @@
 //! Headset buttons and Now Playing during a call, the same MediaPlayer and AVFAudio code on macOS and iOS
 //! (docs/MACOS.md → "Headset buttons", docs/MEDIA_CONTROLS.md). `macos.rs` and `ios.rs` are the two OS bodies over it.
 //!
-//! - **Primary, any headset** (Bluetooth or wired): the play/pause button reaches the system as a media command
-//!   (AVRCP for Bluetooth), which it gives to the "Now Playing" app. During a call this app is that app
+//! - **Primary, any headset** (Bluetooth or wired), macOS only (`Os::NOW_PLAYING`): the play/pause button reaches the system
+//!   as a media command (AVRCP for Bluetooth), which it gives to the "Now Playing" app. During a call this app is that app
 //!   (`MPNowPlayingInfoCenter`, with `playbackState` set as Apple requires on macOS) and maps the commands to the
-//!   microphone: play → unmute, pause → toggle (a click may arrive as pause while muted), toggle → toggle. On iOS the
-//!   same commands come from the lock screen and Control Center, where the call is shown, and the app is the Now Playing
-//!   app while its audio session is active (the mobile app's host activates it).
-//! - **Double press**: a headset's or AirPods' double press of play/pause arrives as `nextTrackCommand`, registered on macOS
-//!   (`Os::NEXT_TRACK`) and on iOS while the person has given the double press something to do (`Os::NEXT_TRACK_ON_DEMAND`: its
-//!   lock screen draws a next-track button for it), under the same condition as the single press: while the app shows the call as
-//!   Now Playing.
-//!   The app sends it as `MediaCommand::NextTrack`; a keyboard's next-track key arrives the same way.
-//! - **Extra, AirPods / Beats** (macOS 14+, iOS 17+): the stem-press mute gesture arrives through
-//!   `AVAudioApplication.setInputMuteStateChangeHandler`; the app keeps that state in step with its own mute.
+//!   microphone: play → unmute, pause → toggle (a click may arrive as pause while muted), toggle → toggle. Not on iOS, where a
+//!   headset in a call is its hands-free and its presses are call control, which never reach the remote-command center
+//!   (`ios.rs`, desktop#464).
+//! - **Double press**, with Now Playing: a headset's or AirPods' double press of play/pause arrives as `nextTrackCommand`
+//!   (`Os::NEXT_TRACK`), while the app shows the call as Now Playing. The app sends it as `MediaCommand::NextTrack`; a keyboard's
+//!   next-track key arrives the same way.
+//! - **AirPods / Beats** (macOS 14+, iOS 17+): the stem-press mute gesture ("Press to Mute and Unmute"), heard through
+//!   `AVAudioApplication` (macOS: a handler, while a call is on; iOS: a notification, opted in at launch,
+//!   `Os::MUTE_GESTURE_FOR_LIFE`); the app keeps that state in step with its own mute.
 //! - No CallKit: neither needs it.
 //!
 //! Every event that arrives is recorded in the app log (`headset …` lines), so which buttons of a headset reach the
@@ -29,10 +28,10 @@ use objc2_media_player::{
     MPRemoteCommand, MPRemoteCommandCenter, MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
 };
 use std::ptr::NonNull;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::headset::{
-    media_dispatch, mute_gesture_action, next_track_registered, registered_commands, Changed, Dispatch, ALL_COMMANDS,
+    gesture_step, is_echo, media_dispatch, mute_gesture_action, registered_commands, Changed, Dispatch, ALL_COMMANDS,
 };
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
@@ -42,17 +41,20 @@ use tauri::{AppHandle, Manager};
 /// does by default; `macos.rs` and `ios.rs` implement it for their `Native`.
 pub(super) trait Os {
     /// Says whether the app plays (`MPNowPlayingInfoCenter.playbackState`). Only macOS reads it, and requires it whenever
-    /// playback starts or stops; iOS takes it from the app's audio session.
+    /// playback starts or stops.
     fn set_playback_state(_center: &MPNowPlayingInfoCenter, _state: MPNowPlayingPlaybackState) {}
+
+    /// Whether the app shows a call as Now Playing, with the remote commands' handlers: where a headset's play/pause reaches the
+    /// remote-command center during a call (macOS). False by default: nothing is registered, and everything is let go.
+    const NOW_PLAYING: bool = false;
 
     /// Whether the next-track command is registered too, as a matter of course: a headset's or AirPods' double press of
     /// play/pause arrives as it (macOS). False by default.
     const NEXT_TRACK: bool = false;
 
-    /// Whether it is registered, when not [`Os::NEXT_TRACK`], while the person has given the double press something to do
-    /// (`CallState::double_press_wanted`) and not otherwise: iOS draws a next-track button on the lock screen for it, which
-    /// nobody asked for until then. False by default.
-    const NEXT_TRACK_ON_DEMAND: bool = false;
+    /// Whether the mute gesture is heard from launch for the process's life (iOS: observing the notification is the opt-in, done
+    /// before any call's audio session is active), rather than only while a call is on. False by default.
+    const MUTE_GESTURE_FOR_LIFE: bool = false;
 
     /// Starts hearing the AirPods / Beats mute gesture, each one handed to [`heard`]; whether it does. Called on the main
     /// thread, with `AVAudioApplication` present. None by default.
@@ -146,30 +148,31 @@ pub fn update<N: Os>(app: &AppHandle, snapshot: &CallState) {
     let Some(headset) = app.try_state::<Headset>() else { return };
     *headset.call.lock().unwrap() = snapshot.clone();
     let active = headset.active();
-    let now_playing = active && !snapshot.now_playing_off;
+    let now_playing = active && N::NOW_PLAYING;
     let title = snapshot.title.trim().to_owned();
     let (mic, in_call) = (snapshot.mic_enabled, snapshot.ready && snapshot.joined);
-    let next = next_track_registered(N::NEXT_TRACK, N::NEXT_TRACK_ON_DEMAND, snapshot.double_press_wanted);
+    let next = N::NEXT_TRACK;
     let app2 = app.clone();
     let _ =
         app.run_on_main_thread(move || apply::<N>(&app2, Applied { active, now_playing, in_call, mic, next }, &title));
 }
 
-/// Whether the gesture handler is installed now (only during a call).
+/// Whether the gesture is heard now (during a call; from launch where [`Os::MUTE_GESTURE_FOR_LIFE`]).
 static GESTURE_ON: Mutex<bool> = Mutex::new(false);
+/// Whether a call holds the system's input mute in step with its own (so its end gives it back unmuted).
+static GESTURE_HELD: Mutex<bool> = Mutex::new(false);
 /// The state the app itself last set with `setInputMuted`, and when: the system calls the handler for that
 /// too, and such an echo is neither a gesture to record nor one to act on.
 static SET_BY_APP: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
 
+/// Whether `muted` is the echo of the app's own last `setInputMuted` ([`is_echo`]); an echo is taken once.
 fn echo(muted: bool) -> bool {
     let mut last = SET_BY_APP.lock().unwrap();
-    match *last {
-        Some((value, at)) if value == muted && at.elapsed() < Duration::from_secs(3) => {
-            *last = None;
-            true
-        }
-        _ => false,
+    let echoed = is_echo(last.map(|(value, at)| (value, at.elapsed())), muted);
+    if echoed {
+        *last = None;
     }
+    echoed
 }
 
 fn set_muted(shared: &AVAudioApplication, muted: bool) {
@@ -181,7 +184,7 @@ fn set_muted(shared: &AVAudioApplication, muted: bool) {
 }
 
 /// The commands the app answers ([`registered_commands`]: the single press's, and the double press's `nextTrackCommand` where
-/// it is registered), each with its name.
+/// it is registered, [`Os::NEXT_TRACK`]), each with its name.
 fn commands(next: bool) -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
     registered_commands(next).into_iter().map(|name| (command_named(name), name)).collect()
 }
@@ -237,9 +240,15 @@ static REGISTERED: Mutex<bool> = Mutex::new(false);
 /// What the last [`apply`] had: whether a call was active, and whether Now Playing showed it. None before the first.
 static LAST: Mutex<Option<(bool, bool)>> = Mutex::new(None);
 
-/// At launch: no handlers yet (see [`REGISTERED`]); they are registered when a call is shown.
-fn setup<N: Os>(_app: &AppHandle) {
+/// At launch: no handlers yet (see [`REGISTERED`]); they are registered when a call is shown. Where the mute gesture is heard
+/// for the process's life, it starts now; the app log says whether it did.
+fn setup<N: Os>(app: &AppHandle) {
     release::<N>();
+    if N::MUTE_GESTURE_FOR_LIFE {
+        let on = gesture_api() && N::listen_for_mute_gesture(app);
+        *GESTURE_ON.lock().unwrap() = on;
+        log::info!("headset: press to mute {}", if on { "opted in" } else { "unavailable (needs iOS 17)" });
+    }
 }
 
 /// What Now Playing holds now, for the app log (`call: now playing …`): `released`, whether the app's side holds nothing
@@ -328,7 +337,7 @@ fn release<N: Os>() {
 }
 
 /// What [`apply`] shows: whether a call is active, whether Now Playing shows it, whether it is joined, whether the microphone
-/// is open, and whether the double press's command is registered ([`next_track_registered`]).
+/// is open, and whether the double press's command is registered ([`Os::NEXT_TRACK`]).
 struct Applied {
     active: bool,
     now_playing: bool,
@@ -340,7 +349,7 @@ struct Applied {
 fn apply<N: Os>(app: &AppHandle, shown: Applied, title: &str) {
     let Applied { active, now_playing, in_call, mic: mic_enabled, next } = shown;
     // Let go of Now Playing whenever it is not to show the call and something changed: a call starting (the report that
-    // starts the call's service), Now Playing giving way (the Live Activity runs), and a call ending. What was there at a
+    // starts the call's service; on iOS, every call, which shows no Now Playing) and a call ending. What was there at a
     // call's start, and what is left after, go to the app log.
     let last = LAST.lock().unwrap().replace((active, now_playing));
     let was_active = matches!(last, Some((true, _)));
@@ -409,8 +418,9 @@ fn apply<N: Os>(app: &AppHandle, shown: Applied, title: &str) {
     }
 }
 
-/// AirPods / Beats mute gesture (macOS 14+, iOS 17+, where `AVAudioApplication` exists): heard while active, and the
-/// system's input mute kept in step with the microphone.
+/// AirPods / Beats mute gesture (macOS 14+, iOS 17+, where `AVAudioApplication` exists): heard while active (or for the process's
+/// life, [`Os::MUTE_GESTURE_FOR_LIFE`]), the system's input mute kept in step with the microphone during a call and given back
+/// unmuted at its end ([`gesture_step`]).
 fn gesture<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool) {
     if !gesture_api() {
         return;
@@ -419,13 +429,19 @@ fn gesture<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: boo
     unsafe {
         let shared = AVAudioApplication::sharedInstance();
         let mut on = GESTURE_ON.lock().unwrap();
-        if active && !*on {
+        let mut held = GESTURE_HELD.lock().unwrap();
+        let step = gesture_step(N::MUTE_GESTURE_FOR_LIFE, *on, active, *held);
+        if step.listen {
             *on = N::listen_for_mute_gesture(app);
-        } else if !active && *on {
+        }
+        if step.stop {
             N::stop_listening_for_mute_gesture();
-            set_muted(&shared, false);
             *on = false;
         }
+        if step.give_back {
+            set_muted(&shared, false);
+        }
+        *held = active && *on;
         if *on && in_call && shared.isInputMuted() == mic_enabled {
             // Keep the system's (and the AirPods') idea of "muted" in step with the call's.
             set_muted(&shared, !mic_enabled);

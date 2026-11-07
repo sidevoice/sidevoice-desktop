@@ -4,6 +4,7 @@
 //! `android/…/MediaControlsPlugin.kt`), which the call's notification shows. Windows and Linux leave ownership with
 //! the page's Media Session, including while native voice runs.
 
+use sidevoice_shared_headset::HeadsetCapabilities;
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -25,10 +26,8 @@ pub struct CallState {
     pub mic_enabled: bool,
     /// The conversation being looked at: Now Playing's title.
     pub title: String,
-    /// Another surface shows the call (iOS: the call's Live Activity): no Now Playing and no remote commands, so that the
-    /// system draws no second card. The AirPods mute gesture does not depend on them and follows the call all the same.
-    pub now_playing_off: bool,
-    /// The double press has an action the person chose: iOS registers the next-track command only then (macOS always does).
+    /// The double press has an action the person chose: Android's media session advertises skip-to-next only then (macOS
+    /// always registers the next-track command).
     pub double_press_wanted: bool,
 }
 
@@ -49,6 +48,10 @@ trait Os {
     /// Whether the app owns media keys on this OS.
     const NATIVE: bool = false;
 
+    /// What a headset's presses can reach the app with during a call: both presses, each with any action, unless the OS
+    /// delivers less.
+    const PRESSES: HeadsetCapabilities = HeadsetCapabilities::EVERY;
+
     /// Install process-lifetime callbacks. Unavailable hosts install nothing.
     fn attach(_app: &AppHandle, _sink: CommandSink) {}
 
@@ -60,6 +63,12 @@ trait Os {
 /// and its Now Playing element.
 pub fn available() -> bool {
     Native::NATIVE
+}
+
+/// What a headset's presses can do here during a call (`HeadsetStatus.actions`, docs/BRIDGE.md → "The shortcuts"): the app's
+/// choices for a press are only these, and a press that does not reach the app has no row.
+pub fn presses() -> HeadsetCapabilities {
+    Native::PRESSES
 }
 
 /// Installs process-lifetime callbacks once at startup. Unavailable hosts install nothing.

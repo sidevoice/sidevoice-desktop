@@ -1,4 +1,5 @@
-node_modules/
+# node_modules, also as a link: a worktree often links it in, and a trailing slash would not match the link
+node_modules
 /target/
 desktop/tauri/gen/schemas/
 # Held by desktop/tauri/build.rs while it regenerates the command permissions.
