@@ -83,7 +83,7 @@ Windows' `TDN_CREATED`, GTK's map event, and a macOS block scheduled in `NSModal
 macOS activates the app before opening the alert, skips requests already cancelled before showing, and aborts
 a modal session whose startup hook arrives late.
 Linux cancels before constructing a widget if GTK is not initialized on the UI thread or no display is available.
-The existing eight-language reset/uninstall text is kept in the confirmation module, unchanged, with English fallback.
+The existing eleven-language reset/uninstall text is kept in the confirmation module, unchanged, with English fallback.
 No general dialog or filesystem permission is granted to the webview. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
 model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
 native code. It first requires a top-level integer `safe_uninstall` of at least `1` from the installed
@@ -836,7 +836,7 @@ interface MicrophonePermission {
   the button that opens the system's settings, named as that system names them ("Open Windows Settings"), present
   exactly where `openSettings()` is. It answers at once: the script holds the words of every language the app has,
   worded by Rust from the native catalogue (`desktop/core/i18n/<language>.json`, `microphone.help_<os>` and
-  `microphone.open_settings*`; which keys this OS uses is `platform::host`'s). The catalogue has the eight languages the web offers, so a
+  `microphone.open_settings*`; which keys this OS uses is `platform::host`'s). The catalogue has the eleven languages the web offers, so a
   page in a language outside those shows these texts in English: the app translates its own help, the web no longer does.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or Settings does not open.

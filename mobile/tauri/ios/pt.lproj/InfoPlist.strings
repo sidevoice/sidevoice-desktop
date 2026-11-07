@@ -1,0 +1,8 @@
+/* The microphone permission prompt. */
+"NSMicrophoneUsageDescription" = "O Sidevoice ouve pelo microfone para que você possa conversar com seu agente.";
+
+/* The local network permission prompt. */
+"NSLocalNetworkUsageDescription" = "O Sidevoice se conecta ao seu computador pareado pela rede local.";
+
+/* The camera permission prompt (scanning the pairing code). */
+"NSCameraUsageDescription" = "O Sidevoice usa a câmera para ler o código de pareamento exibido pelo seu computador.";

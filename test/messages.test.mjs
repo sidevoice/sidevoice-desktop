@@ -11,6 +11,9 @@ const web = readdirSync(assets).filter((name) => name.endsWith(".js")).map((name
 const count = (key) => web.split(`${JSON.stringify(key)}:`).length - 1;
 
 const LANGUAGES = ["en", "de", "es", "fr", "it", "ja", "pl", "zh-Hans"];
+// pt-BR, ko and hi: every table has them (the loop below), but the pinned web has their catalogues only from the release
+// that adds them, so a pin from before it is not asked for them (bumping web.pin.json past it turns this on by itself).
+const NEW_LANGUAGES = ["pt-BR", "ko", "hi"];
 const TABLES = ["shared/tauri/i18n", "mobile/tauri/i18n/ios", "mobile/tauri/i18n/android"];
 const table = (dir, language) => JSON.parse(readFileSync(new URL(`../${dir}/${language}.json`, import.meta.url), "utf8"));
 
@@ -22,11 +25,13 @@ for (const dir of TABLES) {
   test(`${dir}: every language is there with English's keys, each key one the pinned web has, and each a text`, () => {
     const english = table(dir, "en");
     const catalogues = count("devices.mic");
-    for (const language of LANGUAGES) {
+    const pinned = catalogues >= LANGUAGES.length + NEW_LANGUAGES.length;
+    for (const language of [...LANGUAGES, ...NEW_LANGUAGES]) {
       const texts = table(dir, language);
       assert.deepEqual(Object.keys(texts).sort(), Object.keys(english).sort(), language);
       for (const [key, text] of Object.entries(texts)) {
         assert.ok(typeof text === "string" && text !== "", `${language}: ${key}`);
+        if (NEW_LANGUAGES.includes(language) && !pinned) continue;
         assert.equal(count(key), catalogues, `${dir}/${language}.json: "${key}" is not a key of the pinned web's English catalogue (stale?)`);
       }
     }
