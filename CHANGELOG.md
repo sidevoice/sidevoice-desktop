@@ -1,5 +1,99 @@
 # Changelog
 
+## [0.4.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.3.0...v0.4.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **workspace:** shared, desktop and mobile, each with core and tauri ([#367](https://github.com/sidevoice/sidevoice-desktop/issues/367))
+* **platform:** host kind decided at the crate root ([#359](https://github.com/sidevoice/sidevoice-desktop/issues/359))
+* **bridge:** platform content behind the host, no os ([#350](https://github.com/sidevoice/sidevoice-desktop/issues/350))
+* **bridge:** inject window.__sidevoiceHost and pin the web release ([#337](https://github.com/sidevoice/sidevoice-desktop/issues/337))
+* **app:** identifier ai.sidevoice.desktop ([#316](https://github.com/sidevoice/sidevoice-desktop/issues/316))
+
+### Features
+
+* **bridge:** inject window.__sidevoiceHost and pin the web release ([#337](https://github.com/sidevoice/sidevoice-desktop/issues/337)) ([fa61e89](https://github.com/sidevoice/sidevoice-desktop/commit/fa61e89276e9fa06e327c2fc7b599df06a7cdf60))
+* **bridge:** let the apps overlay the web's texts with their own wording ([#373](https://github.com/sidevoice/sidevoice-desktop/issues/373)) ([bcc43e4](https://github.com/sidevoice/sidevoice-desktop/commit/bcc43e4dfea8c9c98d1f9c2b4ef8ac85693e4d26))
+* **call-controls:** tell the card its room to the work area's sides ([#454](https://github.com/sidevoice/sidevoice-desktop/issues/454)) ([6102dae](https://github.com/sidevoice/sidevoice-desktop/commit/6102daed895248a7005c1b51f5b821b48b54a308))
+* **desktop:** global shortcuts: host.shortcuts, press and release, single keys and Fn on macOS ([#448](https://github.com/sidevoice/sidevoice-desktop/issues/448)) ([a879310](https://github.com/sidevoice/sidevoice-desktop/commit/a879310feff928db469140cf07b816163d122b69))
+* **media:** lower or pause other apps' media while the microphone is open ([#408](https://github.com/sidevoice/sidevoice-desktop/issues/408)) ([683ec64](https://github.com/sidevoice/sidevoice-desktop/commit/683ec6489ca677a5cc75bb39030834c3d4c0b392))
+* **mobile/android:** a foreground service keeps the call's process ([#330](https://github.com/sidevoice/sidevoice-desktop/issues/330)) ([e5fe792](https://github.com/sidevoice/sidevoice-desktop/commit/e5fe7927e48546cc934df763f870a258aa63f492))
+* **mobile/android:** the call notification as Sidevoice's own card ([#400](https://github.com/sidevoice/sidevoice-desktop/issues/400)) ([3ee52ee](https://github.com/sidevoice/sidevoice-desktop/commit/3ee52eebf4230d3b11da144519ee4aeb94a15085))
+* **mobile/ios:** host.cue, the app plays the page's thinking sound in the call's audio session (web[#439](https://github.com/sidevoice/sidevoice-desktop/issues/439)) ([#468](https://github.com/sidevoice/sidevoice-desktop/issues/468)) ([5e6aa24](https://github.com/sidevoice/sidevoice-desktop/commit/5e6aa2413f9e8bc96747cf655f3b8009ca075579))
+* **mobile/ios:** privacy manifest and export-compliance declaration ([#335](https://github.com/sidevoice/sidevoice-desktop/issues/335)) ([ebefecf](https://github.com/sidevoice/sidevoice-desktop/commit/ebefecf93808a1615cc64b9abd24e364d0c967ce))
+* **mobile/ios:** the call's Live Activity and Dynamic Island ([#399](https://github.com/sidevoice/sidevoice-desktop/issues/399)) ([831f010](https://github.com/sidevoice/sidevoice-desktop/commit/831f0103fb9e637a5970d874b801d8e5c1f3f64d))
+* **mobile/ios:** Whisper on the GPU through the engine's whisper.cpp on Metal ([#383](https://github.com/sidevoice/sidevoice-desktop/issues/383)) ([d6d7842](https://github.com/sidevoice/sidevoice-desktop/commit/d6d78420409e2203d3ed7cc8e47fbedd445d039c))
+* **mobile:** CallKit and Core-Telecom off by default, behind a nightly developer option ([#397](https://github.com/sidevoice/sidevoice-desktop/issues/397)) ([9471b7a](https://github.com/sidevoice/sidevoice-desktop/commit/9471b7a70b0c9ef93b01efc555e3d06d11f7f525))
+* **mobile:** carry the call surface across the bridge ([#398](https://github.com/sidevoice/sidevoice-desktop/issues/398)) ([bb7d6df](https://github.com/sidevoice/sidevoice-desktop/commit/bb7d6df5abe695cdafab8aeeef7b5e9b382190d7))
+* **mobile:** keep the screen on while a model download runs ([#362](https://github.com/sidevoice/sidevoice-desktop/issues/362)) ([8ba39e7](https://github.com/sidevoice/sidevoice-desktop/commit/8ba39e7d4d5f0628ffce67e4f1225d01e787eb58))
+* **mobile:** pause the conversation during audio interruptions ([#358](https://github.com/sidevoice/sidevoice-desktop/issues/358)) ([f4687dd](https://github.com/sidevoice/sidevoice-desktop/commit/f4687dd4a2dcac6a80595375de54bf541cf8c3ef))
+* **mobile:** scan the pairing QR code ([#407](https://github.com/sidevoice/sidevoice-desktop/issues/407)) ([cdff626](https://github.com/sidevoice/sidevoice-desktop/commit/cdff62675afa3f3960d6dccb524654b6428d23ea))
+* **mobile:** ship Android armeabi-v7a in a universal APK ([#375](https://github.com/sidevoice/sidevoice-desktop/issues/375)) ([3894e53](https://github.com/sidevoice/sidevoice-desktop/commit/3894e53c19aa7c11c544472bf21357da3196a726))
+* **mobile:** the app's members through the shared plugin ([#357](https://github.com/sidevoice/sidevoice-desktop/issues/357)) ([38926d7](https://github.com/sidevoice/sidevoice-desktop/commit/38926d7f806629d19a0ac0041edf32587d058371))
+* **mobile:** the call is a phone call (CallKit, Core-Telecom) ([#369](https://github.com/sidevoice/sidevoice-desktop/issues/369)) ([6bfe0db](https://github.com/sidevoice/sidevoice-desktop/commit/6bfe0db4ea6d364a3687af925b69bf66808ffbb1))
+* **mobile:** the headset's single and double press on iOS and Android, through host.shortcuts ([#460](https://github.com/sidevoice/sidevoice-desktop/issues/460)) ([a46b399](https://github.com/sidevoice/sidevoice-desktop/commit/a46b3998c0dabf7e196bd00803273c034277bd4a))
+* **mobile:** the mobile app crate ([#327](https://github.com/sidevoice/sidevoice-desktop/issues/327)) ([34cb240](https://github.com/sidevoice/sidevoice-desktop/commit/34cb240006d317426c60964b575ce26967821754))
+* **mobile:** the page learns the phone's text size on Android ([#458](https://github.com/sidevoice/sidevoice-desktop/issues/458)) ([da4d63f](https://github.com/sidevoice/sidevoice-desktop/commit/da4d63fbb366d27655641a874f2482e231a08575))
+* **platform:** iOS and Android headset buttons and lock-screen controls ([#363](https://github.com/sidevoice/sidevoice-desktop/issues/363)) ([0ee49b7](https://github.com/sidevoice/sidevoice-desktop/commit/0ee49b751793c4acec5f8101f5d545855fe1c82a))
+* **platform:** iOS and Android microphone permission ([#333](https://github.com/sidevoice/sidevoice-desktop/issues/333)) ([d21a80c](https://github.com/sidevoice/sidevoice-desktop/commit/d21a80c7d716b8937024dd7a3c7043014cca20ca))
+* **platform:** iOS and Android provider keys ([#332](https://github.com/sidevoice/sidevoice-desktop/issues/332)) ([c343478](https://github.com/sidevoice/sidevoice-desktop/commit/c3434788f03f1328c35abe2e74043460dcb7c42b))
+* **shortcuts:** defaults as a state, hold/tap/double on one key, refusals that name the holder, a bounded record ([#456](https://github.com/sidevoice/sidevoice-desktop/issues/456)) ([4c88dc7](https://github.com/sidevoice/sidevoice-desktop/commit/4c88dc7b5a1ff4173728b82a1bcd1e9bd4627312))
+
+
+### Bug Fixes
+
+* **app-tauri:** engine commands ask who is calling, like the voice commands ([#344](https://github.com/sidevoice/sidevoice-desktop/issues/344)) ([0fceddd](https://github.com/sidevoice/sidevoice-desktop/commit/0fceddd3407cd5f72ee6a887a84b671f6e735c15))
+* **app:** carry an install's data over from dev.sidevoice.desktop ([#341](https://github.com/sidevoice/sidevoice-desktop/issues/341)) ([b1f85e3](https://github.com/sidevoice/sidevoice-desktop/commit/b1f85e394e2d7abba902bf7f7753bcb9c68077d7))
+* **ios:** sign the Live Activity extension with its App Group ([#439](https://github.com/sidevoice/sidevoice-desktop/issues/439)) ([77a0794](https://github.com/sidevoice/sidevoice-desktop/commit/77a07949286df1ce0e2d9df0623125dd09e7bd2b))
+* **live-activity:** your voice's bars in the brand purple ([#452](https://github.com/sidevoice/sidevoice-desktop/issues/452)) ([b7ce23e](https://github.com/sidevoice/sidevoice-desktop/commit/b7ce23e63120e1ba6197c42e6f24ebead9d1bb4b))
+* **local-host:** find the connector's ai.sidevoice.* jobs ([#317](https://github.com/sidevoice/sidevoice-desktop/issues/317)) ([a15d3d3](https://github.com/sidevoice/sidevoice-desktop/commit/a15d3d378aae4815fc3c8a5338a47b869525ea3e))
+* **media-duck:** offer a restart when System Audio Recording is allowed but needs one ([#446](https://github.com/sidevoice/sidevoice-desktop/issues/446)) ([d2fd8df](https://github.com/sidevoice/sidevoice-desktop/commit/d2fd8df625a3b7be9f1d757ce45a92e42f1a06c5))
+* **mobile/ios:** declare the audio session again after a media services reset ([#389](https://github.com/sidevoice/sidevoice-desktop/issues/389)) ([220448f](https://github.com/sidevoice/sidevoice-desktop/commit/220448fa07144d4c4cf8b9438f615db5110a20cd))
+* **mobile/ios:** every cargo of an app build links the engine's checked libraries ([#364](https://github.com/sidevoice/sidevoice-desktop/issues/364)) ([a056240](https://github.com/sidevoice/sidevoice-desktop/commit/a056240b7c8aae412b5a617bb129bc5094427f58))
+* **mobile/ios:** every step of a creature still in the phone's log, and the signed App Group checked ([#434](https://github.com/sidevoice/sidevoice-desktop/issues/434)) ([075b266](https://github.com/sidevoice/sidevoice-desktop/commit/075b2663c46b16a1080c2c09a0ee859721478ead))
+* **mobile/ios:** list src/panics.rs in the committed iOS project ([#418](https://github.com/sidevoice/sidevoice-desktop/issues/418)) ([76ace0e](https://github.com/sidevoice/sidevoice-desktop/commit/76ace0efeac06c4d223f2251fca9c21b1f77b65d))
+* **mobile/ios:** Live Activity bars and layout match the design ([#412](https://github.com/sidevoice/sidevoice-desktop/issues/412)) ([889d60d](https://github.com/sidevoice/sidevoice-desktop/commit/889d60d9c40e9f1b77784bcddc647ae0b0ad2168))
+* **mobile/ios:** Live Activity follows the call, and its buttons work while locked ([#410](https://github.com/sidevoice/sidevoice-desktop/issues/410)) ([014d150](https://github.com/sidevoice/sidevoice-desktop/commit/014d1501729853a20eb21e1746a4080ec1b3735b))
+* **mobile/ios:** Live Activity text in pages, new bars and placeholders ([#428](https://github.com/sidevoice/sidevoice-desktop/issues/428)) ([51ac0d8](https://github.com/sidevoice/sidevoice-desktop/commit/51ac0d8cd7a87bb7b9c87f71c056e87908558d38))
+* **mobile/ios:** log the headset state when it changes, not on every report ([#415](https://github.com/sidevoice/sidevoice-desktop/issues/415)) ([5bc55b1](https://github.com/sidevoice/sidevoice-desktop/commit/5bc55b18f7cf4fd3ce03d15427bd07ba4c2b23d0))
+* **mobile/ios:** mute works from the locked Lock Screen ([#430](https://github.com/sidevoice/sidevoice-desktop/issues/430)) ([86c9f5e](https://github.com/sidevoice/sidevoice-desktop/commit/86c9f5e0e4814953914bcf4fac720806f5e5898d))
+* **mobile/ios:** mute, hang up and cancel work from the Lock Screen ([#425](https://github.com/sidevoice/sidevoice-desktop/issues/425)) ([a97e206](https://github.com/sidevoice/sidevoice-desktop/commit/a97e20664971f9e2be1ae33313c0747b2b7262fe))
+* **mobile/ios:** never show Now Playing at a call's start, and let go of every remote command ([#433](https://github.com/sidevoice/sidevoice-desktop/issues/433)) ([7bf2aeb](https://github.com/sidevoice/sidevoice-desktop/commit/7bf2aebaafdcc72d41da1893b0b7818d2a580f3f))
+* **mobile/ios:** no empty Now Playing card beside the call's Live Activity ([#427](https://github.com/sidevoice/sidevoice-desktop/issues/427)) ([5f4134b](https://github.com/sidevoice/sidevoice-desktop/commit/5f4134bfd89d642660fbf5480c5fb708b14a16e2))
+* **mobile/ios:** no Now Playing card beside the call's Live Activity ([#413](https://github.com/sidevoice/sidevoice-desktop/issues/413)) ([2060b16](https://github.com/sidevoice/sidevoice-desktop/commit/2060b1615cae5dd242365bd0536590c31aa04ca5))
+* **mobile/ios:** Press to Mute without CallKit, no Now Playing in calls, and the headset reports what each press can do ([#469](https://github.com/sidevoice/sidevoice-desktop/issues/469)) ([bf44b85](https://github.com/sidevoice/sidevoice-desktop/commit/bf44b859cc2068244ad0be070f1d400471ea011a))
+* **mobile/ios:** say why a creature's still is not drawn ([#414](https://github.com/sidevoice/sidevoice-desktop/issues/414)) ([39c409f](https://github.com/sidevoice/sidevoice-desktop/commit/39c409f30bcea3bdf50debcf19b71204a5b59fe4))
+* **mobile/ios:** the app's own call declares the voice-chat session (car call) ([#466](https://github.com/sidevoice/sidevoice-desktop/issues/466)) ([9335dff](https://github.com/sidevoice/sidevoice-desktop/commit/9335dffbfd73aed26c9e59ab38232184a2dcbb07))
+* **mobile/ios:** the creature in the compact island, the slashed tray, transcribing breathes ([#444](https://github.com/sidevoice/sidevoice-desktop/issues/444)) ([bd67c1b](https://github.com/sidevoice/sidevoice-desktop/commit/bd67c1b8eb161beb7cf7975ac0e0d2979b4784bb))
+* **mobile/ios:** the expanded island's insets are ours alone and it fits 144 pt ([#431](https://github.com/sidevoice/sidevoice-desktop/issues/431)) ([8cc9d8e](https://github.com/sidevoice/sidevoice-desktop/commit/8cc9d8e24649a7b3117756b7866542fac1f675ae))
+* **mobile/ios:** the Live Activity buttons register on the device ([#426](https://github.com/sidevoice/sidevoice-desktop/issues/426)) ([8872e51](https://github.com/sidevoice/sidevoice-desktop/commit/8872e51e2261df5aee390ff0afd755e6491b8104))
+* **mobile/ios:** the Live Activity's skip icon matches the app's ([#422](https://github.com/sidevoice/sidevoice-desktop/issues/422)) ([f047004](https://github.com/sidevoice/sidevoice-desktop/commit/f047004098ea74560a7a879a5ffddce4cb15fc57))
+* **mobile:** CallKit takes the call (the voip background mode) ([#374](https://github.com/sidevoice/sidevoice-desktop/issues/374)) ([72814b3](https://github.com/sidevoice/sidevoice-desktop/commit/72814b3aca41450066c1dc5a0f9ff9eed050b924))
+* **mobile:** close the Live Activity: your words alone, the voice pill, full chunks, the state's action ([#441](https://github.com/sidevoice/sidevoice-desktop/issues/441)) ([c747fe8](https://github.com/sidevoice/sidevoice-desktop/commit/c747fe8b60a2b9caa74dc8966e0cadd7c6c97ea7))
+* **mobile:** fill the screen on the system's background, and no pinch zoom ([#360](https://github.com/sidevoice/sidevoice-desktop/issues/360)) ([a2549c1](https://github.com/sidevoice/sidevoice-desktop/commit/a2549c117828376f8de7b7401f69dab799e229b7))
+* **mobile:** log at info, not every crate's trace ([#378](https://github.com/sidevoice/sidevoice-desktop/issues/378)) ([61f02a4](https://github.com/sidevoice/sidevoice-desktop/commit/61f02a4f6406956e4d193fc5243a437264d1aae2))
+* **mobile:** open Android call audio only once Telecom has activated the call ([#379](https://github.com/sidevoice/sidevoice-desktop/issues/379)) ([645b81c](https://github.com/sidevoice/sidevoice-desktop/commit/645b81c42d8921f27f46a7dcbdb983121ed3d26a))
+* **mobile:** report host.build so Developer options unlock on a nightly ([#385](https://github.com/sidevoice/sidevoice-desktop/issues/385)) ([64e8c6b](https://github.com/sidevoice/sidevoice-desktop/commit/64e8c6b1532c153a6d8bb152cb799fcbfccf82d6))
+* **mobile:** supply host.deviceName so onboarding stops proposing "Chrome on Android" ([#377](https://github.com/sidevoice/sidevoice-desktop/issues/377)) ([ea4af77](https://github.com/sidevoice/sidevoice-desktop/commit/ea4af7730c40caa5f8946c218c3f8bb5b227b98c))
+* **mobile:** tell the native project's cargo what build it is (Developer options on TestFlight) ([#424](https://github.com/sidevoice/sidevoice-desktop/issues/424)) ([a4e4f5a](https://github.com/sidevoice/sidevoice-desktop/commit/a4e4f5ac52ab0a976c926db21a0c2c65a1f17874))
+* **mobile:** the iOS page fills the screen; simulator screenshots in CI ([#370](https://github.com/sidevoice/sidevoice-desktop/issues/370)) ([0ee6d52](https://github.com/sidevoice/sidevoice-desktop/commit/0ee6d52650c934ed2c34abb4c3240853cd26f834))
+* **mobile:** validate a still's PNG chunks and keep failed deletions pending ([#402](https://github.com/sidevoice/sidevoice-desktop/issues/402)) ([ce99aa0](https://github.com/sidevoice/sidevoice-desktop/commit/ce99aa0467b28362cd0736008aca11d115a6ac4b))
+* **shortcuts:** name keys by the physical key; map a headset double press to next track ([#450](https://github.com/sidevoice/sidevoice-desktop/issues/450)) ([4344075](https://github.com/sidevoice/sidevoice-desktop/commit/4344075111ad0078b4325e2efea9cf07927d8e02))
+* **voice:** pin voice 0.8.2 and hold the device streams during an interruption ([#390](https://github.com/sidevoice/sidevoice-desktop/issues/390)) ([1ca649a](https://github.com/sidevoice/sidevoice-desktop/commit/1ca649a907a7c29dbaa8c59658ee732d40b49375))
+
+
+### Miscellaneous Chores
+
+* **app:** identifier ai.sidevoice.desktop ([#316](https://github.com/sidevoice/sidevoice-desktop/issues/316)) ([ed18096](https://github.com/sidevoice/sidevoice-desktop/commit/ed180962079e954f997aec68337c8a15f1261d79))
+
+
+### Code Refactoring
+
+* **bridge:** platform content behind the host, no os ([#350](https://github.com/sidevoice/sidevoice-desktop/issues/350)) ([a1f3629](https://github.com/sidevoice/sidevoice-desktop/commit/a1f362995acc38ba8569b0914bedfc0aa19dcb85))
+* **platform:** host kind decided at the crate root ([#359](https://github.com/sidevoice/sidevoice-desktop/issues/359)) ([cf9b49f](https://github.com/sidevoice/sidevoice-desktop/commit/cf9b49fc6aebd35c9239d1f5c1821c663cf37026))
+* **workspace:** shared, desktop and mobile, each with core and tauri ([#367](https://github.com/sidevoice/sidevoice-desktop/issues/367)) ([89c8d90](https://github.com/sidevoice/sidevoice-desktop/commit/89c8d90ede8bef22db1ddae01cdcfa57153dc925))
+
 ## [0.3.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.2.1...v0.3.0) (2026-10-30)
 
 
