@@ -477,7 +477,9 @@ pub type Pulse = (Trigger, Effect);
 /// with no second press within [`TAP_WINDOW`] after it, and acts when that time is up if the key also has a double; a **double** is
 /// a second press within [`TAP_WINDOW`] of the first one's release, acting when it comes up. A key with one way acts as it always did:
 /// hold at once, a tap when it comes up, a double when its second tap does. Another key pressed while it is down makes it a
-/// modifier of that key and no way acts.
+/// modifier of that key and no way acts. A press that comes while the key is still down is a release that was not heard (Windows:
+/// `global-hotkey` looks for an F-key's release every 50 ms, so a release and the next press within one look report no release):
+/// the earlier press ends there, and this one begins, so a quick double is not one long press.
 #[derive(Debug, Clone)]
 pub struct KeyMachine {
     ways: Ways,
@@ -556,7 +558,8 @@ impl KeyMachine {
         match edge {
             Edge::Down => {
                 if self.down_at.is_some() {
-                    return out;
+                    // The release in between was not heard: it is taken as now.
+                    out.extend(self.on(Edge::Up, now));
                 }
                 self.down_at = Some(now);
                 self.tainted = false;
@@ -1015,7 +1018,8 @@ pub enum Recorded {
 }
 
 /// Captures the next shortcut for one action: a combination (a modifier, or an F-key), or a modifier / Fn on its own in the
-/// way that action allows (hold to talk: held; mute: tapped; one turn: tapped, or double tapped).
+/// way that action allows (hold to talk: held; mute: tapped; one turn: tapped, or double tapped). An F-key on its own is a
+/// single key for hold to talk (`F10:hold`, as a right-hand modifier is), and a combination for the others (`F9`, at once).
 #[derive(Debug, Clone)]
 pub struct Recorder {
     action: Action,
@@ -1104,8 +1108,15 @@ impl Recorder {
                     return Recorded::Done(None);
                 }
                 let Some(key) = key_name(code, character.as_deref()) else { return Recorded::Pending };
-                if none && function_key(&key).is_none() {
-                    return Recorded::Pending; // a key on its own would be taken from every app
+                if none {
+                    match function_key(&key) {
+                        None => return Recorded::Pending, // a key on its own would be taken from every app
+                        // Held, and let go of, as a right-hand modifier is: its hot key reports both on every system.
+                        Some(n) if self.action == Action::HoldToTalk => {
+                            return self.done_single(SingleKey::Function(n), Trigger::Hold)
+                        }
+                        Some(_) => {}
+                    }
                 }
                 let mut text = String::new();
                 for (held, name) in
@@ -1392,6 +1403,21 @@ mod tests {
         assert_eq!(
             run(&mut key, &[(Down, 6000), (Other, 6100), (Up, 6200)], &[]),
             [(6000, (HOLD, HoldStart)), (6200, (HOLD, HoldEnd))]
+        );
+    }
+
+    /// Windows hears an F-key's release by looking every 50 ms: a release and the next press within one look come as two presses
+    /// and one release. The second press ends the first there.
+    #[test]
+    fn a_press_while_the_key_is_down_ends_the_press_whose_release_was_not_heard() {
+        // Hold to talk and say one thing (double) on one F-key: a quick double is the double, not a hold.
+        let mut both = ways(true, false, true);
+        assert_eq!(run(&mut both, &[(Down, 0), (Down, 120), (Up, 190), (Up, 200)], &[700]), [(190, (Double, Fire))]);
+        // Hold alone: a re-press ends the hold and starts another, which ends when it is let go.
+        let mut hold = ways(true, false, false);
+        assert_eq!(
+            run(&mut hold, &[(Down, 0), (Down, 900), (Up, 1500)], &[]),
+            [(0, (HOLD, HoldStart)), (900, (HOLD, HoldEnd)), (900, (HOLD, HoldStart)), (1500, (HOLD, HoldEnd))]
         );
     }
 
@@ -2012,6 +2038,33 @@ mod tests {
         let mut hold = Recorder::new(Action::HoldToTalk);
         assert_eq!(hold.hear(down(SingleKey::Fn), at(0)), Recorded::Pending);
         assert_eq!(hold.hear(up(SingleKey::Fn), at(2000)), Recorded::Done(Some("Fn:hold".into())));
+        // An F-key on its own is held too, like a right-hand modifier; with a modifier it is a combination, held all the same.
+        let none = mods(false, false, false, false);
+        // F1 to F20: the F-keys a Mac has (it has no F21 to F24, so none can be recorded there).
+        for (code, held) in [(122, "F1:hold"), (109, "F10:hold"), (105, "F13:hold"), (90, "F20:hold")] {
+            let done = Recorder::new(Action::HoldToTalk).hear(key(code, "", none), at(0));
+            assert_eq!(done, Recorded::Done(Some(held.into())));
+            let parsed = parse(held).unwrap().unwrap();
+            assert!(
+                suits(Action::HoldToTalk, &parsed) && parsed.listened().is_none(),
+                "{held}: a hot key, no listener"
+            );
+            assert_eq!(parsed.accelerator(), held, "parses back");
+        }
+        assert_eq!(
+            Recorder::new(Action::HoldToTalk).hear(Heard::Key { code: 200, character: None, mods: none }, at(0)),
+            Recorded::Pending,
+            "a key the Mac has no name for is not recorded"
+        );
+        assert_eq!(
+            Recorder::new(Action::HoldToTalk).hear(key(109, "", mods(false, true, false, false)), at(0)),
+            Recorded::Done(Some("Ctrl+F10".into()))
+        );
+        assert_eq!(
+            Recorder::new(Action::Mute).hear(key(109, "", none), at(0)),
+            Recorded::Done(Some("F10".into())),
+            "mute acts when it goes down: a combination"
+        );
         // Mute: tapped.
         let mut mute = Recorder::new(Action::Mute);
         mute.hear(down(SingleKey::RightControl), at(0));
