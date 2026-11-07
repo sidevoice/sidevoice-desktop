@@ -22,11 +22,12 @@ crc32fast = "1"
 # only the types the call names.
 objc2 = "0.6"
 objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIApplication", "UIResponder"] }
+# The page's cues' player (src/platform/cue/ios.rs): `AVAudioPlayer`.
 # The call as a CallKit call (src/platform/call_service/ios.rs): the provider, its delegate and the controller's actions. The
 # audio session's type is in the delegate's signature; the rest is Foundation's. The App Group's container, where the call's
 # surfaces read the creatures' stills (src/platform/call_surface/ios.rs), is NSFileManager's.
 objc2-call-kit = { version = "0.3", default-features = false, features = ["std", "block2", "dispatch2", "objc2-avf-audio", "CXAction", "CXCallAction", "CXCallController", "CXCallUpdate", "CXEndCallAction", "CXHandle", "CXProvider", "CXProviderConfiguration", "CXSetHeldCallAction", "CXSetMutedCallAction", "CXStartCallAction", "CXTransaction"] }
-objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession"] }
+objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession", "AVAudioPlayer"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSError", "NSFileManager", "NSSet", "NSString", "NSURL", "NSUUID", "NSValue"] }
 block2 = "0.6"
 # The main queue the CallKit controller answers on (its default is a private queue of its own).
