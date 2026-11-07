@@ -2,10 +2,7 @@
 //! come out through the audio session the native call holds (sidevoice-web#439), the page says when and the app plays the
 //! sound through that same session. Each phone asks its own system (D-HOST-OS); a phone with no player says so
 //! (`available`), and the page then plays the cue itself.
-#[cfg_attr(target_os = "android", path = "cue/android.rs")]
-#[cfg_attr(target_os = "ios", path = "cue/ios.rs")]
-mod imp;
-use imp::Native;
+use crate::platform::cue as platform;
 
 /// The cues the page may ask for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,28 +20,19 @@ impl Cue {
     }
 }
 
-/// What differs per OS.
-trait Os {
-    /// Whether this phone plays the page's cues itself.
-    fn available() -> bool;
-    /// Plays the cue as a loop until `stop`; one cue at a time, and starting one that plays changes nothing. `wav` is the
-    /// cue's sound as a WAV file. Call on the main thread.
-    fn start(cue: Cue, wav: &[u8]) -> Result<(), String>;
-    /// Stops it; nothing when it does not play. Call on the main thread.
-    fn stop(cue: Cue);
+/// Whether this phone plays the page's cues itself.
+pub fn cue_available() -> bool {
+    platform::available()
 }
 
-pub fn available() -> bool {
-    Native::available()
+/// Plays `cue` as a loop until [`stop_cue`]; starting one that plays changes nothing. On the main thread.
+pub fn start_cue(cue: Cue) -> Result<(), String> {
+    platform::start(cue, &wav(cue))
 }
 
-/// Plays `cue` until [`stop`].
-pub fn start(cue: Cue) -> Result<(), String> {
-    Native::start(cue, &wav(cue))
-}
-
-pub fn stop(cue: Cue) {
-    Native::stop(cue);
+/// Stops it; nothing when it does not play. On the main thread.
+pub fn stop_cue(cue: Cue) {
+    platform::stop(cue);
 }
 
 const RATE: u32 = 22_050;
@@ -57,7 +45,7 @@ const PEAK: f32 = 0.5;
 
 /// The cue as a mono 16-bit WAV that loops without a seam: low-passed noise (700 Hz, as the page's) under a slow swell
 /// that is silent at both ends of the file, one breath long.
-pub fn wav(cue: Cue) -> Vec<u8> {
+fn wav(cue: Cue) -> Vec<u8> {
     let Cue::Thinking = cue;
     let count = (RATE as f32 * BREATH_SECONDS) as usize;
     let alpha = 1.0 - (-2.0 * std::f32::consts::PI * 700.0 / RATE as f32).exp();

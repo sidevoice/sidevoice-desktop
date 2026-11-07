@@ -40,13 +40,13 @@ log = "0.4"
 tauri-plugin-barcode-scanner = "2.5.3"
 
 [target.'cfg(target_os = "ios")'.dependencies]
-# The page's cues' player (src/platform/cue/ios.rs: `AVAudioPlayer`) and the session's interruptions (src/platform/interruption/ios.rs): the notification a phone call or an alarm makes the system post.
+# The session's interruptions (src/platform/interruption/ios.rs): the notification a phone call or an alarm makes the system post.
 objc2 = "0.6"
 block2 = "0.6"
-objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSessionTypes", "AVAudioPlayer"] }
+objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSessionTypes"] }
 # The pairings file out of the device backup (src/platform/backup/ios.rs): NSURL's `NSURLIsExcludedFromBackupKey`; and the
 # interruptions' notification and its `userInfo`. Already in the iOS build through Tauri; only the types the call names.
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString", "NSURL", "NSValue", "NSNotification", "NSOperation", "NSDictionary", "NSData", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString", "NSURL", "NSValue", "NSNotification", "NSOperation", "NSDictionary", "block2"] }
 # The web view, its scroll view and the window behind it (src/platform/webview/ios.rs): UIKit's views and colours, typed
 # (`objc2` above for the one property, `WKWebView.scrollView`, objc2-web-kit does not wrap).
 objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIColor", "UIDevice", "UIGeometry", "UIGestureRecognizer", "UIInterface", "UIPinchGestureRecognizer", "UIResponder", "UIScreen", "UIScrollView", "UIView", "UIViewController", "UIWindow", "objc2-core-foundation"] }

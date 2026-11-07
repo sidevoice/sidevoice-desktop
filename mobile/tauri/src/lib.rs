@@ -213,11 +213,11 @@ fn cue(
     action: String,
     name: Option<String>,
 ) -> Result<bool, serde_json::Value> {
-    use platform::cue::{self, Cue};
+    use sidevoice_mobile_plugin::{cue_available, start_cue, stop_cue, Cue};
     let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
     if action == "available" {
-        return Ok(cue::available());
+        return Ok(cue_available());
     }
     let cue = name
         .as_deref()
@@ -229,7 +229,7 @@ fn cue(
         _ => return Err(refusal("cue takes available, start or stop")),
     };
     if !start {
-        app.run_on_main_thread(move || cue::stop(cue))
+        app.run_on_main_thread(move || stop_cue(cue))
             .map_err(|error| refusal(&error.to_string()))?;
         return Ok(true);
     }
@@ -245,7 +245,7 @@ fn cue(
             return;
         }
         let _ = handle.run_on_main_thread(move || {
-            if let Err(error) = cue::start(cue) {
+            if let Err(error) = start_cue(cue) {
                 log::warn!("cue {cue:?} did not start: {error}");
             }
         });

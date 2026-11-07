@@ -7,7 +7,8 @@ use objc2::{rc::Retained, AnyThread};
 use objc2_avf_audio::AVAudioPlayer;
 use objc2_foundation::NSData;
 
-use super::{Cue, Os};
+use super::Os;
+use crate::Cue;
 
 pub struct Native;
 

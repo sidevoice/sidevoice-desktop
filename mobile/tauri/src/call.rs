@@ -561,9 +561,9 @@ impl Room {
     /// Stops the page's cue (`host.cue`): the call it played in is over, and the page may not run to stop it (a hang-up of the
     /// system's or the service's, a page that reloaded).
     fn stop_cue(&self) {
-        let _ = self
-            .app
-            .run_on_main_thread(|| crate::platform::cue::stop(crate::platform::cue::Cue::Thinking));
+        let _ = self.app.run_on_main_thread(|| {
+            sidevoice_mobile_plugin::stop_cue(sidevoice_mobile_plugin::Cue::Thinking)
+        });
     }
 
     /// Tells the headset's settings who owns the call now (the system, or the app's own), so that the rows and the presses follow
