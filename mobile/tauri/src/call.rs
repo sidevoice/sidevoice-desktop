@@ -146,6 +146,11 @@ enum Gate {
 const ACTIVATE_FAILED: &str = "audio-session-activate-failed";
 
 impl PhoneCall {
+    /// Whether a voice call's audio is open, and so the session active.
+    fn audio_open(&self) -> bool {
+        self.audio.lock().unwrap().open
+    }
+
     /// The system gave the audio back after an interruption (iOS deactivated the session): activates it again if a voice
     /// call has audio open, so that it can record and play on. A session nothing uses stays inactive, and the system's call
     /// gets its session back from the system. Whether the audio can go on: false when the system refused.
@@ -440,6 +445,7 @@ impl RoomCall {
             room.muting = None;
             room.surface = CallSurface::default();
             room.hold(false, None);
+            room.stop_cue();
             // The old page's stills go with it (nothing draws them once its call has ended): the new page sends its own.
             room.forgotten.clear();
             if let Err(error) = clear_stills(&room.app) {
@@ -547,6 +553,19 @@ impl RoomCall {
 }
 
 impl Room {
+    /// Whether a voice call's audio is open (the cue plays only then, `cue` in lib.rs).
+    pub fn audio_open(&self) -> bool {
+        self.phone.audio_open()
+    }
+
+    /// Stops the page's cue (`host.cue`): the call it played in is over, and the page may not run to stop it (a hang-up of the
+    /// system's or the service's, a page that reloaded).
+    fn stop_cue(&self) {
+        let _ = self
+            .app
+            .run_on_main_thread(|| crate::platform::cue::stop(crate::platform::cue::Cue::Thinking));
+    }
+
     /// Tells the headset's settings who owns the call now (the system, or the app's own), so that the rows and the presses follow
     /// the call and not the developer option, which applies to the next call.
     fn note_owner(&self) {
@@ -612,6 +631,7 @@ impl Room {
             self.system = false;
             self.note_owner();
             self.clear_interruption();
+            self.stop_cue();
             self.since = None;
             self.shown = None;
             self.phone.system_call(false);
@@ -1092,6 +1112,7 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             room.holding = None;
             room.system = false;
             room.note_owner();
+            room.stop_cue();
             room.shown = None;
             room.phone.system_call(false);
             room.clear_interruption();

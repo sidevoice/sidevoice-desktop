@@ -228,14 +228,28 @@ fn cue(
         "stop" => false,
         _ => return Err(refusal("cue takes available, start or stop")),
     };
-    app.run_on_main_thread(move || {
-        if !start {
-            cue::stop(cue);
-        } else if let Err(error) = cue::start(cue) {
-            log::warn!("cue {cue:?} did not start: {error}");
+    if !start {
+        app.run_on_main_thread(move || cue::stop(cue))
+            .map_err(|error| refusal(&error.to_string()))?;
+        return Ok(true);
+    }
+    // Only in a call whose audio session is open: a page outside a call plays nothing and touches no session. Asked in the room's
+    // own order, so that a start after the call's end finds it ended (and the call's end stops what played: `Room::stop_cue`).
+    let room = app
+        .try_state::<call::RoomCall>()
+        .ok_or_else(|| refusal("no call"))?;
+    let handle = app.clone();
+    room.then(move |room| {
+        if !room.audio_open() {
+            log::info!("cue {cue:?} refused: no call's audio is open");
+            return;
         }
-    })
-    .map_err(|error| refusal(&error.to_string()))?;
+        let _ = handle.run_on_main_thread(move || {
+            if let Err(error) = cue::start(cue) {
+                log::warn!("cue {cue:?} did not start: {error}");
+            }
+        });
+    });
     Ok(true)
 }
 
