@@ -110,7 +110,7 @@
 		5721EA507184E736863684BC /* entry.rs */ = {isa = PBXFileReference; path = entry.rs; sourceTree = "<group>"; };
 		58C2E83A04B6987A0D4453C7 /* app_files.rs */ = {isa = PBXFileReference; path = app_files.rs; sourceTree = "<group>"; };
 		5B34888E35B7881216856F13 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
-		7C1E4B90A2D35F68B0914E27 /* pt-BR */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "pt-BR"; path = pt-BR.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		7C1E4B90A2D35F68B0914E27 /* pt */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pt; path = pt.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		3F8A6D52C1B947E0A5D8C316 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		E94B07A5D3C218F6B7A0529D /* hi */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = hi; path = hi.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		5C0CCCFB54615F5CEE77227C /* CallActivityIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallActivityIntents.swift; sourceTree = "<group>"; };
@@ -519,7 +519,7 @@
 				ja,
 				pl,
 				"zh-Hans",
-				"pt-BR",
+				pt,
 				ko,
 				hi,
 			);
@@ -639,7 +639,7 @@
 				D53EC9AD147484E515EBA7F0 /* ja */,
 				C9DA64017592563391BEB038 /* pl */,
 				5B34888E35B7881216856F13 /* zh-Hans */,
-				7C1E4B90A2D35F68B0914E27 /* pt-BR */,
+				7C1E4B90A2D35F68B0914E27 /* pt */,
 				3F8A6D52C1B947E0A5D8C316 /* ko */,
 				E94B07A5D3C218F6B7A0529D /* hi */,
 			);
