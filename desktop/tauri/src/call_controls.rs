@@ -103,11 +103,12 @@ struct PageStage {
     rect: Option<Rect>,
 }
 
-/// A drag in progress: where the pointer and the window were when it started, on the desktop.
+/// A drag in progress: the point of the card's box the pointer holds (core `grab`, the box's logical pixels). The drag carries the box,
+/// so the creature stays under the pointer however the page lays the window out round it meanwhile, and on a display of any scale
+/// (core `dragged`).
 #[derive(Clone, Copy)]
 struct Drag {
-    pointer: Point,
-    window: Point,
+    grab: Point,
 }
 
 /// A resize of the picture in progress: where the pointer was when it started (on the desktop), and the window then (on
@@ -824,21 +825,28 @@ pub fn call_controls_layout(
         width: b.width,
         height: b.height,
     });
-    let resizing = if let Some(card) = self::card(&app) {
+    let (resizing, drag) = if let Some(card) = self::card(&app) {
         let mut inner = card.0.lock().unwrap();
         inner.size = Some(size);
         inner.anchor = Some(logic::anchor(size, body, MARGIN));
         inner.min_width = resizable.as_ref().map(|r| r.min_width).filter(|w| side(*w));
         inner.min_height = resizable.map(|r| r.min_height).filter(|h| side(*h));
-        inner.resize.is_some()
+        (inner.resize.is_some(), inner.drag)
     } else {
-        false
+        (false, None)
     };
-    if let Some(w) = window(&app) {
-        let _ = w.set_size(LogicalSize::new(width, height));
-    }
-    // While the person resizes the picture, the resize places the window.
-    if !resizing {
+    let Some(w) = window(&app) else { return Ok(()) };
+    let _ = w.set_size(LogicalSize::new(width, height));
+    // While the person drags the card its box stays under the pointer (placed where it rested, it would jump back there until the
+    // pointer moved again); a drag that ended meanwhile was dropped and placed, and is placed again with this layout. While they
+    // resize the picture, the resize places the window.
+    if drag.is_some() {
+        if let Some(p) = desktop_geometry::pointer(&app) {
+            if !follow(&app, &w, p) {
+                place(&app);
+            }
+        }
+    } else if !resizing {
         place(&app);
     }
     Ok(())
@@ -868,51 +876,34 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
     // The pointer, the window and the monitors are asked with the card's lock released (#170).
     match phase {
         DragPhase::Start => {
-            let drag = desktop_geometry::pointer(&app)
-                .zip(desktop_geometry::frame(&w))
-                .map(|(pointer, at)| Drag { pointer, window: Point { x: at.x, y: at.y } });
-            card.0.lock().unwrap().drag = drag;
+            let unit = desktop_geometry::unit(&w);
+            let held = desktop_geometry::pointer(&app).zip(desktop_geometry::frame(&w));
+            let mut inner = card.0.lock().unwrap();
+            let anchor = anchor_now(&inner);
+            inner.drag =
+                held.map(|(pointer, at)| Drag { grab: logic::grab(pointer, Point { x: at.x, y: at.y }, anchor, unit) });
         }
+        // The room the card was told stays as it was until the drop (`place` tells it the new one): told mid-drag, the page would lay
+        // the window out again round the creature at every pixel near an edge, and the creature would shake under the pointer.
         DragPhase::Move => {
-            let drag = card.0.lock().unwrap().drag;
-            if let (Some(drag), Some(p)) = (drag, desktop_geometry::pointer(&app)) {
-                let to = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
-                let decision = card.0.lock().unwrap().moves.advance();
-                move_when_latest(&app, to, decision);
-                // The room moves with the card: told again as it changes, so a balloon never waits for the drop to fit.
-                if let Some(display) = desktop_geometry::display(&app, crate::room_window(&app).as_ref(), None, Some(p))
-                {
-                    let patch = {
-                        let mut inner = card.0.lock().unwrap();
-                        let size = inner.size.unwrap_or(FIRST_SIZE);
-                        let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
-                        let room = logic::room_dragging(display.to_local(to), anchor, display.work);
-                        (inner.told_room != Some(room)).then(|| {
-                            inner.told_room = Some(room);
-                            serde_json::json!({ "room": room.json() })
-                        })
-                    };
-                    if let Some(patch) = patch {
-                        push(&app, patch);
-                    }
-                }
+            if let Some(p) = desktop_geometry::pointer(&app) {
+                follow(&app, &w, p);
             }
         }
         DragPhase::End => {
             let drag = card.0.lock().unwrap().drag.take();
             let (Some(drag), Some(p)) = (drag, desktop_geometry::pointer(&app)) else { return Ok(()) };
-            let dropped = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
             // The display the pointer let go on; the card's corner may be just off it.
             let Some(display) = desktop_geometry::display(&app, crate::room_window(&app).as_ref(), None, Some(p))
             else {
                 return Ok(());
             };
             let mut inner = card.0.lock().unwrap();
-            let size = inner.size.unwrap_or(FIRST_SIZE);
-            let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
+            let anchor = anchor_now(&inner);
             let body = Size { width: anchor.width, height: anchor.height };
-            let window = display.to_local(dropped);
-            let rest = logic::drop_at(Point { x: window.x + anchor.x, y: window.y + anchor.y }, body, display.work);
+            // Where the box is let go: under the pointer, as it was held, in that display's logical pixels.
+            let at = display.to_local(p);
+            let rest = logic::drop_at(Point { x: at.x - drag.grab.x, y: at.y - drag.grab.y }, body, display.work);
             let spot = Spot::of(rest, body, display.work);
             inner.placements.displays.insert(display.key.clone(), spot);
             save(&inner);
@@ -929,6 +920,26 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
         }
     }
     Ok(())
+}
+
+/// The box the card is placed by in its window as the page last laid it out (core `anchor`), the whole first window before it says.
+fn anchor_now(inner: &Inner) -> Rect {
+    inner.anchor.unwrap_or_else(|| logic::anchor(inner.size.unwrap_or(FIRST_SIZE), None, MARGIN))
+}
+
+/// Mid-drag: the window where the card's box stays exactly under the pointer `p`, around the box as the page lays it out now, at the
+/// scale of the display the pointer is on (core `dragged`). The drag is read when the window is moved, never before: a `layout` that
+/// lands after the drop follows nothing. Whether a drag was still on. The display is asked with the lock released (#170).
+fn follow(app: &AppHandle, w: &WebviewWindow, p: Point) -> bool {
+    let Some(card) = card(app) else { return false };
+    let unit = desktop_geometry::display(app, crate::room_window(app).as_ref(), None, Some(p))
+        .map_or_else(|| desktop_geometry::unit(w), |display| display.unit);
+    let mut inner = card.0.lock().unwrap();
+    let Some(to) = logic::dragged(p, inner.drag.map(|drag| drag.grab), anchor_now(&inner), unit) else { return false };
+    let decision = inner.moves.advance();
+    drop(inner);
+    move_when_latest(app, to, decision);
+    true
 }
 
 /// The corner that stays still while the picture is resized by `edge`.

@@ -83,7 +83,7 @@ Windows' `TDN_CREATED`, GTK's map event, and a macOS block scheduled in `NSModal
 macOS activates the app before opening the alert, skips requests already cancelled before showing, and aborts
 a modal session whose startup hook arrives late.
 Linux cancels before constructing a widget if GTK is not initialized on the UI thread or no display is available.
-The existing eight-language reset/uninstall text is kept in the confirmation module, unchanged, with English fallback.
+The existing eleven-language reset/uninstall text is kept in the confirmation module, unchanged, with English fallback.
 No general dialog or filesystem permission is granted to the webview. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
 model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
 native code. It first requires a top-level integer `safe_uninstall` of at least `1` from the installed
@@ -462,7 +462,7 @@ The card's page talks to the app only through `window.__sidevoiceHost.host.callC
 | `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
 | `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), `hide` (the card's ×: hidden as from the tray), `dismiss` (the exit notice's Close: the card goes at once; it never outlasts the call), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room (`open-settings` brings the room in front first). After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
 | `layout({width, height, card?, resizable?})` | `call_controls_layout`: the card's size with its shadow margin, where its body is in it (`{x, y, width, height}`), and the picture's least width and height when it may be resized; the window takes the size and is placed by its body |
-| `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
+| `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the card's body stays exactly where the pointer took it (the app reads the pointer), the window round it as the page lays it out then, at the scale of the display under the pointer (core `grab`, `dragged`: a `layout` mid-drag moves the window, never the body; one that lands after the drop follows nothing), and it is dropped, snapped and remembered |
 | (none: the bridge itself) | `call_controls_cursor`: `{hand}` when the pointer moves on or off something whose CSS cursor is `pointer`; on macOS the app then sets the hand itself at each look at the pointer, since an app in front that sets its own cursor (an I-beam) would otherwise keep it over the card (#166) |
 | `resize(phase, edge)` | `call_controls_resize`: `start`, `move`, `end` by the grip's corner (`nw`, `ne`, `sw`, `se`); only while `layout` says the card may be resized; absent on Wayland |
 
@@ -472,7 +472,7 @@ App → card: `window.__sidevoiceHost.receive(patch)` (`webview.eval`), any subs
 level (`{level, threadId}`), `place` `{vertical: "upper"|"lower", horizontal: "left"|"right"}`, `room`
 `{left, right}` (whole CSS pixels, never negative: how far the card's resting box, shadow margin included, is from the
 work area's left and right edges; the page slides the avatar's voice text inward by what it lacks there, and wraps it to
-the width the sides allow; sent when the card is placed and whenever the numbers change, so after a drag, a change of
+the width the sides allow; sent when the card is placed and whenever the numbers change (not mid-drag: the room it had when the drag began holds until the drop, so the page never lays the window out again under the pointer), so after a drag, a change of
 size or format, or a move to another display; measured from where the card rests, not from where its window is now,
 so the window moving in at an edge (`fit`) and the text sliding never both correct the same overhang; absent on
 Wayland, where the app does not know the position: the text stays centred), `size` the picture's
@@ -836,7 +836,7 @@ interface MicrophonePermission {
   the button that opens the system's settings, named as that system names them ("Open Windows Settings"), present
   exactly where `openSettings()` is. It answers at once: the script holds the words of every language the app has,
   worded by Rust from the native catalogue (`desktop/core/i18n/<language>.json`, `microphone.help_<os>` and
-  `microphone.open_settings*`; which keys this OS uses is `platform::host`'s). The catalogue has the eight languages the web offers, so a
+  `microphone.open_settings*`; which keys this OS uses is `platform::host`'s). The catalogue has the eleven languages the web offers, so a
   page in a language outside those shows these texts in English: the app translates its own help, the web no longer does.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or Settings does not open.

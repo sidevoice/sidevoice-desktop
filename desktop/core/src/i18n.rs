@@ -1,5 +1,5 @@
 //! The app's native texts (tray menu, call controls, the microphone's help for the page), keyed, one JSON table per
-//! language (`i18n/<language>.json`, the eight the web offers), English the fallback for a missing key or a language
+//! language (`i18n/<language>.json`, the eleven the web offers), English the fallback for a missing key or a language
 //! without a bundle (AGENTS.md). The loader is sidevoice-shared-i18n's; this file keeps the app's tables and its choice
 //! of language. The shell reads the system's preferred languages once at start and picks with [`language`].
 
@@ -17,6 +17,9 @@ const BUNDLES: Bundles = [
     ("ja", include_str!("../i18n/ja.json")),
     ("pl", include_str!("../i18n/pl.json")),
     ("zh-Hans", include_str!("../i18n/zh-Hans.json")),
+    ("pt-BR", include_str!("../i18n/pt-BR.json")),
+    ("ko", include_str!("../i18n/ko.json")),
+    ("hi", include_str!("../i18n/hi.json")),
 ];
 
 static TEXTS: Texts = Texts::new(&BUNDLES);
@@ -48,7 +51,10 @@ mod tests {
         assert_eq!(language(&["es-ES", "en-US"]), "es");
         assert_eq!(language(&["de-DE", "es_419"]), "de");
         assert_eq!(language(&["ru-RU", "fr"]), "fr");
-        assert_eq!(language(&["ru-RU", "ko"]), "en", "English when nothing has a bundle");
+        assert_eq!(language(&["ru-RU", "vi"]), "en", "English when nothing has a bundle");
+        assert_eq!(language(&["pt-PT", "en-US"]), "pt-BR", "Portuguese is the Brazilian bundle");
+        assert_eq!(language(&["ko-KR"]), "ko");
+        assert_eq!(language(&["hi-IN"]), "hi");
         assert_eq!(language::<&str>(&[]), "en");
     }
 

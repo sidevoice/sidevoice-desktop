@@ -1,0 +1,6 @@
+{
+  "microphone.help_ios": "Abra os ajustes do Sidevoice com o botão abaixo e ative o Microfone. Depois, verifique novamente.",
+  "microphone.help_android": "Abra as configurações do app, vá em Permissões › Microfone e permita o acesso ao microfone. Depois, verifique novamente.",
+  "microphone.open_settings_ios": "Abrir Ajustes",
+  "microphone.open_settings_android": "Abrir configurações do app"
+}

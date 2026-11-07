@@ -1,0 +1,8 @@
+/* The microphone permission prompt. */
+"NSMicrophoneUsageDescription" = "Sidevoice माइक्रोफ़ोन से आपकी आवाज़ सुनता है, ताकि आप अपने एजेंट से बात कर सकें।";
+
+/* The local network permission prompt. */
+"NSLocalNetworkUsageDescription" = "Sidevoice लोकल नेटवर्क के ज़रिए आपके पेयर किए गए कंप्यूटर से कनेक्ट होता है।";
+
+/* The camera permission prompt (scanning the pairing code). */
+"NSCameraUsageDescription" = "आपके कंप्यूटर पर दिखने वाला पेयरिंग कोड स्कैन करने के लिए Sidevoice कैमरे का इस्तेमाल करता है।";
