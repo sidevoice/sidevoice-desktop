@@ -120,7 +120,7 @@ through `run` (the call's service hangs up through it).
     route settled, or at once when Telecom refuses the call (it stays the app's own), or after 3 s whatever Telecom is
     doing. logcat (`SidevoiceCall`) says which: `audio: the call's audio opens now: …`.
 - **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
-  play-and-record with mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
+  play-and-record with mode `VoiceChat` (what makes iOS take the audio as a call: the Bluetooth hands-free route, a car's call, rather than A2DP "music"; desktop#465), the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
   activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see
   "Not verified" below.
 - **Background audio** (iOS): `UIBackgroundModes` `audio` and `voip` in `mobile/tauri/Info.ios.plist`: `audio` so a call
