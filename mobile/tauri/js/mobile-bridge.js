@@ -285,6 +285,17 @@
     });
   }
 
+  /** The app's own player for the page's cues (`host.cue`, docs/BRIDGE.md -> "The cues"), where the phone has one: the page's Web
+   *  Audio is not sure to come out through the audio session the native call holds. Whether this phone has one is asked once
+   *  (`cue`, `available`); until it answers, and where it does not, the page plays its cues itself. */
+  let cueMember = null;
+  const cue = (action, name) => transport.own.call("cue", { action, name }).catch((error) => {
+    if (win.console) win.console.warn("[sidevoice] cue " + action + " failed:", error);
+  });
+  transport.own.call("cue", { action: "available" }).then((offered) => {
+    if (offered === true) cueMember = Object.freeze({ start: (name) => void cue("start", name), stop: (name) => void cue("stop", name) });
+  }, () => {});
+
   const headset = shortcuts();
 
   const api = {
@@ -327,6 +338,10 @@
       /** The app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's
        *  `callSurface`: the page publishes what costs it work (the stills, the spoken page) while `active()`, and hands
        *  the creatures' stills over here. */
+      /** The cues the page decides on, played by the app (only where the phone has a player). */
+      get cue() {
+        return cueMember;
+      },
       callSurface: Object.freeze({
         active: () => true,
         /** A still's PNG (`png`, base64), kept by the app under `id` where the surfaces read it. */
