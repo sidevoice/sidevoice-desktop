@@ -59,9 +59,11 @@ impl HeadsetPress {
 /// What a host's headset presses can do during a call (`HeadsetStatus.actions`): the actions the single press can be given, and
 /// the double press's where one reaches the app (`None`: none does, the page draws no row for it). A press with one action has
 /// nothing to choose: it does that. Each OS's media controls say which (`sidevoice-shared-tauri`'s `media_controls::presses`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HeadsetCapabilities {
     pub press: &'static [HeadsetPress],
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub double_press: Option<&'static [HeadsetPress]>,
 }
 
@@ -181,7 +183,7 @@ impl HeadsetChoice {
 }
 
 /// What a headset's buttons do here: `host.shortcuts`' `HeadsetStatus`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Headset {
     pub press: HeadsetPress,
@@ -194,20 +196,10 @@ pub struct Headset {
     /// Left out when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub managed_by_system: bool,
-    /// What each press can do here (`HeadsetCapabilities`), where the host says: `None` (left out) is every action, as a host
-    /// that predates it reports.
+    /// What each press can do here (`HeadsetStatus.actions`: the actions of each, the double press's left out where none reaches
+    /// the app), where the host says: `None` (left out) is every action, as a host that predates it reports.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub actions: Option<Actions>,
-}
-
-/// `HeadsetStatus.actions`: the actions each press can be given here; the double press's left out where none reaches the app
-/// (its `doublePress` is `null` then).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Actions {
-    pub press: Vec<HeadsetPress>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub double_press: Option<Vec<HeadsetPress>>,
+    pub actions: Option<HeadsetCapabilities>,
 }
 
 impl Headset {
@@ -232,10 +224,7 @@ impl Headset {
         Headset {
             double_press: capabilities.double_press.map(|_| here.double_press),
             managed_by_system,
-            actions: Some(Actions {
-                press: capabilities.press.to_vec(),
-                double_press: capabilities.double_press.map(<[HeadsetPress]>::to_vec),
-            }),
+            actions: Some(capabilities),
             ..Headset::new(here.press, here.double_press)
         }
     }
