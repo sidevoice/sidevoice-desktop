@@ -188,17 +188,19 @@ pub fn room(rest: Point, anchor: Rect, work: Rect) -> Room {
     Room { left: (rest.x - work.x).max(0.0).floor(), right: (work.right() - (rest.x + anchor.width)).max(0.0).floor() }
 }
 
-/// Where the pointer holds the card when a drag starts: its offset from the corner of the card's box ([`anchor`], `unit` desktop
-/// units to a logical pixel) in a window at `window` on the desktop. The drag carries the box, not the window ([`dragged`]).
+/// Where the pointer holds the card when a drag starts: the point of the card's box ([`anchor`]) under it, in the box's own logical
+/// pixels from its corner, for a window at `window` on the desktop on a display of `unit` desktop units to a logical pixel. Logical,
+/// so the same point of the creature stays under the pointer on a display of another scale ([`dragged`]).
 pub fn grab(pointer: Point, window: Point, anchor: Rect, unit: f64) -> Point {
-    Point { x: pointer.x - (window.x + anchor.x * unit), y: pointer.y - (window.y + anchor.y * unit) }
+    Point { x: (pointer.x - window.x) / unit - anchor.x, y: (pointer.y - window.y) / unit - anchor.y }
 }
 
 /// Where the card's window goes while it is dragged: its box (the creature, the card's body) exactly where the pointer took it
-/// ([`grab`]), the window around the box as the page lays it out now. A box that moved inside its window mid-drag (a voice text came,
-/// went or grew, so the window grew on the box's left) stays under the pointer: the window moves, never the box.
-pub fn dragged(pointer: Point, grab: Point, anchor: Rect, unit: f64) -> Point {
-    Point { x: pointer.x - grab.x - anchor.x * unit, y: pointer.y - grab.y - anchor.y * unit }
+/// ([`grab`]), the window around the box as the page lays it out now, at the `unit` of the display the pointer is on (where the window
+/// is going). A box that moved inside its window mid-drag (a voice text came, went or grew, so the window grew on the box's left) stays
+/// under the pointer: the window moves, never the box. No drag (`None`: it ended, a late `layout` after the drop): nothing to follow.
+pub fn dragged(pointer: Point, grab: Option<Point>, anchor: Rect, unit: f64) -> Option<Point> {
+    grab.map(|g| Point { x: pointer.x - (g.x + anchor.x) * unit, y: pointer.y - (g.y + anchor.y) * unit })
 }
 
 /// What [`room`] says: the distances from the card's box to the work area's left and right edges.
@@ -484,21 +486,43 @@ mod tests {
     fn a_dragged_card_keeps_its_box_under_the_pointer_whatever_grows_round_it() {
         // The avatar's creature (160 px and its 12 px margin) in a window of its own size, taken 40 px into its box.
         let alone = Rect { x: 0.0, y: 0.0, width: 184.0, height: 184.0 };
-        let start = Point { x: 1000.0, y: 300.0 };
-        let held = grab(Point { x: 1052.0, y: 352.0 }, start, alone, 1.0);
-        assert_eq!(held, Point { x: 52.0, y: 52.0 });
+        let held = Some(grab(Point { x: 1052.0, y: 352.0 }, Point { x: 1000.0, y: 300.0 }, alone, 1.0));
+        assert_eq!(held, Some(Point { x: 52.0, y: 52.0 }));
         // Moved 30 px right and 5 down: the window with it.
-        assert_eq!(dragged(Point { x: 1082.0, y: 357.0 }, held, alone, 1.0), Point { x: 1030.0, y: 305.0 });
+        assert_eq!(dragged(Point { x: 1082.0, y: 357.0 }, held, alone, 1.0), Some(Point { x: 1030.0, y: 305.0 }));
         // Mid-drag a balloon comes out and the window grows 140 px on the creature's left (the creature is now 140 px in): the window
         // moves 140 px left, so the creature stays under the pointer; the window's corner alone would have carried the creature off.
         let grown = Rect { x: 140.0, y: 0.0, width: 184.0, height: 184.0 };
-        let to = dragged(Point { x: 1082.0, y: 357.0 }, held, grown, 1.0);
-        assert_eq!(to, Point { x: 890.0, y: 305.0 });
-        assert_eq!(to.x + grown.x + held.x, 1082.0, "the box where the pointer holds it");
-        // Windows at 200 %: the desktop is in physical pixels, two to a logical one.
-        let held2 = grab(Point { x: 2104.0, y: 600.0 }, Point { x: 2000.0, y: 500.0 }, alone, 2.0);
-        assert_eq!(held2, Point { x: 104.0, y: 100.0 });
-        assert_eq!(dragged(Point { x: 2104.0, y: 600.0 }, held2, grown, 2.0), Point { x: 1720.0, y: 500.0 });
+        assert_eq!(dragged(Point { x: 1082.0, y: 357.0 }, held, grown, 1.0), Some(Point { x: 890.0, y: 305.0 }));
+        // Windows at 200 %: the desktop is in physical pixels, two to a logical one; the same point of the box is held.
+        let held2 = Some(grab(Point { x: 2104.0, y: 600.0 }, Point { x: 2000.0, y: 500.0 }, alone, 2.0));
+        assert_eq!(held2, Some(Point { x: 52.0, y: 50.0 }));
+        assert_eq!(dragged(Point { x: 2104.0, y: 600.0 }, held2, grown, 2.0), Some(Point { x: 1720.0, y: 500.0 }));
+    }
+
+    #[test]
+    fn dragged_onto_a_display_of_another_scale_the_same_point_of_the_creature_stays_under_the_pointer() {
+        // Taken on a 100 % display (Windows: physical pixels), 52 px into the box, the window grown 140 px on the creature's left.
+        let grown = Rect { x: 140.0, y: 0.0, width: 184.0, height: 184.0 };
+        let held = Some(grab(Point { x: 1000.0, y: 400.0 }, Point { x: 808.0, y: 348.0 }, grown, 1.0));
+        assert_eq!(held, Some(Point { x: 52.0, y: 52.0 }));
+        // The pointer now on a 200 % display to the right (from x 1920): the window there is twice as many desktop units round the box.
+        let p = Point { x: 2400.0, y: 400.0 };
+        let to = dragged(p, held, grown, 2.0).unwrap();
+        assert_eq!(to, Point { x: 2016.0, y: 296.0 });
+        // Read back at that scale, the box is where the pointer holds it: the creature is not 140 px (the anchor at the old scale) off.
+        assert_eq!(grab(p, to, grown, 2.0), Point { x: 52.0, y: 52.0 });
+        // At the old scale it would have been: the window 140 px too far right, the creature off the pointer until the next move.
+        let stale = dragged(p, held, grown, 1.0).unwrap();
+        assert_eq!(stale.x - to.x, 140.0 + 52.0);
+    }
+
+    #[test]
+    fn a_layout_that_lands_after_the_drop_follows_nothing() {
+        // The page reported a size mid-drag and its `layout` reached the app after the drop: the drag is gone, so the window stays where
+        // the drop put it (snapped to its edge) instead of where the pointer was let go.
+        let anchor = Rect { x: 140.0, y: 0.0, width: 184.0, height: 184.0 };
+        assert_eq!(dragged(Point { x: 1000.0, y: 400.0 }, None, anchor, 1.0), None);
     }
 
     #[test]
