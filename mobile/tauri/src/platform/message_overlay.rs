@@ -9,7 +9,7 @@ use imp::Native;
 /// What differs per OS: its tables, one JSON object of web catalogue keys to text for each language of
 /// `sidevoice_shared_tauri::messages::LANGUAGES`, in that order.
 trait Os {
-    const TEXTS: [(&'static str, &'static str); 8];
+    const TEXTS: [(&'static str, &'static str); 11];
 }
 
 /// This OS's own tables, as `(language, json)`.

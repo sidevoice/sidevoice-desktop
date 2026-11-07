@@ -37,7 +37,7 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   Backups).
 - **Permission texts.** `NSMicrophoneUsageDescription`, `NSLocalNetworkUsageDescription` and `NSCameraUsageDescription` (the pairing code's scanner, below) are in
   `mobile/tauri/Info.ios.plist` in English, the base (App Store validation looks for them there), and in the languages the web
-  interface ships (de, es, fr, it, ja, pl, zh-Hans) in `mobile/tauri/ios/<language>.lproj/InfoPlist.strings`, which `generate`
+  interface ships (de, es, fr, it, ja, pl, zh-Hans, pt-BR, ko, hi) in `mobile/tauri/ios/<language>.lproj/InfoPlist.strings`, which `generate`
   puts into the iOS project. `CFBundleLocalizations` in the plist is the list of languages iOS offers the app in. Adding
   a language is a folder in `mobile/tauri/ios` and an entry in that list; a test checks that they agree, and that the English
   of `en.lproj` is the plist's.

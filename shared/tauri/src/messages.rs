@@ -15,6 +15,9 @@ pub const SHARED: sidevoice_shared_i18n::Bundles = [
     ("ja", include_str!("../i18n/ja.json")),
     ("pl", include_str!("../i18n/pl.json")),
     ("zh-Hans", include_str!("../i18n/zh-Hans.json")),
+    ("pt-BR", include_str!("../i18n/pt-BR.json")),
+    ("ko", include_str!("../i18n/ko.json")),
+    ("hi", include_str!("../i18n/hi.json")),
 ];
 
 /// The overlay the page is given: `{ "<language>": { "<key>": text } }` for every language of [`LANGUAGES`], the shared

@@ -1,5 +1,5 @@
 //! The one loader of the apps' texts (AGENTS.md -> "Language of the code and of the product"): a JSON table per language
-//! (`{ "<key>": text }`), the eight the web offers, English the fallback for a key or a language that lacks one. What
+//! (`{ "<key>": text }`), the eleven the web offers, English the fallback for a key or a language that lacks one. What
 //! the apps share and what each app words itself (the desktop's tray, the phone's microphone help, the overlay of the web's
 //! texts) are all read here, with their `include_str!` tables; nobody else parses a table.
 //!
@@ -10,10 +10,10 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// The languages the apps word their texts in, as the web offers them.
-pub const LANGUAGES: [&str; 8] = ["en", "de", "es", "fr", "it", "ja", "pl", "zh-Hans"];
+pub const LANGUAGES: [&str; 11] = ["en", "de", "es", "fr", "it", "ja", "pl", "zh-Hans", "pt-BR", "ko", "hi"];
 
 /// The tables of one set of texts: a language and its JSON each, in [`LANGUAGES`]' order.
-pub type Bundles = [(&'static str, &'static str); 8];
+pub type Bundles = [(&'static str, &'static str); 11];
 
 /// A JSON table read: empty when it is not a table (the tables are embedded and tested; this is a build that was not).
 pub fn table(json: &str) -> serde_json::Map<String, serde_json::Value> {
@@ -71,7 +71,7 @@ pub fn check(bundle: &[(&str, &str)]) -> Result<(), String> {
 }
 
 /// The first of `preferred` (BCP 47 tags, the person's order) that has a bundle; English when none does. A tag matches by
-/// its language (`de-DE` and `de_AT` are `de`); Chinese by its script, as the web names it: `zh`, `zh-CN`, `zh-SG` and
+/// its language (`de-DE` and `de_AT` are `de`; every `pt` is `pt-BR`); Chinese by its script, as the web names it: `zh`, `zh-CN`, `zh-SG` and
 /// `zh-Hans-*` are `zh-Hans`, while `zh-Hant`, `zh-TW`, `zh-HK` and `zh-MO` (traditional) have no bundle, so the next
 /// preference wins.
 pub fn language<S: AsRef<str>>(preferred: &[S]) -> &'static str {
@@ -87,6 +87,11 @@ pub fn language<S: AsRef<str>>(preferred: &[S]) -> &'static str {
                 let traditional =
                     !rest.contains(&"hans") && rest.iter().any(|part| matches!(*part, "hant" | "tw" | "hk" | "mo"));
                 return (!traditional).then_some("zh-Hans");
+            }
+            // Portuguese is offered in its Brazilian wording only: `pt`, `pt-BR` and `pt-PT` are all `pt-BR` until a
+            // European variant exists.
+            if primary == "pt" {
+                return Some("pt-BR");
             }
             LANGUAGES.iter().copied().find(|code| *code == primary)
         })
@@ -138,6 +143,9 @@ mod tests {
         ("ja", "{}"),
         ("pl", "{}"),
         ("zh-Hans", "{}"),
+        ("pt-BR", "{}"),
+        ("ko", "{}"),
+        ("hi", "{}"),
     ];
     static TEXTS: Texts = Texts::new(&BUNDLES);
 
@@ -153,9 +161,19 @@ mod tests {
     fn the_first_preferred_language_with_a_bundle_wins() {
         assert_eq!(language(&["de-DE", "en-US"]), "de");
         assert_eq!(language(&["ru-RU", "es_419", "fr"]), "es");
-        assert_eq!(language(&["ru", "ko"]), "en");
+        assert_eq!(language(&["ru", "vi"]), "en");
         assert_eq!(language::<&str>(&[]), "en");
         assert_eq!(language(&["JA-JP"]), "ja");
+    }
+
+    #[test]
+    fn portuguese_korean_and_hindi_are_matched_by_their_language() {
+        for tag in ["pt", "pt-BR", "pt_BR.UTF-8", "pt-PT", "PT-pt"] {
+            assert_eq!(language(&[tag]), "pt-BR", "{tag}");
+        }
+        assert_eq!(language(&["ko-KR"]), "ko");
+        assert_eq!(language(&["hi-IN"]), "hi");
+        assert_eq!(language(&["ru", "pt-PT", "de"]), "pt-BR");
     }
 
     #[test]

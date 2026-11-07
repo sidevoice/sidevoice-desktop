@@ -1,0 +1,8 @@
+/* The microphone permission prompt. */
+"NSMicrophoneUsageDescription" = "에이전트와 대화할 수 있도록 Sidevoice가 마이크로 음성을 듣습니다.";
+
+/* The local network permission prompt. */
+"NSLocalNetworkUsageDescription" = "Sidevoice가 로컬 네트워크를 통해 페어링된 컴퓨터에 연결합니다.";
+
+/* The camera permission prompt (scanning the pairing code). */
+"NSCameraUsageDescription" = "컴퓨터에 표시되는 페어링 코드를 스캔하기 위해 Sidevoice가 카메라를 사용합니다.";
