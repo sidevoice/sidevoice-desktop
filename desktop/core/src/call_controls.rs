@@ -188,10 +188,17 @@ pub fn room(rest: Point, anchor: Rect, work: Rect) -> Room {
     Room { left: (rest.x - work.x).max(0.0).floor(), right: (work.right() - (rest.x + anchor.width)).max(0.0).floor() }
 }
 
-/// The room while the card is being dragged: its window is at `window` (on the display, from the work area's corner) and its
-/// box sits at `anchor` inside it.
-pub fn room_dragging(window: Point, anchor: Rect, work: Rect) -> Room {
-    room(Point { x: window.x + anchor.x, y: window.y + anchor.y }, anchor, work)
+/// Where the pointer holds the card when a drag starts: its offset from the corner of the card's box ([`anchor`], `unit` desktop
+/// units to a logical pixel) in a window at `window` on the desktop. The drag carries the box, not the window ([`dragged`]).
+pub fn grab(pointer: Point, window: Point, anchor: Rect, unit: f64) -> Point {
+    Point { x: pointer.x - (window.x + anchor.x * unit), y: pointer.y - (window.y + anchor.y * unit) }
+}
+
+/// Where the card's window goes while it is dragged: its box (the creature, the card's body) exactly where the pointer took it
+/// ([`grab`]), the window around the box as the page lays it out now. A box that moved inside its window mid-drag (a voice text came,
+/// went or grew, so the window grew on the box's left) stays under the pointer: the window moves, never the box.
+pub fn dragged(pointer: Point, grab: Point, anchor: Rect, unit: f64) -> Point {
+    Point { x: pointer.x - grab.x - anchor.x * unit, y: pointer.y - grab.y - anchor.y * unit }
 }
 
 /// What [`room`] says: the distances from the card's box to the work area's left and right edges.
@@ -474,16 +481,24 @@ mod tests {
     const CARD: Size = Size { width: 414.0, height: 82.0 };
 
     #[test]
-    fn room_while_dragging_follows_the_window_and_changes_only_by_whole_pixels() {
-        let anchor = Rect { x: 12.0, y: 12.0, width: 200.0, height: 200.0 };
-        // The window 212px from the edge at x 0 puts the box 224px in; dragged to the edge (window at -12) the room is gone.
-        assert_eq!(room_dragging(Point { x: 212.0, y: 0.0 }, anchor, WORK), Room { left: 224.0, right: 1016.0 });
-        assert_eq!(room_dragging(Point { x: -12.0, y: 0.0 }, anchor, WORK), Room { left: 0.0, right: 1240.0 });
-        // A sub-pixel move of the pointer is the same room: nothing to push.
-        assert_eq!(
-            room_dragging(Point { x: 100.2, y: 0.0 }, anchor, WORK),
-            room_dragging(Point { x: 100.7, y: 0.0 }, anchor, WORK)
-        );
+    fn a_dragged_card_keeps_its_box_under_the_pointer_whatever_grows_round_it() {
+        // The avatar's creature (160 px and its 12 px margin) in a window of its own size, taken 40 px into its box.
+        let alone = Rect { x: 0.0, y: 0.0, width: 184.0, height: 184.0 };
+        let start = Point { x: 1000.0, y: 300.0 };
+        let held = grab(Point { x: 1052.0, y: 352.0 }, start, alone, 1.0);
+        assert_eq!(held, Point { x: 52.0, y: 52.0 });
+        // Moved 30 px right and 5 down: the window with it.
+        assert_eq!(dragged(Point { x: 1082.0, y: 357.0 }, held, alone, 1.0), Point { x: 1030.0, y: 305.0 });
+        // Mid-drag a balloon comes out and the window grows 140 px on the creature's left (the creature is now 140 px in): the window
+        // moves 140 px left, so the creature stays under the pointer; the window's corner alone would have carried the creature off.
+        let grown = Rect { x: 140.0, y: 0.0, width: 184.0, height: 184.0 };
+        let to = dragged(Point { x: 1082.0, y: 357.0 }, held, grown, 1.0);
+        assert_eq!(to, Point { x: 890.0, y: 305.0 });
+        assert_eq!(to.x + grown.x + held.x, 1082.0, "the box where the pointer holds it");
+        // Windows at 200 %: the desktop is in physical pixels, two to a logical one.
+        let held2 = grab(Point { x: 2104.0, y: 600.0 }, Point { x: 2000.0, y: 500.0 }, alone, 2.0);
+        assert_eq!(held2, Point { x: 104.0, y: 100.0 });
+        assert_eq!(dragged(Point { x: 2104.0, y: 600.0 }, held2, grown, 2.0), Point { x: 1720.0, y: 500.0 });
     }
 
     #[test]
