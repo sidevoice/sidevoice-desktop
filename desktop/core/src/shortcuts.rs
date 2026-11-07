@@ -1015,7 +1015,8 @@ pub enum Recorded {
 }
 
 /// Captures the next shortcut for one action: a combination (a modifier, or an F-key), or a modifier / Fn on its own in the
-/// way that action allows (hold to talk: held; mute: tapped; one turn: tapped, or double tapped).
+/// way that action allows (hold to talk: held; mute: tapped; one turn: tapped, or double tapped). An F-key on its own is a
+/// single key for hold to talk (`F10:hold`, as a right-hand modifier is), and a combination for the others (`F9`, at once).
 #[derive(Debug, Clone)]
 pub struct Recorder {
     action: Action,
@@ -1104,8 +1105,15 @@ impl Recorder {
                     return Recorded::Done(None);
                 }
                 let Some(key) = key_name(code, character.as_deref()) else { return Recorded::Pending };
-                if none && function_key(&key).is_none() {
-                    return Recorded::Pending; // a key on its own would be taken from every app
+                if none {
+                    match function_key(&key) {
+                        None => return Recorded::Pending, // a key on its own would be taken from every app
+                        // Held, and let go of, as a right-hand modifier is: its hot key reports both on every system.
+                        Some(n) if self.action == Action::HoldToTalk => {
+                            return self.done_single(SingleKey::Function(n), Trigger::Hold)
+                        }
+                        Some(_) => {}
+                    }
                 }
                 let mut text = String::new();
                 for (held, name) in
@@ -2012,6 +2020,27 @@ mod tests {
         let mut hold = Recorder::new(Action::HoldToTalk);
         assert_eq!(hold.hear(down(SingleKey::Fn), at(0)), Recorded::Pending);
         assert_eq!(hold.hear(up(SingleKey::Fn), at(2000)), Recorded::Done(Some("Fn:hold".into())));
+        // An F-key on its own is held too, like a right-hand modifier; with a modifier it is a combination, held all the same.
+        let none = mods(false, false, false, false);
+        for (code, held) in [(109, "F10:hold"), (122, "F1:hold"), (105, "F13:hold")] {
+            let done = Recorder::new(Action::HoldToTalk).hear(key(code, "", none), at(0));
+            assert_eq!(done, Recorded::Done(Some(held.into())));
+            let parsed = parse(held).unwrap().unwrap();
+            assert!(
+                suits(Action::HoldToTalk, &parsed) && parsed.listened().is_none(),
+                "{held}: a hot key, no listener"
+            );
+            assert_eq!(parsed.accelerator(), held, "parses back");
+        }
+        assert_eq!(
+            Recorder::new(Action::HoldToTalk).hear(key(109, "", mods(false, true, false, false)), at(0)),
+            Recorded::Done(Some("Ctrl+F10".into()))
+        );
+        assert_eq!(
+            Recorder::new(Action::Mute).hear(key(109, "", none), at(0)),
+            Recorded::Done(Some("F10".into())),
+            "mute acts when it goes down: a combination"
+        );
         // Mute: tapped.
         let mut mute = Recorder::new(Action::Mute);
         mute.hear(down(SingleKey::RightControl), at(0));
