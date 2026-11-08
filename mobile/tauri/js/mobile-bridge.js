@@ -287,13 +287,25 @@
 
   /** The app's own player for the page's cues (`host.cue`, docs/BRIDGE.md -> "The cues"), where the phone has one: the page's Web
    *  Audio is not sure to come out through the audio session the native call holds. Whether this phone has one is asked once
-   *  (`cue`, `available`); until it answers, and where it does not, the page plays its cues itself. */
+   *  (`cue`, `available`); until it answers, and where it does not, the page plays its cues itself. A start says which sound and
+   *  how loud (`options` lists what it honours: a page sees from it that the app plays the chosen sound, not one of its own). */
   let cueMember = null;
-  const cue = (action, name) => transport.own.call("cue", { action, name }).catch((error) => {
+  const cue = (action, name, chosen) => transport.own.call("cue", { action, name, ...chosen }).catch((error) => {
     if (win.console) win.console.warn("[sidevoice] cue " + action + " failed:", error);
   });
+  /** What a start passes on of the page's options: the sound's id and the offset, when they are what they say; the app checks them. */
+  const chosen = (options) => {
+    const out = {};
+    if (options && typeof options.sound === "string") out.sound = options.sound;
+    if (options && typeof options.gainDb === "number" && Number.isFinite(options.gainDb)) out.gainDb = options.gainDb;
+    return out;
+  };
   transport.own.call("cue", { action: "available" }).then((offered) => {
-    if (offered === true) cueMember = Object.freeze({ start: (name) => void cue("start", name), stop: (name) => void cue("stop", name) });
+    if (offered === true) cueMember = Object.freeze({
+      options: Object.freeze(["sound", "gainDb"]),
+      start: (name, options) => void cue("start", name, chosen(options)),
+      stop: (name) => void cue("stop", name),
+    });
   }, () => {});
 
   const headset = shortcuts();

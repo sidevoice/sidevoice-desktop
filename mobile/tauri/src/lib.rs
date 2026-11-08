@@ -201,19 +201,25 @@ fn global_shortcuts(
 }
 
 /// `host.cue`'s one command (docs/BRIDGE.md -> "The cues"): `action` `available` (whether this phone plays the page's cues
-/// itself), or `start` and `stop` with the cue's `name`. The player belongs to the main thread.
+/// itself), or `start` and `stop` with the cue's `name`; a start may say which `sound` (an id of the bundled web's manifest,
+/// else its default) and its `gainDb` (the person's offset, else 0). The sound is read from the app's own assets, the web it
+/// bundles. The player belongs to the main thread.
 #[tauri::command]
 fn cue(
     app: AppHandle,
     webview: Webview,
     action: String,
     name: Option<String>,
+    sound: Option<String>,
+    gain_db: Option<f64>,
 ) -> Result<bool, serde_json::Value> {
-    use sidevoice_mobile_plugin::{cue_available, cue_ticket, start_cue, stop_cue, Cue};
+    use sidevoice_mobile_plugin::{
+        cue_available, cue_ticket, gain_db as offset, prepare_cue, start_cue, stop_cue, Cue,
+    };
     let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
     if action == "available" {
-        return Ok(cue_available());
+        return Ok(cue_available(|path| assets(&app, path)));
     }
     let cue = name
         .as_deref()
@@ -229,6 +235,7 @@ fn cue(
             .map_err(|error| refusal(&error.to_string()))?;
         return Ok(true);
     }
+    let gain_db = offset(gain_db).map_err(|why| refusal(&why))?;
     // Only in a call whose audio session is open: a page outside a call plays nothing and touches no session. Asked in the room's
     // own order, so that a start after the call's end finds it ended (and the call's end stops what played: `Room::stop_cue`).
     let room = app
@@ -242,13 +249,36 @@ fn cue(
             log::info!("cue {cue:?} refused: no call's audio is open");
             return;
         }
+        // Read and decoded here, off the main thread; the silences drawn from the clock.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |since| since.subsec_nanos());
+        let prepared = match prepare_cue(
+            |path| assets(&handle, path),
+            sound.as_deref(),
+            gain_db,
+            seed,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                log::warn!("cue {cue:?} did not start: {error}");
+                return;
+            }
+        };
         let _ = handle.run_on_main_thread(move || {
-            if let Err(error) = start_cue(cue, ticket) {
+            if let Err(error) = start_cue(cue, &prepared, ticket) {
                 log::warn!("cue {cue:?} did not start: {error}");
             }
         });
     });
     Ok(true)
+}
+
+/// A file of the app's own assets (its `frontendDist`, the web it bundles), by its path there (`voice/...`).
+fn assets<R: Runtime>(app: &AppHandle<R>, path: &str) -> Option<Vec<u8>> {
+    app.asset_resolver()
+        .get(path.to_string())
+        .map(|asset| asset.bytes)
 }
 
 /// The page's number (the host's page generation), asked once by the page's script when it loads (the app's own

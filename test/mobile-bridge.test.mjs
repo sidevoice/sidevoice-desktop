@@ -57,7 +57,7 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
   });
 }
 
-test("the phone's own cue is offered only where the app says it has a player, and plays what the page asks", async () => {
+test("the phone's own cue is offered only where the app says it has a player, and plays the sound the page chose", async () => {
   const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
   const none = install("tauri://localhost");
   await settled();
@@ -73,11 +73,18 @@ test("the phone's own cue is offered only where the app says it has a player, an
     const { cue } = api.host;
     assert.equal(typeof cue.start, "function");
     assert.equal(typeof cue.stop, "function");
+    // It says it plays the chosen sound at the offset: a page then asks it for that, not for a sound of its own.
+    assert.deepEqual([...cue.options], ["sound", "gainDb"]);
+    assert.ok(Object.isFrozen(cue.options));
+    // An older page's start, then a page's with its choice, then one with options that are not what they say.
     cue.start("thinking");
+    cue.start("thinking", { sound: "deep-heartbeat", gainDb: -4 });
+    cue.start("thinking", { sound: 3, gainDb: Number.NaN, extra: "x" });
     cue.stop("thinking");
     await settled();
     assert.equal(JSON.stringify(invoked.filter(([command]) => command === "cue").map(([, args]) => args)),
-      JSON.stringify([{ action: "available" }, { action: "start", name: "thinking" }, { action: "stop", name: "thinking" }]));
+      JSON.stringify([{ action: "available" }, { action: "start", name: "thinking" }, { action: "start", name: "thinking", sound: "deep-heartbeat", gainDb: -4 },
+        { action: "start", name: "thinking" }, { action: "stop", name: "thinking" }]));
   } finally { delete live.plugin.cue; }
 
   live.plugin.cue = () => { throw new Error("no audio"); };
