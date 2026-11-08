@@ -214,7 +214,8 @@ fn cue(
     gain_db: Option<f64>,
 ) -> Result<bool, serde_json::Value> {
     use sidevoice_mobile_plugin::{
-        cue_available, cue_ticket, gain_db as offset, prepare_cue, start_cue, stop_cue, Cue,
+        cue_available, cue_current, cue_ticket, end_cues, gain_db as offset, prepare_cue,
+        start_cue, stop_cue, Cue,
     };
     let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
@@ -231,6 +232,8 @@ fn cue(
         _ => return Err(refusal("cue takes available, start or stop")),
     };
     if !start {
+        // A start still being read when the page stops the cue plays nothing.
+        end_cues();
         app.run_on_main_thread(move || stop_cue(cue))
             .map_err(|error| refusal(&error.to_string()))?;
         return Ok(true);
@@ -242,10 +245,14 @@ fn cue(
         .try_state::<call::RoomCall>()
         .ok_or_else(|| refusal("no call"))?;
     let handle = app.clone();
-    // Bound to the call it is asked for in: an end (or a page's teardown) before it runs makes it a no-op, in `start_cue`.
+    // Bound to the request: a later start, a stop, a call's end or a page's teardown before it plays makes it a no-op, in
+    // `start_cue`.
     let ticket = cue_ticket();
     room.then(move |room| {
-        if ticket != cue_ticket() || !room.cue_allowed() {
+        if !cue_current(ticket) {
+            return;
+        }
+        if !room.cue_allowed() {
             log::info!("cue {cue:?} refused: no call's audio is open");
             return;
         }

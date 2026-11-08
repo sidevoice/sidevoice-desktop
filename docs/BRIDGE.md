@@ -356,7 +356,8 @@ interface CueBridge {
 - The app's command `cue` (`action`: `available`, `start` or `stop`, with `name` for the last two, and `sound` and `gainDb` for a
   start) is granted to the app's window alone. The player runs on the main thread; the sound is read and decoded off it.
 - An unknown name, a `gainDb` that is not a number, are refused (`bad_request`). A start only plays while a call's audio is
-  open; one asked for before a call ended plays nothing (stale), and every end of a call stops the cue. A sound the web does
+  open; one still being read when a later start, a stop or the call's end is asked for plays nothing (stale), and every end
+  of a call stops the cue. A sound the web does
   not have, a start the system refuses, are logged and play nothing: a cue is never worth a call's failing.
 - The page stops the cue when the agent stops working, the setting changes or the call ends; the app does not time it out.
 

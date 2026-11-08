@@ -106,17 +106,23 @@ pub fn gain_db(value: Option<f64>) -> Result<f32, String> {
     }
 }
 
-/// Which call's cues may still start. A start is asked for under the generation of its request ([`cue_ticket`]); every call end
-/// and page teardown moves it on ([`end_cues`]), and a start whose generation is past is a no-op ([`start_cue`]).
+/// Which start may still play. Each start is asked for with a ticket of its own ([`cue_ticket`]); a later start, the page's stop,
+/// every call end and page teardown move it on ([`end_cues`]), and a start whose ticket is past is a no-op ([`start_cue`]): the
+/// sound is read and decoded between the request and the play, and what was asked for after it wins.
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The generation a start asked for now belongs to.
+/// The ticket of a start asked for now: every start asked for before it is stale from now on.
 pub fn cue_ticket() -> u64 {
-    GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
 }
 
-/// The call is over, or the page gone: every start asked for before is stale. Does not stop the player: [`stop_cue`] does, on the
-/// main thread, in order after the starts already queued there.
+/// Whether the start asked for with `ticket` is still the last thing asked for: no later start, stop or end.
+pub fn cue_current(ticket: u64) -> bool {
+    GENERATION.load(std::sync::atomic::Ordering::SeqCst) == ticket
+}
+
+/// The page stopped the cue, the call is over, or the page is gone: every start asked for before is stale. Does not stop the
+/// player: [`stop_cue`] does, on the main thread, in order after the starts already queued there.
 pub fn end_cues() {
     GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
@@ -169,10 +175,10 @@ pub fn prepare_cue(
 }
 
 /// Plays `cue` until [`stop_cue`]: a start of what already plays (the same `key`) changes nothing, of something else replaces
-/// it. On the main thread. Nothing if `ticket` (from [`cue_ticket`], when the start was asked for) is stale: a call ended in
-/// between.
+/// it. On the main thread. Nothing if `ticket` (from [`cue_ticket`], when the start was asked for) is stale: the page stopped
+/// it, asked for another, or the call ended in between.
 pub fn start_cue(cue: Cue, prepared: &Prepared, ticket: u64) -> Result<(), String> {
-    if ticket != cue_ticket() {
+    if !cue_current(ticket) {
         return Ok(());
     }
     platform::start(cue, &prepared.key, &prepared.wav)
@@ -369,21 +375,24 @@ mod tests {
     }
 
     #[test]
-    fn a_start_asked_for_before_a_call_ended_is_stale() {
-        let asked = cue_ticket();
-        assert_eq!(asked, cue_ticket(), "nothing ended: still current");
-        end_cues();
-        assert_ne!(
-            asked,
-            cue_ticket(),
-            "an end between the request and its run"
-        );
-        // Past the end, the start is a no-op (it never reaches the player), whatever the OS.
+    fn a_start_is_stale_once_anything_is_asked_for_after_it() {
         let prepared = Prepared {
             key: "soft-heartbeat@0".into(),
             wav: Vec::new(),
         };
+        let asked = cue_ticket();
+        assert!(cue_current(asked), "nothing since: it may play");
+        // A call ended (or the page went) between the request and its run.
+        end_cues();
+        assert!(!cue_current(asked));
+        // Past it, the start is a no-op (it never reaches the player), whatever the OS.
         assert_eq!(start_cue(Cue::Thinking, &prepared, asked), Ok(()));
+        // A later start wins over an earlier one still being read; the page's stop (an end) over both.
+        let first = cue_ticket();
+        let second = cue_ticket();
+        assert!(!cue_current(first) && cue_current(second));
+        end_cues();
+        assert!(!cue_current(second));
     }
 
     fn samples(wav: &[u8]) -> Vec<i16> {
