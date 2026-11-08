@@ -294,6 +294,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `shortcuts` | the desktop app, and the mobile app | The desktop: below, always. The phone: the headset's two presses alone, never the others (below, "The shortcuts"). |
 | `muteShortcut`, `callControls` | the desktop app |  The app's own settings, set from the page's Settings: the global shortcuts, the headset's press and, where the app captures keys itself, `record` (below); `muteShortcut` is the mute one alone. |
 | `mediaDuck` | always | What happens to other apps' media while the microphone is open or the agent is speaking in a call: `get()`, `set(mode)`, `setLevel(level)` (how far Lower goes: `half`, `quarter`, the default, or `mute`; applied at once while lowered), `allow(permission)` (the person's own request, from the list of permissions, to let the app do what `permission` names, macOS `capture` (System Audio Recording) or `automation` (Music and Spotify): when the system may ask) `openSettings(permission)` (macOS: that permission's page in System Settings) and `restart()` (macOS: quits and reopens the app once `capture` is `restart`, that is System Audio Recording allowed but not yet seen by the running process; rejected with the key `media_duck.restart-in-call` during a call, `media_duck.restart-not-needed` otherwise; optional, so a page offers it only where present), `mode` `lower` (the default), `pause` or `off`. Each answers `{mode, level, lower, pause, access?, capture?}`, `capture` being `granted`, `denied`, `undetermined`, `unknown` or `restart` ([MEDIA_DUCK.md](MEDIA_DUCK.md)). Not offered by the mobile app yet. |
+| `screen` | the desktop app | `{ locked() }`: whether the person's screen is locked now (below, "The screen"). |
 | `updater` | a release or nightly that can update itself | Below. |
 | `debug` | a nightly or a dev build | The developer options (below). |
 | `textScale` | the Android app | `{ get(), subscribe(listener) }`: the phone's text size as a multiple of its default (the page applies it to its type only; it clamps it to 0.8–2). Offered only where the webview does not follow the system's font scale itself: Android's does not (its `textZoom` stays 100, set by `MobilePlugin.load`), so the app answers through `window.SidevoiceTextScale` and says it may have changed with the window's `sidevoice-text-scale` event. iOS offers none: its webview follows Dynamic Type and the page measures it. |
@@ -361,6 +362,18 @@ interface CueBridge {
   of a call stops the cue. A sound the web does
   not have, a start the system refuses, are logged and play nothing: a cue is never worth a call's failing.
 - The page stops the cue when the agent stops working, the setting changes or the call ends; the app does not time it out.
+
+## The screen
+
+`host.screen.locked()` answers whether the person's screen is locked now (`screen_locked`, granted to the room window alone;
+`platform::session`, the same observation that lets a held key go behind a locked screen): macOS, the window server's session
+says `CGSSessionScreenIsLocked`; Windows, the input desktop is the secure one; Linux, no observation yet, always `false`.
+
+It is the page's "only with the screen off" for the thinking sound (Settings → Call): the room's window hidden or minimised
+is not the screen off on a computer, where the call goes on in the floating card (sidevoice-web `features/call/PresenceSound.tsx`).
+The page asks every 2 s, and only while the answer decides something: in a call, while the agent works, with that setting.
+A desktop app before this member makes the page count the screen as never off; the mobile app offers none, and the page there
+reads its own visibility (the screen off, the app in the background), as a browser's.
 
 ## The local host
 

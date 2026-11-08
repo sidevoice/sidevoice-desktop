@@ -1382,11 +1382,11 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset", "shortcuts"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset", "screen", "shortcuts"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, true, true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "shortcuts", "updater", "voice"]);
+  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "screen", "shortcuts", "updater", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
@@ -1685,6 +1685,21 @@ test("host.muteShortcut is the mute one of the same command, so the pinned web k
     { action: "set", target: "mute", accelerator: null },
     { action: "set", target: "mute", accelerator: "M" },
   ], "a wrong argument asks the app nothing, and the mute alias is the mute action");
+});
+
+test("host.screen says whether the screen is locked, through screen_locked, and only a true is locked", async () => {
+  const install = loadFactory();
+  let answer = true;
+  const { win, calls } = settingsWindow({ screen_locked: () => answer });
+  const { host } = install(win, ORIGIN);
+  assert.deepEqual(Object.keys(host.screen), ["locked"]);
+  assert.ok(Object.isFrozen(host.screen));
+  assert.equal(await host.screen.locked(), true);
+  for (const other of [false, null, "true", 1]) {
+    answer = other;
+    assert.equal(await host.screen.locked(), false, String(other));
+  }
+  assert.ok(calls.filter(([cmd]) => cmd === "screen_locked").every(([, args]) => !args || Object.keys(args).length === 0));
 });
 
 test("host.mediaDuck gets, sets, levels, asks and opens settings through the media_duck command, strings only", async () => {

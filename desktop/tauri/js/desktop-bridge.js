@@ -559,6 +559,9 @@
       shortcuts: shortcut.host,
       muteShortcut: shortcut.muteHost,
       mediaDuck: mediaDuck(),
+      /** Whether the person's screen is locked now (`screen_locked`): the page's "only with the screen off", which a room window
+       *  hidden behind the floating card is not. `false` where the system tells the app nothing. */
+      screen: Object.freeze({ locked: () => call("screen_locked").then((locked) => locked === true) }),
       callControls: callControls(),
       // Only in a nightly or a dev build: the developer options (docs/BRIDGE.md -> "The developer options").
       ...(debugOptions ? { debug: debugOptions } : {}),

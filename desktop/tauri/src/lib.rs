@@ -264,6 +264,15 @@ fn debug_log(app: AppHandle, line: String) {
     let _ = (app, line);
 }
 
+/// `host.screen.locked()` (docs/BRIDGE.md -> "The screen"): whether the person's screen is locked now, for the page's "only
+/// with the screen off" thinking sound; the room's window hidden is not the screen off (the call goes on in the floating card).
+/// `false` where this system has no observation the app reads (`platform::session`: Linux, for now).
+#[tauri::command]
+fn screen_locked(app: AppHandle, webview: Webview) -> Result<bool, Value> {
+    room_page(&app, &webview).map_err(|why| refusal("not_room_page", why))?;
+    Ok(platform::session::screen_locked())
+}
+
 pub(crate) fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
     let label = app.state::<AppState>().room_label.lock().unwrap().clone()?;
     app.get_webview_window(&label)
@@ -432,6 +441,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         global_shortcuts,
         media_duck::media_duck,
         call_controls::call_controls_settings,
+        screen_locked,
         updater::updater,
         debug_options::debug_options
     ]
