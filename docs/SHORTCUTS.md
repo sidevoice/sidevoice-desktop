@@ -59,6 +59,7 @@ Keys together (`Ctrl+Alt+Shift+M`, `Cmd+Shift+M`, `F9`) or a single key with how
 | F-keys on their own (`F9`, `F13:hold`) | the same hot key: no permission | the same | the same | `unavailable` |
 | Fn and Right Command / Alt / Control / Shift | a **listen-only `CGEventTap`** on `flagsChanged` and `keyDown`, made only while one is set and **Input Monitoring** is granted | `unavailable` | `unavailable` | `unavailable` |
 | Recording a key in the page (`record`) | the app's own local monitor of keys in its windows (Fn included, **no permission**) | the page records | the page records | the page records |
+| Hold to talk on an F-key | recorded alone it is `F10:hold`, a single key held as a right-hand modifier is; its hot key reports the release (Carbon `kEventHotKeyReleased`). F1 to F20 only: a Mac has no F21 to F24 (`global-hotkey` maps none, and the recorder hears none) | the release is looked for every 50 ms after `WM_HOTKEY` (`global-hotkey`): it arrives up to 50 ms late, and a release and the next press within one look report none, so the second press ends the first there (`KeyMachine`), and a quick double stays a double | `KeyRelease`, with detectable auto-repeat | `unavailable` |
 | Headset's press | `MPRemoteCommandCenter` (the system's play/pause; a double press is `nextTrackCommand`) and the AirPods gesture: what the person chose | no path (`headset: null`) | no path | no path |
 | Screen locked → a hold is let go | yes (`CGSessionCopyCurrentDictionary`) | yes (the input desktop cannot be opened) | no observation | no observation |
 

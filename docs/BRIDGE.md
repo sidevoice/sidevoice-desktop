@@ -938,7 +938,7 @@ interface MuteShortcutBridge {   // host.muteShortcut: shortcuts.mute
     `Cmd+Ctrl+Alt+Shift` and the key's first letter upper case (`shift+cmd+m` → `Cmd+Shift+M`; core
     `settings::normalize_shortcut`). `Cmd` is the Command key (Super elsewhere). A key with no modifier that is not an F-key,
     no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key): `shortcut_invalid`.
-  - A single key is `Fn`, `RightAlt`, `RightCommand`, `RightControl`, `RightShift`, or `F1` to `F24`, then `:hold`, `:tap`
+  - A single key is `Fn`, `RightAlt`, `RightCommand`, `RightControl`, `RightShift`, or `F1` to `F24` (a Mac has F1 to F20 only), then `:hold`, `:tap`
     or `:double` (`Fn:hold`, `RightControl:double`, `F13:tap`; core `shortcuts::parse`). `hold` is down to up; `tap` is
     down and up within 400 ms with no other key between; `double` is two taps, the second within 400 ms of the first.
   - What each action can be done with: **hold to talk** a combination or a key held (`:hold`); **mute** and **say one thing** a
