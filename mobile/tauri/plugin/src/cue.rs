@@ -30,6 +30,12 @@ impl Cue {
 pub const SOUNDS_MANIFEST: &str = "voice/sounds/thinking/sounds.json";
 const SOUNDS_FOLDER: &str = "voice/sounds/thinking/";
 
+/// The longest silence between plays, and the longest sound, and the rates, the app takes (seconds; Hz): far beyond the web's
+/// sounds (6 s at most, a gap of 12), and a bound on what the loop holds in memory (2 plays and gaps at most past 20 s).
+const MAX_GAP_SECONDS: f32 = 30.0;
+const MAX_SOUND_SECONDS: f32 = 15.0;
+const RATES: std::ops::RangeInclusive<u32> = 8_000..=96_000;
+
 /// The person's offset from the sound's own level, in dB: the page's range (services/thinking-sounds.ts).
 const GAIN_DB: (f32, f32) = (-20.0, 10.0);
 
@@ -79,7 +85,8 @@ pub fn chosen_sound(
     let [min, max] = found.interval;
     let plain =
         |name: &str| !name.is_empty() && !name.contains(['/', '\\']) && !name.contains("..");
-    if !(min.is_finite() && max.is_finite() && min >= 0.0 && max >= min) || !plain(&found.files.m4a)
+    if !(min.is_finite() && max.is_finite() && min >= 0.0 && max >= min && max <= MAX_GAP_SECONDS)
+        || !plain(&found.files.m4a)
     {
         return Err(format!("cue-sound-malformed: {id}"));
     }
@@ -170,13 +177,14 @@ pub fn prepare_cue(
     let (samples, rate) = (&pcm.0, pcm.1);
     Ok(Prepared {
         key: format!("{}@{gain_db}", sound.id),
-        wav: render(samples, rate, sound.interval, gain_db, seed),
+        wav: render(samples, rate, sound.interval, gain_db, seed)?,
     })
 }
 
 /// Plays `cue` until [`stop_cue`]: a start of what already plays (the same `key`) changes nothing, of something else replaces
 /// it. On the main thread. Nothing if `ticket` (from [`cue_ticket`], when the start was asked for) is stale: the page stopped
-/// it, asked for another, or the call ended in between.
+/// it, asked for another, or the call ended in between. A stop or an end asked for once this check has passed moves the ticket
+/// on and then queues its [`stop_cue`] on this same thread, behind this start: what it plays is stopped right after.
 pub fn start_cue(cue: Cue, prepared: &Prepared, ticket: u64) -> Result<(), String> {
     if !cue_current(ticket) {
         return Ok(());
@@ -239,8 +247,24 @@ fn shape(pcm: &[f32], rate: u32, gain_db: f32) -> Vec<f32> {
 }
 
 /// The loop the player repeats, as a mono 16-bit WAV at `rate`: the sound at the person's offset, then a silence drawn in its
-/// `interval`, again, for at least [`LOOP_SECONDS`]. It starts with the sound, as the page plays one at once.
-pub fn render(pcm: &[f32], rate: u32, interval: [f32; 2], gain_db: f32, seed: u32) -> Vec<u8> {
+/// `interval`, again, for at least [`LOOP_SECONDS`]. It starts with the sound, as the page plays one at once. Refused for a
+/// sound with no samples, longer than [`MAX_SOUND_SECONDS`] or at a rate out of [`RATES`], or a gap past [`MAX_GAP_SECONDS`]:
+/// what the loop holds stays bounded.
+pub fn render(
+    pcm: &[f32],
+    rate: u32,
+    interval: [f32; 2],
+    gain_db: f32,
+    seed: u32,
+) -> Result<Vec<u8>, String> {
+    let [min, max] = interval;
+    if pcm.is_empty()
+        || !RATES.contains(&rate)
+        || pcm.len() as f32 > MAX_SOUND_SECONDS * rate as f32
+        || !(min >= 0.0 && max >= min && max <= MAX_GAP_SECONDS)
+    {
+        return Err("cue-sound-unplayable".into());
+    }
     let play = shape(pcm, rate, gain_db);
     let mut seed = seed | 1;
     let mut samples: Vec<i16> = Vec::new();
@@ -255,7 +279,7 @@ pub fn render(pcm: &[f32], rate: u32, interval: [f32; 2], gain_db: f32, seed: u3
         samples.extend(std::iter::repeat_n(0, (gap * rate as f32) as usize));
         plays += 1;
     }
-    wav(&samples, rate)
+    Ok(wav(&samples, rate))
 }
 
 fn wav(samples: &[i16], rate: u32) -> Vec<u8> {
@@ -413,7 +437,7 @@ mod tests {
     fn the_loop_is_the_sound_then_a_silence_in_its_interval_again_and_again() {
         let rate = 8_000;
         let play = tone(rate, 0.1);
-        let wav = render(&play, rate, [4.0, 6.0], 0.0, 7);
+        let wav = render(&play, rate, [4.0, 6.0], 0.0, 7).unwrap();
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), rate);
@@ -440,14 +464,32 @@ mod tests {
         }
         assert!(plays >= 2);
         // Another seed, other silences: they are drawn, not fixed.
-        assert_ne!(render(&play, rate, [4.0, 6.0], 0.0, 8), wav);
+        assert_ne!(render(&play, rate, [4.0, 6.0], 0.0, 8).unwrap(), wav);
+    }
+
+    #[test]
+    fn a_sound_that_would_not_end_or_would_not_fit_is_refused() {
+        let rate = 8_000;
+        let play = tone(rate, 0.1);
+        // No samples (a file that decodes to nothing) would never fill the loop.
+        assert!(render(&[], rate, [0.0, 0.0], 0.0, 1).is_err());
+        assert!(render(&play, 0, [1.0, 2.0], 0.0, 1).is_err());
+        assert!(render(&play, rate, [1.0, 1e30], 0.0, 1).is_err());
+        assert!(render(&play, rate, [f32::NAN, 2.0], 0.0, 1).is_err());
+        assert!(render(&tone(rate, 0.1).repeat(31), rate, [1.0, 2.0], 0.0, 1).is_err());
+        const LONG: &str =
+            r#"{"default":"x","sounds":[{"id":"x","interval":[1,1e30],"files":{"m4a":"x.m4a"}}]}"#;
+        const BAD: &[(&str, &[u8])] = &[(SOUNDS_MANIFEST, LONG.as_bytes())];
+        assert!(chosen_sound(assets(BAD), None)
+            .unwrap_err()
+            .starts_with("cue-sound-malformed"));
     }
 
     #[test]
     fn the_offset_moves_the_level_and_the_limiter_keeps_a_raised_sound_from_clipping() {
         let rate = 8_000;
         let peak = |gain_db: f32, of: f32| {
-            let all = samples(&render(&tone(rate, of), rate, [1.0, 1.0], gain_db, 1));
+            let all = samples(&render(&tone(rate, of), rate, [1.0, 1.0], gain_db, 1).unwrap());
             all.iter().map(|s| s.unsigned_abs()).max().unwrap() as f32 / f32::from(i16::MAX)
         };
         // Beneath the threshold, as the page plays it: the offset and the compressor's makeup, nothing else.

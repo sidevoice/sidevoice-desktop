@@ -348,7 +348,8 @@ interface CueBridge {
   the page's limiter (threshold -2 dB, hard knee, ratio 20, attack 3 ms, release 100 ms, and the makeup a Web Audio
   compressor adds). iOS: the sound decoded by `AVAudioFile` (from a temporary file, removed), shaped and laid out as a loop of
   at least 20 s of plays and silences, looped by an `AVAudioPlayer` in the active session: it changes nothing of the
-  session.
+  session. The sound is read and decoded on a thread of its own, neither the main thread nor the call's; a sound of no samples or
+  longer than 15 s, or a silence past 30 s, is refused, which bounds what the loop holds.
 - **Older pages and older apps.** A start with no options (a page before the sounds: `start("thinking")`) plays the default
   sound at its own level. An app before the sounds has no `options`: its start would play a breath of its own whatever the
   page asks, so a page that wants the chosen sound plays it in its own Web Audio there. A start while the cue plays changes

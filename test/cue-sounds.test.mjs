@@ -24,7 +24,7 @@ test("the app looks for the sounds beside their manifest, in the web it serves u
   assert.ok(existsSync(new URL("voice/index.html", ui)), "the pinned web was not found in ui/voice: npm run web");
 });
 
-test("every sound of the pinned web is where the app reads it, an MP4 the phone's player decodes", { skip: !bundled && "the pinned web has no thinking sounds yet" }, () => {
+test("every sound of the pinned web is where the app reads it, an MP4 file (its ftyp box)", { skip: !bundled && "the pinned web has no thinking sounds yet" }, () => {
   const manifest = JSON.parse(readFileSync(new URL(MANIFEST, ui), "utf8"));
   assert.ok(manifest.sounds.length > 0);
   assert.ok(manifest.sounds.some((sound) => sound.id === manifest.default), `the default ${manifest.default} is one of the sounds`);

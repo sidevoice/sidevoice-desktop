@@ -256,27 +256,39 @@ fn cue(
             log::info!("cue {cue:?} refused: no call's audio is open");
             return;
         }
-        // Read and decoded here, off the main thread; the silences drawn from the clock.
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(1, |since| since.subsec_nanos());
-        let prepared = match prepare_cue(
-            |path| assets(&handle, path),
-            sound.as_deref(),
-            gain_db,
-            seed,
-        ) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                log::warn!("cue {cue:?} did not start: {error}");
-                return;
-            }
-        };
-        let _ = handle.run_on_main_thread(move || {
-            if let Err(error) = start_cue(cue, &prepared, ticket) {
-                log::warn!("cue {cue:?} did not start: {error}");
-            }
-        });
+        // Read and decoded on a thread of its own: neither the main thread nor the room's, whose next job may be the call's end.
+        // A start made stale meanwhile (a stop, another start, the call's end) is a no-op in `start_cue`; an end queued behind it
+        // on the main thread stops what it played.
+        let spawned = std::thread::Builder::new()
+            .name("cue".into())
+            .spawn(move || {
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(1, |since| since.subsec_nanos());
+                let prepared = match prepare_cue(
+                    |path| assets(&handle, path),
+                    sound.as_deref(),
+                    gain_db,
+                    seed,
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        log::warn!("cue {cue:?} did not start: {error}");
+                        return;
+                    }
+                };
+                if !cue_current(ticket) {
+                    return;
+                }
+                let _ = handle.run_on_main_thread(move || {
+                    if let Err(error) = start_cue(cue, &prepared, ticket) {
+                        log::warn!("cue {cue:?} did not start: {error}");
+                    }
+                });
+            });
+        if let Err(error) = spawned {
+            log::warn!("cue {cue:?} did not start: {error}");
+        }
     });
     Ok(true)
 }
