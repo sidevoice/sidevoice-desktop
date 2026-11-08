@@ -10,7 +10,11 @@ impl Os for Native {
         false
     }
 
-    fn start(_: Cue, _: &[u8]) -> Result<(), String> {
+    fn decode(_: &[u8]) -> Result<(Vec<f32>, u32), String> {
+        Err("cue-unavailable".into())
+    }
+
+    fn start(_: Cue, _: &str, _: &[u8]) -> Result<(), String> {
         Err("cue-unavailable".into())
     }
 

@@ -298,7 +298,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `debug` | a nightly or a dev build | The developer options (below). |
 | `textScale` | the Android app | `{ get(), subscribe(listener) }`: the phone's text size as a multiple of its default (the page applies it to its type only; it clamps it to 0.8–2). Offered only where the webview does not follow the system's font scale itself: Android's does not (its `textZoom` stays 100, set by `MobilePlugin.load`), so the app answers through `window.SidevoiceTextScale` and says it may have changed with the window's `sidevoice-text-scale` event. iOS offers none: its webview follows Dynamic Type and the page measures it. |
 | `codeScanner` | the mobile app | `{ permission(), request(), scan(), cancel(), openSettings() }`: the camera that scans the pairing QR code. `scan()` never rejects: `{status: "scanned", text}` (the code as printed), `{status: "cancelled"}`, `{status: "denied"}`, `{status: "unavailable"}`; the page draws the viewfinder over the camera (docs/MOBILE.md → "Scanning the pairing code"). |
-| `cue` | the iOS app | `{ start(name), stop(name) }`: the app plays the page's cue itself (below, "The cues"). `null` until the app says it has a player. |
+| `cue` | the iOS app | `{ start(name, options?), stop(name), options }`: the app plays the page's cue itself, the sound the person chose (below, "The cues"). `null` until the app says it has a player. |
 | `callSurface` | the mobile app | `{ active(), still({id, png, px}), forget(ids) }`: the app draws the call's own surfaces from the room's `callSurface`, relayed in its call report with the stills by id; the page hands each still's PNG over once, before the report that names it, and forgets the ones it shows no more (docs/MOBILE.md → "The call surface"). |
 
 `presence` is independent of `host.voice`: where the app does not own the media (Windows and Linux), it says nothing, and
@@ -319,22 +319,47 @@ name given in Settings (`Settings.Global` `device_name`), else the Bluetooth nam
 `host.cue` is the app's own player for a sound the page decides on, offered where a webview's Web Audio is not sure to come
 out: the mobile app on iOS, whose native call holds the audio session (play-and-record, voice chat; `CALL_AUDIO` in
 `mobile/tauri/src/call.rs`). The page decides when (the thinking sound: in a call, while the agent works, as Settings →
-Call says: never, only with the screen off, always); the app only plays. `sidevoice-web#439`.
+Call says: never, only with the screen off, always) and which sound and how loud; the app only plays. `sidevoice-web#439`.
 
 ```ts
-type CueName = "thinking";   // the soft breath that says the agent is working
-interface CueBridge { start(cue: CueName): void; stop(cue: CueName): void }   // both idempotent, neither throws
+type CueName = "thinking";   // the sound that says the agent is working
+interface CueOptions {
+  sound?: string;    // an id of the bundled web's thinking sounds (below); none: their default
+  gainDb?: number;   // the person's offset from the sound's own level, in dB (whole, -20..+10); none: 0
+}
+interface CueBridge {
+  start(cue: CueName, options?: CueOptions): void;   // idempotent, never throws
+  stop(cue: CueName): void;                          // idempotent, never throws
+  readonly options: readonly string[];               // what start honours: ["sound", "gainDb"]
+}
 ```
 
-- Offered only where the phone has a player. The bridge asks the app once when the page loads (`cue`, `{action: "available"}`) and
-  offers the member when it answers `true`; until then, and on a phone with none (Android today), `host.cue` is `null` and the
-  page plays the cue in its own Web Audio. A web that has no `host.cue` member, or an app without it, behaves the same, so the
-  two ship in either order.
-- The app's command `cue` (`action`: `available`, `start` or `stop`, with `name` for the last two) is granted to the app's window
-  alone. The player runs on the main thread. iOS: an `AVAudioPlayer` looping a WAV the app makes (low-passed noise under a
-  3.2 s swell, as the page's), in the active session: it changes nothing of the session.
-- An unknown name is refused (`bad_request`). A start that the system refuses is logged and plays nothing: a cue is never
-  worth a call's failing.
+- Offered only where the phone has a player and the web it bundles has the sounds. The bridge asks the app once when the
+  page loads (`cue`, `{action: "available"}`) and offers the member when it answers `true`; until then, and on a phone with
+  none (Android today), `host.cue` is `null` and the page plays the cue in its own Web Audio.
+- **The sounds are the web's.** The bundled web keeps them in `voice/sounds/thinking/` of the app's assets (the web's
+  `apps/web/public/sounds/thinking/`): `sounds.json`, `{ "default": id, "sounds": [{ "id", "interval": [min, max],
+  "files": { "webm", "m4a" } }] }` in Settings' order, and each sound's files beside it. The app reads the manifest and the
+  sound's `m4a` (AAC in MP4) through Tauri's asset resolver (`mobile/tauri/plugin/src/cue.rs`, `SOUNDS_MANIFEST`), so no
+  sound is kept in this repository; `test/cue-sounds.test.mjs` checks the pinned web has every one where the app looks. A
+  web without them (a pin from before them) leaves the app with no player to offer, and the page plays its own.
+- **How it plays**: as the page does (sidevoice-web `services/thinking-sound.ts`): the sound at once, then again after a
+  silence drawn in its `interval` (seconds, from the end of one play to the start of the next), moved by `gainDb` and through
+  the page's limiter (threshold -2 dB, hard knee, ratio 20, attack 3 ms, release 100 ms, and the makeup a Web Audio
+  compressor adds). iOS: the sound decoded by `AVAudioFile` (from a temporary file, removed), shaped and laid out as a loop of
+  at least 20 s of plays and silences, looped by an `AVAudioPlayer` in the active session: it changes nothing of the
+  session. The sound is read and decoded on a thread of its own, neither the main thread nor the call's; a sound of no samples or
+  longer than 15 s, or a silence past 30 s, is refused, which bounds what the loop holds.
+- **Older pages and older apps.** A start with no options (a page before the sounds: `start("thinking")`) plays the default
+  sound at its own level. An app before the sounds has no `options`: its start would play a breath of its own whatever the
+  page asks, so a page that wants the chosen sound plays it in its own Web Audio there. A start while the cue plays changes
+  nothing with the same options, and plays the new ones instead with others.
+- The app's command `cue` (`action`: `available`, `start` or `stop`, with `name` for the last two, and `sound` and `gainDb` for a
+  start) is granted to the app's window alone. The player runs on the main thread; the sound is read and decoded off it.
+- An unknown name, a `gainDb` that is not a number, are refused (`bad_request`). A start only plays while a call's audio is
+  open; one still being read when a later start, a stop or the call's end is asked for plays nothing (stale), and every end
+  of a call stops the cue. A sound the web does
+  not have, a start the system refuses, are logged and play nothing: a cue is never worth a call's failing.
 - The page stops the cue when the agent stops working, the setting changes or the call ends; the app does not time it out.
 
 ## The local host
