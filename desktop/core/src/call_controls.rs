@@ -702,6 +702,36 @@ mod tests {
     }
 
     #[test]
+    fn at_every_corner_the_box_keeps_its_pixel_while_the_window_grows_away_from_the_edges() {
+        // The avatar's creature (160 px and its margin) left in each corner; the window grows round it as the page lays out a balloon or
+        // the compact card: toward the screen's middle on both axes (the page keeps it within the room the app tells it).
+        let alone = Size { width: 184.0, height: 184.0 };
+        for corner in [Corner::TopLeft, Corner::TopRight, Corner::BottomLeft, Corner::BottomRight] {
+            let rest = Spot::corner(corner).at(alone, WORK);
+            let still = window_at(rest, Rect { x: 0.0, y: 0.0, width: 184.0, height: 184.0 }, alone, WORK);
+            assert_eq!(still, rest, "{corner:?}: the window is the box");
+            // 140 px of window on the side away from the corner, and 104 px over (lower half) or 104 px under (upper half) it.
+            let x = if corner.left() { 0.0 } else { 140.0 };
+            let y = if corner.top() { 0.0 } else { 104.0 };
+            let grown =
+                window_at(rest, Rect { x, y, width: 184.0, height: 184.0 }, Size { width: 324.0, height: 288.0 }, WORK);
+            assert_eq!(
+                Point { x: grown.x + x, y: grown.y + y },
+                rest,
+                "{corner:?}: the box where it rests, to the pixel"
+            );
+            // A window that reached past the edge on the box's own side would be moved in, the box with it: the page never asks for one.
+            let toward = window_at(
+                rest,
+                Rect { x: 140.0 - x, y, width: 184.0, height: 184.0 },
+                Size { width: 324.0, height: 288.0 },
+                WORK,
+            );
+            assert_ne!(toward.x + 140.0 - x, rest.x, "{corner:?}: the reason the page keeps within the room");
+        }
+    }
+
+    #[test]
     fn the_picture_resizes_freely_from_its_grip_keeping_the_far_corner() {
         // At the top right; its grip in the bottom-left corner.
         let start = Rect { x: 996.0, y: 25.0, width: 444.0, height: 400.0 };
