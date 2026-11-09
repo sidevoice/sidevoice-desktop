@@ -45,7 +45,7 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.equal(typeof api.snapshot, "function");
     assert.equal(typeof api.run, "function");
     const host = api.host;
-    assert.deepEqual(Object.keys(host).sort(), ["build", "callSurface", "codeScanner", "cue", "engine", "microphone", "pairings", "presence", "reach", "shortcuts", "voice"]);
+    assert.deepEqual(Object.keys(host).sort(), ["build", "callSurface", "codeScanner", "cue", "engine", "microphone", "pairings", "presence", "reach", "screen", "shortcuts", "voice"]);
     assert.equal(host.callSurface.active(), true, "the app draws the call's surfaces");
     for (const fn of ["still", "forget"]) assert.equal(typeof host.callSurface[fn], "function", fn);
     assert.equal(JSON.stringify(host.presence), JSON.stringify({ media: "app" }));
@@ -73,18 +73,23 @@ test("the phone's own cue is offered only where the app says it has a player, an
     const { cue } = api.host;
     assert.equal(typeof cue.start, "function");
     assert.equal(typeof cue.stop, "function");
-    // It says it plays the chosen sound at the offset: a page then asks it for that, not for a sound of its own.
-    assert.deepEqual([...cue.options], ["sound", "gainDb"]);
+    // It says it plays the chosen sound at the offset and the frequency, and only while the screen is locked when asked: a page
+    // then asks it for that, not for a sound of its own, and leaves the lock to it.
+    assert.deepEqual([...cue.options], ["sound", "gainDb", "intervalScale", "whileLocked"]);
     assert.ok(Object.isFrozen(cue.options));
-    // An older page's start, then a page's with its choice, then one with options that are not what they say.
+    // An older page's start, then a page's with its choice, then one with options that are not what they say, then one with the
+    // frequency and for the lock.
     cue.start("thinking");
     cue.start("thinking", { sound: "deep-heartbeat", gainDb: -4 });
-    cue.start("thinking", { sound: 3, gainDb: Number.NaN, extra: "x" });
+    cue.start("thinking", { sound: 3, gainDb: Number.NaN, extra: "x", intervalScale: "2", whileLocked: "yes" });
+    cue.start("thinking", { sound: "deep-heartbeat", gainDb: -4, intervalScale: 1.5, whileLocked: true });
+    cue.start("thinking", { sound: "deep-heartbeat", gainDb: -4, intervalScale: Number.POSITIVE_INFINITY });
     cue.stop("thinking");
     await settled();
     assert.equal(JSON.stringify(invoked.filter(([command]) => command === "cue").map(([, args]) => args)),
       JSON.stringify([{ action: "available" }, { action: "start", name: "thinking" }, { action: "start", name: "thinking", sound: "deep-heartbeat", gainDb: -4 },
-        { action: "start", name: "thinking" }, { action: "stop", name: "thinking" }]));
+        { action: "start", name: "thinking" }, { action: "start", name: "thinking", sound: "deep-heartbeat", gainDb: -4, intervalScale: 1.5, whileLocked: true },
+        { action: "start", name: "thinking", sound: "deep-heartbeat", gainDb: -4 }, { action: "stop", name: "thinking" }]));
   } finally { delete live.plugin.cue; }
 
   live.plugin.cue = () => { throw new Error("no audio"); };
@@ -93,6 +98,26 @@ test("the phone's own cue is offered only where the app says it has a player, an
     await settled();
     assert.equal(api.host.cue, null, "an app that fails to answer offers none");
   } finally { delete live.plugin.cue; }
+});
+
+test("host.screen says whether the screen is locked, through screen_locked, and only a true is locked", async () => {
+  let answer = true;
+  live.plugin.screen_locked = () => answer;
+  try {
+    const { api, invoked } = install("tauri://localhost");
+    const { screen } = api.host;
+    assert.deepEqual(Object.keys(screen), ["locked"]);
+    assert.ok(Object.isFrozen(screen));
+    assert.equal(await screen.locked(), true);
+    for (const other of [false, null, "true", 1]) {
+      answer = other;
+      assert.equal(await screen.locked(), false, String(other));
+    }
+    assert.ok(invoked.filter(([command]) => command === "screen_locked").every(([, args]) => !args || Object.keys(args).length === 0), "asks nothing more");
+    // An app that cannot answer: the page's question fails, and the page counts the screen as not locked.
+    live.plugin.screen_locked = () => { throw new Error("no answer"); };
+    await assert.rejects(screen.locked());
+  } finally { delete live.plugin.screen_locked; }
 });
 
 test("the phone's wording of the web's texts is offered per language, and only when it has any", () => {

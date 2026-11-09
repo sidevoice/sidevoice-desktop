@@ -202,9 +202,13 @@ fn global_shortcuts(
 
 /// `host.cue`'s one command (docs/BRIDGE.md -> "The cues"): `action` `available` (whether this phone plays the page's cues
 /// itself), or `start` and `stop` with the cue's `name`; a start may say which `sound` (an id of the bundled web's manifest,
-/// else its default) and its `gainDb` (the person's offset, else 0). The sound is read from the app's own assets, the web it
-/// bundles. The player belongs to the main thread.
+/// else its default), its `gainDb` (the person's offset, else 0), its `intervalScale` (the person's frequency: what multiplies
+/// the silence after each play, 0.5 to 3; anything else, or none, 1) and `whileLocked` (true: it plays only while the screen is
+/// locked, from each lock to the unlock, `When::WhileLocked`; else at once). The sound is read from the app's own assets, the
+/// web it bundles. The player belongs to the main thread.
 #[tauri::command]
+// The page's own arguments (six) and the app's two: a command is its wire.
+#[allow(clippy::too_many_arguments)]
 fn cue(
     app: AppHandle,
     webview: Webview,
@@ -212,10 +216,12 @@ fn cue(
     name: Option<String>,
     sound: Option<String>,
     gain_db: Option<f64>,
+    interval_scale: Option<f64>,
+    while_locked: Option<bool>,
 ) -> Result<bool, serde_json::Value> {
     use sidevoice_mobile_plugin::{
-        cue_available, cue_current, cue_ticket, end_cues, gain_db as offset, prepare_cue,
-        start_cue, stop_cue, Cue,
+        cue_available, cue_current, cue_ticket, end_cues, gain_db as offset,
+        interval_scale as frequency, prepare_cue, start_cue, stop_cue, Cue, When,
     };
     let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
@@ -239,6 +245,8 @@ fn cue(
         return Ok(true);
     }
     let gain_db = offset(gain_db).map_err(|why| refusal(&why))?;
+    let interval_scale = frequency(interval_scale);
+    let when = When::asked(while_locked);
     // Only in a call whose audio session is open: a page outside a call plays nothing and touches no session. Asked in the room's
     // own order, so that a start after the call's end finds it ended (and the call's end stops what played: `Room::stop_cue`).
     let room = app
@@ -269,6 +277,7 @@ fn cue(
                     |path| assets(&handle, path),
                     sound.as_deref(),
                     gain_db,
+                    interval_scale,
                     seed,
                 ) {
                     Ok(prepared) => prepared,
@@ -281,7 +290,7 @@ fn cue(
                     return;
                 }
                 let _ = handle.run_on_main_thread(move || {
-                    if let Err(error) = start_cue(cue, &prepared, ticket) {
+                    if let Err(error) = start_cue(cue, prepared, ticket, when) {
                         log::warn!("cue {cue:?} did not start: {error}");
                     }
                 });
@@ -291,6 +300,20 @@ fn cue(
         }
     });
     Ok(true)
+}
+
+/// `host.screen.locked()` (docs/BRIDGE.md -> "The screen"), the desktop's contract: whether the person's screen is locked now, a
+/// screen that is off counting as locked (iOS: its protected data gone, which needs a passcode and comes some seconds after the
+/// lock; Android: the keyguard, or the screen off), for the page's "only with the screen off" thinking sound: the app in the
+/// background with the screen on is not it. Asked from a blocking thread: the system answers on the main thread, which then
+/// waits on nothing.
+#[tauri::command]
+async fn screen_locked(app: AppHandle, webview: Webview) -> Result<bool, serde_json::Value> {
+    the_page(&app, &webview)
+        .map_err(|why| serde_json::json!({ "key": "bad_request", "message": why }))?;
+    tauri::async_runtime::spawn_blocking(move || sidevoice_mobile_plugin::screen_locked(&app))
+        .await
+        .map_err(|error| serde_json::json!({ "key": "bad_request", "message": error.to_string() }))
 }
 
 /// A file of the app's own assets (its `frontendDist`, the web it bundles), by its path there (`voice/...`).
@@ -455,7 +478,8 @@ fn run_app() {
             call_forget,
             cue,
             developer_options,
-            global_shortcuts
+            global_shortcuts,
+            screen_locked
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

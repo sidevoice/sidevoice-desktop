@@ -18,8 +18,9 @@ log = "0.4"
 crc32fast = "1"
 
 [target.'cfg(target_os = "ios")'.dependencies]
-# The screen kept on (src/platform/screen/ios.rs): `UIApplication.isIdleTimerDisabled`. Already in the iOS build through Tauri;
-# only the types the call names.
+# The screen kept on (src/platform/screen/ios.rs): `UIApplication.isIdleTimerDisabled`; whether it is locked, its protected data
+# (`isProtectedDataAvailable` and the notifications of its change, observed on the main queue: NSNotificationCenter and
+# NSOperationQueue, with a block). Already in the iOS build through Tauri; only the types the calls name.
 objc2 = "0.6"
 objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIApplication", "UIResponder"] }
 # The page's cues' player (src/platform/cue/ios.rs): `AVAudioPlayer`, and `AVAudioFile` into a PCM buffer to decode a sound.
@@ -28,7 +29,7 @@ objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "
 # surfaces read the creatures' stills (src/platform/call_surface/ios.rs), is NSFileManager's.
 objc2-call-kit = { version = "0.3", default-features = false, features = ["std", "block2", "dispatch2", "objc2-avf-audio", "CXAction", "CXCallAction", "CXCallController", "CXCallUpdate", "CXEndCallAction", "CXHandle", "CXProvider", "CXProviderConfiguration", "CXSetHeldCallAction", "CXSetMutedCallAction", "CXStartCallAction", "CXTransaction"] }
 objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession", "AVAudioPlayer", "AVAudioFile", "AVAudioBuffer", "AVAudioFormat", "AVAudioTypes"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSError", "NSFileManager", "NSSet", "NSString", "NSURL", "NSUUID", "NSValue"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSData", "NSError", "NSFileManager", "NSNotification", "NSOperation", "NSSet", "NSString", "NSURL", "NSUUID", "NSValue"] }
 block2 = "0.6"
 # The main queue the CallKit controller answers on (its default is a private queue of its own).
 dispatch2 = "0.3"

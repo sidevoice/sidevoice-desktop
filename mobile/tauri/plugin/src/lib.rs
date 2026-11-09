@@ -14,8 +14,9 @@
 //!   draw, carried in the call's details, with the creatures' stills kept by id where those read them, and what the
 //!   person asks for on them, reported as the call's events. The Live Activity is started, updated and ended with the
 //!   app's own call; its views and buttons are Swift (mobile/tauri/apple), which the Rust side reaches by name.
-//! - **The screen** ([`keep_screen_on`]): kept on while a model download runs, since the system suspends the app, and
-//!   the download, soon after the screen turns off.
+//! - **The screen** ([`keep_screen_on`], [`screen_locked`]): kept on while a model download runs, since the system suspends
+//!   the app, and the download, soon after the screen turns off; and whether it is locked, for the page's "only with the
+//!   screen off" thinking sound, which the app's own player applies itself with the screen locked ([`When`]).
 mod call_service;
 mod call_surface;
 mod cue;
@@ -35,16 +36,18 @@ pub use call_surface::{
     STILL_LIMIT, STILL_MAX_PX, URL_SCHEME,
 };
 pub use cue::{
-    cue_available, cue_current, cue_ticket, end_cues, gain_db, prepare_cue, start_cue, stop_cue,
-    Cue, Prepared,
+    cue_available, cue_current, cue_ticket, end_cues, gain_db, interval_scale, prepare_cue,
+    start_cue, stop_cue, Cue, Prepared, When,
 };
-pub use screen::{keep_screen_on, ScreenError};
+pub use screen::{keep_screen_on, screen_locked, ScreenError};
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("mobile")
-        .setup(|_app, api| {
+        .setup(|app, api| {
             // A surface an earlier run left (the app was ended during a call) shows no call of this one.
             call_surface::end_surface();
+            // The cue the page starts for "only with the screen off" plays from the lock to the unlock (`cue::When`).
+            cue::follow_the_lock(app);
             platform::call_service::register(api)
         })
         .build()

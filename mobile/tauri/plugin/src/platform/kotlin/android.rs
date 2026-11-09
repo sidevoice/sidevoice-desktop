@@ -21,12 +21,13 @@ pub fn register<R: Runtime, C: DeserializeOwned>(
     Ok(())
 }
 
-/// Runs the Kotlin plugin's `command` with `args`, and waits for its answer. `None` when the plugin is not set up.
-pub fn run<R: Runtime>(
+/// Runs the Kotlin plugin's `command` with `args`, and waits for its answer (`T`, `()` for none). `None` when the plugin is not
+/// set up. The command runs on Android's main thread: never call this from there, it would wait on itself.
+pub fn run<R: Runtime, T: DeserializeOwned>(
     app: &AppHandle<R>,
     command: &str,
     args: impl Serialize,
-) -> Option<Result<(), PluginInvokeError>> {
+) -> Option<Result<T, PluginInvokeError>> {
     let plugin = app.try_state::<Plugin<R>>()?;
-    Some(plugin.0.run_mobile_plugin::<()>(command, args))
+    Some(plugin.0.run_mobile_plugin::<T>(command, args))
 }
