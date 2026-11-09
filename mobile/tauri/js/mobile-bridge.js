@@ -5,7 +5,8 @@
 // are one script, composed by the app (mobile/tauri/src/bridge.rs, docs/BRIDGE.md -> "Parts"): this part is evaluated where
 // `transportOf` and `membersOf`, the other two, are in scope.
 //
-// The phone offers the voice call it runs itself, its engine, its microphone permission, its pairings and the camera that scans a pairing code, and owns the
+// The phone offers the voice call it runs itself, its engine, its microphone permission, its pairings, the camera that scans a pairing code and whether
+// its screen is locked, and owns the
 // call's media: the page registers no Media Session of its own (`presence.media: "app"`). Nothing of the desktop's
 // (the local host, the reset, the mute shortcut, the call controls card, the updater) is offered, and its `debug` has the
 // phone's one switch, in a nightly or a dev build:
@@ -288,21 +289,25 @@
   /** The app's own player for the page's cues (`host.cue`, docs/BRIDGE.md -> "The cues"), where the phone has one: the page's Web
    *  Audio is not sure to come out through the audio session the native call holds. Whether this phone has one is asked once
    *  (`cue`, `available`); until it answers, and where it does not, the page plays its cues itself. A start says which sound and
-   *  how loud (`options` lists what it honours: a page sees from it that the app plays the chosen sound, not one of its own). */
+   *  how loud (`options` lists what it honours: a page sees from it that the app plays the chosen sound, not one of its own),
+   *  and whether it plays only while the screen is locked (`whileLocked`: the page's "only with the screen off", which the app
+   *  applies itself from each lock to the unlock, since a locked phone's page may not run to start it then). */
   let cueMember = null;
   const cue = (action, name, chosen) => transport.own.call("cue", { action, name, ...chosen }).catch((error) => {
     if (win.console) win.console.warn("[sidevoice] cue " + action + " failed:", error);
   });
-  /** What a start passes on of the page's options: the sound's id and the offset, when they are what they say; the app checks them. */
+  /** What a start passes on of the page's options: the sound's id, the offset and the lock's `true`, when they are what they say;
+   *  the app checks them. */
   const chosen = (options) => {
     const out = {};
     if (options && typeof options.sound === "string") out.sound = options.sound;
     if (options && typeof options.gainDb === "number" && Number.isFinite(options.gainDb)) out.gainDb = options.gainDb;
+    if (options && options.whileLocked === true) out.whileLocked = true;
     return out;
   };
   transport.own.call("cue", { action: "available" }).then((offered) => {
     if (offered === true) cueMember = Object.freeze({
-      options: Object.freeze(["sound", "gainDb"]),
+      options: Object.freeze(["sound", "gainDb", "whileLocked"]),
       start: (name, options) => void cue("start", name, chosen(options)),
       stop: (name) => void cue("stop", name),
     });
@@ -354,6 +359,10 @@
       get cue() {
         return cueMember;
       },
+      /** Whether the person's screen is locked now (`screen_locked`), the desktop's contract: the page's "only with the screen
+       *  off", which the app in the background with the screen on is not. A screen that is off counts as locked; `false` where
+       *  the system tells the app nothing (iOS: no passcode; some seconds after the lock). */
+      screen: Object.freeze({ locked: () => transport.own.call("screen_locked").then((locked) => locked === true) }),
       callSurface: Object.freeze({
         active: () => true,
         /** A still's PNG (`png`, base64), kept by the app under `id` where the surfaces read it. */

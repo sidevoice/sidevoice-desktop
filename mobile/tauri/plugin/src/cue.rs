@@ -181,20 +181,161 @@ pub fn prepare_cue(
     })
 }
 
-/// Plays `cue` until [`stop_cue`]: a start of what already plays (the same `key`) changes nothing, of something else replaces
-/// it. On the main thread. Nothing if `ticket` (from [`cue_ticket`], when the start was asked for) is stale: the page stopped
-/// it, asked for another, or the call ended in between. A stop or an end asked for once this check has passed moves the ticket
-/// on and then queues its [`stop_cue`] on this same thread, behind this start: what it plays is stopped right after.
-pub fn start_cue(cue: Cue, prepared: &Prepared, ticket: u64) -> Result<(), String> {
+/// When a start plays: at once, or only while the screen is locked (the page's "only with the screen off", its start's
+/// `whileLocked`). A phone's page cannot apply that one itself: with the screen locked its webview may not run, neither to ask
+/// whether the screen is locked nor to start the cue then, and iOS says it only some seconds after the lock. So the page starts
+/// the cue while the agent works, whatever the screen, and the app plays it while the screen is locked: from the lock to the
+/// unlock, again at each lock, until the page's stop (docs/BRIDGE.md -> "The cues").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum When {
+    /// From the start to the stop.
+    Always,
+    /// Only while the screen is locked, between the start and the stop.
+    WhileLocked,
+}
+
+impl When {
+    /// What a start asks for: `whileLocked` true is the lock's; anything else (none: an older page) plays at once.
+    pub fn asked(while_locked: Option<bool>) -> When {
+        if while_locked == Some(true) {
+            When::WhileLocked
+        } else {
+            When::Always
+        }
+    }
+}
+
+/// A start that plays only while the screen is locked, held between the page's start and its stop.
+struct Held {
+    cue: Cue,
+    prepared: Prepared,
+    ticket: u64,
+}
+
+/// What the player is to do with the held cue.
+#[derive(Debug, PartialEq, Eq)]
+enum Player {
+    Play,
+    Stop,
+    Keep,
+}
+
+/// Whether the screen is locked, as the system last said it (`platform::screen::watch`), and the cue held for the lock. The
+/// decisions alone: [`start_cue`], [`stop_cue`] and [`screen_changed`] do what they say, on the main thread.
+struct Lock {
+    locked: bool,
+    held: Option<Held>,
+}
+
+impl Lock {
+    /// A start for the lock: held, playing now if the screen is locked, else not (what played before it stops).
+    fn hold(&mut self, held: Held) -> Player {
+        self.held = Some(held);
+        if self.locked {
+            Player::Play
+        } else {
+            Player::Stop
+        }
+    }
+
+    /// The page's stop, a start that plays at once, a call's end: nothing is held any more.
+    fn forget(&mut self) {
+        self.held = None;
+    }
+
+    /// The system says whether the screen is locked: the held cue plays from a lock and stops at an unlock, unless it is stale
+    /// (`current` says whether a ticket is: anything asked for after its start makes it so, and its stop is on its way).
+    fn changed(&mut self, locked: bool, current: impl Fn(u64) -> bool) -> Player {
+        let was = std::mem::replace(&mut self.locked, locked);
+        match &self.held {
+            Some(held) if current(held.ticket) && locked != was => {
+                if locked {
+                    Player::Play
+                } else {
+                    Player::Stop
+                }
+            }
+            _ => Player::Keep,
+        }
+    }
+}
+
+thread_local! {
+    /// On the main thread, where the player is and where the system tells the lock.
+    static LOCK: std::cell::RefCell<Lock> = const { std::cell::RefCell::new(Lock { locked: false, held: None }) };
+}
+
+/// Does what `player` says with `held`.
+fn apply(player: Player, held: Option<&Held>) -> Result<(), String> {
+    match (player, held) {
+        (Player::Play, Some(held)) => {
+            platform::start(held.cue, &held.prepared.key, &held.prepared.wav)
+        }
+        (Player::Stop, Some(held)) => {
+            platform::stop(held.cue);
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Plays `cue` until [`stop_cue`] (`when` [`When::WhileLocked`]: only while the screen is locked, from now on): a start of what
+/// already plays (the same `key`) changes nothing, of something else replaces it. On the main thread. Nothing if `ticket` (from
+/// [`cue_ticket`], when the start was asked for) is stale: the page stopped it, asked for another, or the call ended in between.
+/// A stop or an end asked for once this check has passed moves the ticket on and then queues its [`stop_cue`] on this same
+/// thread, behind this start: what it plays is stopped right after.
+pub fn start_cue(cue: Cue, prepared: Prepared, ticket: u64, when: When) -> Result<(), String> {
     if !cue_current(ticket) {
         return Ok(());
     }
-    platform::start(cue, &prepared.key, &prepared.wav)
+    LOCK.with_borrow_mut(|lock| match when {
+        When::Always => {
+            lock.forget();
+            platform::start(cue, &prepared.key, &prepared.wav)
+        }
+        When::WhileLocked => {
+            let player = lock.hold(Held {
+                cue,
+                prepared,
+                ticket,
+            });
+            log::info!(
+                "cue {cue:?}: plays while the screen is locked (locked now: {})",
+                lock.locked
+            );
+            apply(player, lock.held.as_ref())
+        }
+    })
 }
 
-/// Stops it; nothing when it does not play. On the main thread.
+/// Stops it, and what was held for the lock; nothing when it does not play. On the main thread.
 pub fn stop_cue(cue: Cue) {
+    LOCK.with_borrow_mut(Lock::forget);
     platform::stop(cue);
+}
+
+/// The system says the screen locked or unlocked, on the main thread: the cue held for the lock starts or stops.
+fn screen_changed(locked: bool) {
+    LOCK.with_borrow_mut(|lock| {
+        if lock.locked != locked {
+            log::info!("screen: {}", if locked { "locked" } else { "unlocked" });
+        }
+        let player = lock.changed(locked, cue_current);
+        let acted = player != Player::Keep;
+        if let Err(error) = apply(player, lock.held.as_ref()) {
+            log::warn!("cue: did not start at the lock: {error}");
+        } else if acted {
+            log::info!(
+                "cue: {} with the screen",
+                if locked { "plays" } else { "stops" }
+            );
+        }
+    });
+}
+
+/// From now on the system tells the cues each lock and unlock of the screen (where it tells them: iOS). Once, as the app starts.
+pub fn follow_the_lock<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    crate::platform::screen::watch(app, screen_changed);
 }
 
 /// The page's limiter (services/thinking-sound.ts `LIMITER`, a Web Audio compressor): a threshold just under full scale, a
@@ -409,14 +550,78 @@ mod tests {
         // A call ended (or the page went) between the request and its run.
         end_cues();
         assert!(!cue_current(asked));
-        // Past it, the start is a no-op (it never reaches the player), whatever the OS.
-        assert_eq!(start_cue(Cue::Thinking, &prepared, asked), Ok(()));
+        // Past it, the start is a no-op (it never reaches the player, nor is it held for the lock), whatever the OS.
+        assert_eq!(
+            start_cue(Cue::Thinking, prepared, asked, When::WhileLocked),
+            Ok(())
+        );
+        assert!(LOCK.with_borrow(|lock| lock.held.is_none()));
         // A later start wins over an earlier one still being read; the page's stop (an end) over both.
         let first = cue_ticket();
         let second = cue_ticket();
         assert!(!cue_current(first) && cue_current(second));
         end_cues();
         assert!(!cue_current(second));
+    }
+
+    fn held(ticket: u64) -> Held {
+        Held {
+            cue: Cue::Thinking,
+            prepared: Prepared {
+                key: "soft-heartbeat@0".into(),
+                wav: Vec::new(),
+            },
+            ticket,
+        }
+    }
+
+    fn unlocked() -> Lock {
+        Lock {
+            locked: false,
+            held: None,
+        }
+    }
+
+    #[test]
+    fn only_a_start_asked_while_locked_waits_for_the_lock() {
+        assert_eq!(When::asked(Some(true)), When::WhileLocked);
+        // An older page's start, and the page's "always": at once.
+        assert_eq!(When::asked(None), When::Always);
+        assert_eq!(When::asked(Some(false)), When::Always);
+    }
+
+    #[test]
+    fn a_cue_for_the_lock_plays_from_each_lock_to_the_unlock_until_the_page_stops_it() {
+        let current = |_| true;
+        let mut lock = unlocked();
+        // The agent works with the app in front or behind, the screen on: nothing plays (what played stops).
+        assert_eq!(lock.hold(held(1)), Player::Stop);
+        // The phone locks: it plays; the system saying so again changes nothing.
+        assert_eq!(lock.changed(true, current), Player::Play);
+        assert_eq!(lock.changed(true, current), Player::Keep);
+        // Unlocked: it stops, and plays again at the next lock.
+        assert_eq!(lock.changed(false, current), Player::Stop);
+        assert_eq!(lock.changed(false, current), Player::Keep);
+        assert_eq!(lock.changed(true, current), Player::Play);
+        // The page's stop (the agent's answer, the setting, the call's end): no lock plays it any more.
+        lock.forget();
+        assert_eq!(lock.changed(false, current), Player::Keep);
+        assert_eq!(lock.changed(true, current), Player::Keep);
+    }
+
+    #[test]
+    fn a_cue_for_the_lock_started_with_the_screen_locked_plays_at_once() {
+        let mut lock = unlocked();
+        assert_eq!(lock.changed(true, |_| true), Player::Keep, "nothing held");
+        assert_eq!(lock.hold(held(1)), Player::Play);
+    }
+
+    #[test]
+    fn a_held_cue_asked_for_no_more_plays_at_no_lock() {
+        let mut lock = unlocked();
+        lock.hold(held(1));
+        // A call's end, or the page's stop, moved the ticket on: its stop is on its way to the main thread.
+        assert_eq!(lock.changed(true, |ticket| ticket != 1), Player::Keep);
     }
 
     fn samples(wav: &[u8]) -> Vec<i16> {

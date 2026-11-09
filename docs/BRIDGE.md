@@ -294,7 +294,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `shortcuts` | the desktop app, and the mobile app | The desktop: below, always. The phone: the headset's two presses alone, never the others (below, "The shortcuts"). |
 | `muteShortcut`, `callControls` | the desktop app |  The app's own settings, set from the page's Settings: the global shortcuts, the headset's press and, where the app captures keys itself, `record` (below); `muteShortcut` is the mute one alone. |
 | `mediaDuck` | always | What happens to other apps' media while the microphone is open or the agent is speaking in a call: `get()`, `set(mode)`, `setLevel(level)` (how far Lower goes: `half`, `quarter`, the default, or `mute`; applied at once while lowered), `allow(permission)` (the person's own request, from the list of permissions, to let the app do what `permission` names, macOS `capture` (System Audio Recording) or `automation` (Music and Spotify): when the system may ask) `openSettings(permission)` (macOS: that permission's page in System Settings) and `restart()` (macOS: quits and reopens the app once `capture` is `restart`, that is System Audio Recording allowed but not yet seen by the running process; rejected with the key `media_duck.restart-in-call` during a call, `media_duck.restart-not-needed` otherwise; optional, so a page offers it only where present), `mode` `lower` (the default), `pause` or `off`. Each answers `{mode, level, lower, pause, access?, capture?}`, `capture` being `granted`, `denied`, `undetermined`, `unknown` or `restart` ([MEDIA_DUCK.md](MEDIA_DUCK.md)). Not offered by the mobile app yet. |
-| `screen` | the desktop app | `{ locked() }`: whether the person's screen is locked now (below, "The screen"). |
+| `screen` | the desktop app, and the mobile app | `{ locked() }`: whether the person's screen is locked now (below, "The screen"). |
 | `updater` | a release or nightly that can update itself | Below. |
 | `debug` | a nightly or a dev build | The developer options (below). |
 | `textScale` | the Android app | `{ get(), subscribe(listener) }`: the phone's text size as a multiple of its default (the page applies it to its type only; it clamps it to 0.8–2). Offered only where the webview does not follow the system's font scale itself: Android's does not (its `textZoom` stays 100, set by `MobilePlugin.load`), so the app answers through `window.SidevoiceTextScale` and says it may have changed with the window's `sidevoice-text-scale` event. iOS offers none: its webview follows Dynamic Type and the page measures it. |
@@ -327,11 +327,12 @@ type CueName = "thinking";   // the sound that says the agent is working
 interface CueOptions {
   sound?: string;    // an id of the bundled web's thinking sounds (below); none: their default
   gainDb?: number;   // the person's offset from the sound's own level, in dB (whole, -20..+10); none: 0
+  whileLocked?: boolean; // true: it plays only while the screen is locked, from each lock to the unlock (below); none: at once
 }
 interface CueBridge {
   start(cue: CueName, options?: CueOptions): void;   // idempotent, never throws
   stop(cue: CueName): void;                          // idempotent, never throws
-  readonly options: readonly string[];               // what start honours: ["sound", "gainDb"]
+  readonly options: readonly string[];               // what start honours: ["sound", "gainDb", "whileLocked"]
 }
 ```
 
@@ -355,8 +356,18 @@ interface CueBridge {
   sound at its own level. An app before the sounds has no `options`: its start would play a breath of its own whatever the
   page asks, so a page that wants the chosen sound plays it in its own Web Audio there. A start while the cue plays changes
   nothing with the same options, and plays the new ones instead with others.
-- The app's command `cue` (`action`: `available`, `start` or `stop`, with `name` for the last two, and `sound` and `gainDb` for a
-  start) is granted to the app's window alone. The player runs on the main thread; the sound is read and decoded off it.
+- **Only while the screen is locked** (`whileLocked: true`, the page's "only with the screen off"): the page cannot apply
+  that one itself on a phone. With the screen locked its webview may not run (on a locked iPhone the page's reports have not
+  come for minutes, desktop#430; docs/MOBILE.md → "The call surface"), neither to ask `host.screen` nor to start the cue, and
+  iOS says it is locked only some seconds after the lock (below, "The screen"), when the page may well be suspended. So the page
+  starts the cue while the agent works, whatever the screen, with `whileLocked`, and the app plays it from each lock to the
+  unlock, until the page's stop (`mobile/tauri/plugin/src/cue.rs`, `When`): the app in front or behind with the screen on
+  hears nothing. The lock's changes are the system's notifications (iOS: the protected data going and coming back, read again
+  as the app becomes active), on the main thread; nothing is polled. A page that sends no `whileLocked` (one before it) gets
+  the cue at once, and with that setting starts it when `host.screen` says locked.
+- The app's command `cue` (`action`: `available`, `start` or `stop`, with `name` for the last two, and `sound`, `gainDb` and
+  `whileLocked` for a start) is granted to the app's window alone. The player runs on the main thread; the sound is read and
+  decoded off it.
 - An unknown name, a `gainDb` that is not a number, are refused (`bad_request`). A start only plays while a call's audio is
   open; one still being read when a later start, a stop or the call's end is asked for plays nothing (stale), and every end
   of a call stops the cue. A sound the web does
@@ -369,11 +380,23 @@ interface CueBridge {
 `platform::session`, the same observation that lets a held key go behind a locked screen): macOS, the window server's session
 says `CGSSessionScreenIsLocked`; Windows, the input desktop is the secure one; Linux, no observation yet, always `false`.
 
+The mobile app answers it too (its own `screen_locked`, granted to its window; `mobile/tauri/plugin/src/platform/screen`), a
+screen that is off counting as locked:
+- **Android**: the keyguard shows (`KeyguardManager.isKeyguardLocked`, a swipe lock too) or the screen is off (not
+  `PowerManager.isInteractive`, a phone with no lock at all too).
+- **iOS** has no public answer to "is the screen locked" or "is it off" (Apple says so; SpringBoard's lock notifications are
+  private, and not read). What it says is whether the files it protects can be read: `UIApplication.isProtectedDataAvailable`
+  is false once the phone has locked, and its notifications say when that changes. So the phone reads as locked **only with a
+  passcode**, and **some seconds after the lock** (about 10, when the keys are discarded; up to some 40 after a recent unlock);
+  it reads as unlocked as soon as it is. Without a passcode it never reads as locked, and "only with the screen off" plays
+  nothing there.
+
 It is the page's "only with the screen off" for the thinking sound (Settings → Call): the room's window hidden or minimised
 is not the screen off on a computer, where the call goes on in the floating card (sidevoice-web `features/call/PresenceSound.tsx`).
 The page asks every 2 s, and only while the answer decides something: in a call, while the agent works, with that setting.
-A desktop app before this member makes the page count the screen as never off; the mobile app offers none, and the page there
-reads its own visibility (the screen off, the app in the background), as a browser's.
+A desktop app before this member makes the page count the screen as never off; a mobile app before it offers none, and the page
+there reads its own visibility (the screen off, but also the app in the background with the screen on), as a browser's. Where the
+app plays the cue itself (iOS's `host.cue` with `whileLocked`), the page leaves the lock to it rather than asking (above, "The cues").
 
 ## The local host
 
