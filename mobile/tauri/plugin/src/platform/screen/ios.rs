@@ -54,8 +54,10 @@ fn observe(name: &NSNotificationName, locked: Option<bool>, changed: fn(bool)) {
 }
 
 /// The watch's observers: the protected data going (the phone locked) and coming back (unlocked), and the app becoming
-/// active, when it is read again (a change while the app was suspended, outside a call, is not told to it).
-fn watch_here(main: MainThreadMarker, changed: fn(bool)) {
+/// active, when it is read (the first time as the app launches; again after a change the app missed while suspended, outside
+/// a call). Only Foundation's notification center here, and no reading: the app's plugins are set up before UIKit's
+/// application exists (Tauri's `build`, before `run` enters `UIApplicationMain`), and asking it then ends the app.
+fn watch_here(changed: fn(bool)) {
     // SAFETY: UIKit's notification names, constant strings for the process's life.
     let (will_lock, unlocked, active) = unsafe {
         (
@@ -67,7 +69,6 @@ fn watch_here(main: MainThreadMarker, changed: fn(bool)) {
     observe(will_lock, Some(true), changed);
     observe(unlocked, Some(false), changed);
     observe(active, None, changed);
-    changed(gone(main));
 }
 
 impl Os for Native {
@@ -98,13 +99,9 @@ impl Os for Native {
     }
 
     fn watch<R: Runtime>(app: &AppHandle<R>, changed: fn(bool)) {
-        if let Some(main) = MainThreadMarker::new() {
-            watch_here(main, changed);
-        } else if let Err(error) = app.run_on_main_thread(move || {
-            if let Some(main) = MainThreadMarker::new() {
-                watch_here(main, changed);
-            }
-        }) {
+        if MainThreadMarker::new().is_some() {
+            watch_here(changed);
+        } else if let Err(error) = app.run_on_main_thread(move || watch_here(changed)) {
             log::warn!("screen: the lock is not watched: {error}");
         }
     }

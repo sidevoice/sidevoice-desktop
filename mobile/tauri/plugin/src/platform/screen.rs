@@ -16,8 +16,9 @@ trait Os {
     /// Whether the screen is locked now, a screen that is off counting as locked, as the system says it; `false` where it
     /// says nothing. Waits for the system's answer: never on Android's main thread, where that answer is given.
     fn locked<R: Runtime>(app: &AppHandle<R>) -> bool;
-    /// From now on, `changed` hears on the main thread whether the screen is locked, each time the system says it changed
-    /// (and once at the start, what it is then). Once per app. Nothing where the system tells nothing.
+    /// From now on, `changed` hears on the main thread whether the screen is locked, each time the system says it changed or
+    /// the OS reads it again. Once per app, as its plugins are set up: before the system's application may exist, so it reads
+    /// nothing then. Nothing where the system tells nothing.
     fn watch<R: Runtime>(_app: &AppHandle<R>, _changed: fn(bool)) {}
 }
 

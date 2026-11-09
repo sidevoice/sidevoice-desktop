@@ -214,17 +214,15 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * Whether the screen is locked now (`host.screen.locked()`, the page's "only with the screen off"): the keyguard shows (a
-     * swipe one too), or the screen is off, which counts as locked (a phone with no lock at all has no keyguard). The app in
-     * the background with the screen on is neither. Answered at once: both services may be asked from any thread.
+     * Whether the screen is locked now (`host.screen.locked()`, the page's "only with the screen off"; [ScreenLock] decides
+     * from the keyguard and whether the device is interactive). Answered at once: both services may be asked from any thread.
      */
     @Command
     fun screenLocked(invoke: Invoke) {
         val context = activity.applicationContext
         val keyguard = context.getSystemService(KeyguardManager::class.java)
         val power = context.getSystemService(PowerManager::class.java)
-        val locked = keyguard?.isKeyguardLocked == true || power?.isInteractive == false
-        invoke.resolve(JSObject().put("locked", locked))
+        invoke.resolve(JSObject().put("locked", ScreenLock.locked(keyguard?.isKeyguardLocked, power?.isInteractive)))
     }
 
     /**

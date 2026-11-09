@@ -30,14 +30,20 @@ impl Cue {
 pub const SOUNDS_MANIFEST: &str = "voice/sounds/thinking/sounds.json";
 const SOUNDS_FOLDER: &str = "voice/sounds/thinking/";
 
-/// The longest silence between plays, and the longest sound, and the rates, the app takes (seconds; Hz): far beyond the web's
-/// sounds (6 s at most, a gap of 12), and a bound on what the loop holds in memory (2 plays and gaps at most past 20 s).
-const MAX_GAP_SECONDS: f32 = 30.0;
+/// The longest silence between plays, and the longest sound, and the rates, the app takes (seconds; Hz): beyond the web's
+/// sounds (6 s at most, a gap of 12, 36 at the slowest frequency), and a bound on what the loop holds in memory (2 plays and
+/// gaps at most past 20 s: some 7 MB of 16-bit mono at 48 kHz with the longest gaps). A gap the person's frequency would draw
+/// longer is drawn at this ([`scaled_interval`]).
+const MAX_GAP_SECONDS: f32 = 36.0;
 const MAX_SOUND_SECONDS: f32 = 15.0;
 const RATES: std::ops::RangeInclusive<u32> = 8_000..=96_000;
 
 /// The person's offset from the sound's own level, in dB: the page's range (services/thinking-sounds.ts).
 const GAIN_DB: (f32, f32) = (-20.0, 10.0);
+
+/// How much the person's frequency multiplies the silence after each play: the page's steps run from 0.5 (twice as often) to 3
+/// (a third as often; services/thinking-sounds.ts `THINKING_SOUND_INTERVAL_SCALES`).
+const INTERVAL_SCALE: (f32, f32) = (0.5, 3.0);
 
 /// What the manifest says; only what the app reads of it.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -113,6 +119,23 @@ pub fn gain_db(value: Option<f64>) -> Result<f32, String> {
     }
 }
 
+/// The person's frequency, as a start gives it (`intervalScale`): none, or a number that is not one, is the sound's own cadence
+/// (1); a number is kept within the page's range.
+pub fn interval_scale(value: Option<f64>) -> f32 {
+    match value {
+        Some(scale) if scale.is_finite() => {
+            (scale as f32).clamp(INTERVAL_SCALE.0, INTERVAL_SCALE.1)
+        }
+        _ => 1.0,
+    }
+}
+
+/// The silence after each play at the person's frequency: the sound's own `interval` times `scale`, as the page draws it
+/// (services/thinking-sounds.ts `scaledInterval`), each end at most [`MAX_GAP_SECONDS`].
+pub fn scaled_interval(interval: [f32; 2], scale: f32) -> [f32; 2] {
+    interval.map(|gap| (gap * scale).min(MAX_GAP_SECONDS))
+}
+
 /// Which start may still play. Each start is asked for with a ticket of its own ([`cue_ticket`]); a later start, the page's stop,
 /// every call end and page teardown move it on ([`end_cues`]), and a start whose ticket is past is a no-op ([`start_cue`]): the
 /// sound is read and decoded between the request and the play, and what was asked for after it wins.
@@ -140,8 +163,8 @@ pub fn cue_available(read: impl Fn(&str) -> Option<Vec<u8>>) -> bool {
     platform::available() && chosen_sound(read, None).is_ok()
 }
 
-/// What a start plays: `sound` at `gain_db`, as [`render`] makes it, keyed by both so that a start of what already plays is
-/// told from one of something else.
+/// What a start plays: `sound` at `gain_db` and the person's frequency, as [`render`] makes it, keyed by the three so that a
+/// start of what already plays is told from one of something else (another frequency while it plays plays the new one).
 pub struct Prepared {
     pub key: String,
     pub wav: Vec<u8>,
@@ -152,11 +175,13 @@ type Decoded = std::sync::Arc<(Vec<f32>, u32)>;
 /// The decoded sound last played, by id: decoding it again for every turn of the agent's work is not needed.
 static DECODED: std::sync::Mutex<Option<(String, Decoded)>> = std::sync::Mutex::new(None);
 
-/// Reads, decodes and renders the sound a start asks for (off the main thread: it decodes). `seed` draws its silences.
+/// Reads, decodes and renders the sound a start asks for (off the main thread: it decodes), its silences drawn at the person's
+/// frequency (`interval_scale`, from [`interval_scale`]). `seed` draws them.
 pub fn prepare_cue(
     read: impl Fn(&str) -> Option<Vec<u8>>,
     sound: Option<&str>,
     gain_db: f32,
+    interval_scale: f32,
     seed: u32,
 ) -> Result<Prepared, String> {
     let (sound, file) = chosen_sound(read, sound)?;
@@ -176,8 +201,14 @@ pub fn prepare_cue(
     };
     let (samples, rate) = (&pcm.0, pcm.1);
     Ok(Prepared {
-        key: format!("{}@{gain_db}", sound.id),
-        wav: render(samples, rate, sound.interval, gain_db, seed)?,
+        key: format!("{}@{gain_db}x{interval_scale}", sound.id),
+        wav: render(
+            samples,
+            rate,
+            scaled_interval(sound.interval, interval_scale),
+            gain_db,
+            seed,
+        )?,
     })
 }
 
@@ -212,71 +243,101 @@ struct Held {
     ticket: u64,
 }
 
-/// What the player is to do with the held cue.
-#[derive(Debug, PartialEq, Eq)]
-enum Player {
-    Play,
-    Stop,
-    Keep,
+/// What the lock starts and stops: the phone's player ([`System`]), or a test's.
+trait Player {
+    /// Plays the cue's loop (the same `key` again changes nothing; another replaces it).
+    fn start(&mut self, cue: Cue, key: &str, wav: &[u8]) -> Result<(), String>;
+    /// Stops it; nothing when it does not play.
+    fn stop(&mut self, cue: Cue);
 }
 
-/// Whether the screen is locked, as the system last said it (`platform::screen::watch`), and the cue held for the lock. The
-/// decisions alone: [`start_cue`], [`stop_cue`] and [`screen_changed`] do what they say, on the main thread.
+/// The phone's own player (`platform::cue`), on the main thread.
+struct System;
+
+impl Player for System {
+    fn start(&mut self, cue: Cue, key: &str, wav: &[u8]) -> Result<(), String> {
+        platform::start(cue, key, wav)
+    }
+
+    fn stop(&mut self, cue: Cue) {
+        platform::stop(cue);
+    }
+}
+
+/// Whether the screen is locked, as the system last said it (`platform::screen::watch`), and the cue held for the lock: what
+/// the page's starts and stops and the system's locks and unlocks do to the player.
 struct Lock {
     locked: bool,
     held: Option<Held>,
 }
 
 impl Lock {
-    /// A start for the lock: held, playing now if the screen is locked, else not (what played before it stops).
-    fn hold(&mut self, held: Held) -> Player {
-        self.held = Some(held);
-        if self.locked {
-            Player::Play
-        } else {
-            Player::Stop
+    /// A start that is current: [`When::Always`] plays at once (and nothing is held for the lock any more);
+    /// [`When::WhileLocked`] is held, and plays now if the screen is locked, else what played stops.
+    fn start(
+        &mut self,
+        cue: Cue,
+        prepared: Prepared,
+        ticket: u64,
+        when: When,
+        player: &mut impl Player,
+    ) -> Result<(), String> {
+        match when {
+            When::Always => {
+                self.held = None;
+                player.start(cue, &prepared.key, &prepared.wav)
+            }
+            When::WhileLocked => {
+                let held = self.held.insert(Held {
+                    cue,
+                    prepared,
+                    ticket,
+                });
+                if self.locked {
+                    player.start(cue, &held.prepared.key, &held.prepared.wav)
+                } else {
+                    player.stop(cue);
+                    Ok(())
+                }
+            }
         }
     }
 
-    /// The page's stop, a start that plays at once, a call's end: nothing is held any more.
-    fn forget(&mut self) {
+    /// The page's stop or a call's end: the player stops, and nothing is held for the lock any more.
+    fn stop(&mut self, cue: Cue, player: &mut impl Player) {
         self.held = None;
+        player.stop(cue);
     }
 
     /// The system says whether the screen is locked: the held cue plays from a lock and stops at an unlock, unless it is stale
     /// (`current` says whether a ticket is: anything asked for after its start makes it so, and its stop is on its way).
-    fn changed(&mut self, locked: bool, current: impl Fn(u64) -> bool) -> Player {
+    /// Answers whether the player was asked anything.
+    fn changed(
+        &mut self,
+        locked: bool,
+        current: impl Fn(u64) -> bool,
+        player: &mut impl Player,
+    ) -> Result<bool, String> {
         let was = std::mem::replace(&mut self.locked, locked);
-        match &self.held {
-            Some(held) if current(held.ticket) && locked != was => {
-                if locked {
-                    Player::Play
-                } else {
-                    Player::Stop
-                }
-            }
-            _ => Player::Keep,
+        let Some(held) = self
+            .held
+            .as_ref()
+            .filter(|held| current(held.ticket) && locked != was)
+        else {
+            return Ok(false);
+        };
+        if locked {
+            player.start(held.cue, &held.prepared.key, &held.prepared.wav)?;
+        } else {
+            player.stop(held.cue);
         }
+        Ok(true)
     }
 }
 
 thread_local! {
     /// On the main thread, where the player is and where the system tells the lock.
     static LOCK: std::cell::RefCell<Lock> = const { std::cell::RefCell::new(Lock { locked: false, held: None }) };
-}
-
-/// Does what `player` says with `held`.
-fn apply(player: Player, held: Option<&Held>) -> Result<(), String> {
-    match (player, held) {
-        (Player::Play, Some(held)) => {
-            platform::start(held.cue, &held.prepared.key, &held.prepared.wav)
-        }
-        (Player::Stop, Some(held)) => {
-            platform::stop(held.cue);
-            Ok(())
-        }
-        _ => Ok(()),
-    }
 }
 
 /// Plays `cue` until [`stop_cue`] (`when` [`When::WhileLocked`]: only while the screen is locked, from now on): a start of what
@@ -288,30 +349,20 @@ pub fn start_cue(cue: Cue, prepared: Prepared, ticket: u64, when: When) -> Resul
     if !cue_current(ticket) {
         return Ok(());
     }
-    LOCK.with_borrow_mut(|lock| match when {
-        When::Always => {
-            lock.forget();
-            platform::start(cue, &prepared.key, &prepared.wav)
-        }
-        When::WhileLocked => {
-            let player = lock.hold(Held {
-                cue,
-                prepared,
-                ticket,
-            });
+    LOCK.with_borrow_mut(|lock| {
+        if when == When::WhileLocked {
             log::info!(
                 "cue {cue:?}: plays while the screen is locked (locked now: {})",
                 lock.locked
             );
-            apply(player, lock.held.as_ref())
         }
+        lock.start(cue, prepared, ticket, when, &mut System)
     })
 }
 
 /// Stops it, and what was held for the lock; nothing when it does not play. On the main thread.
 pub fn stop_cue(cue: Cue) {
-    LOCK.with_borrow_mut(Lock::forget);
-    platform::stop(cue);
+    LOCK.with_borrow_mut(|lock| lock.stop(cue, &mut System));
 }
 
 /// The system says the screen locked or unlocked, on the main thread: the cue held for the lock starts or stops.
@@ -320,15 +371,13 @@ fn screen_changed(locked: bool) {
         if lock.locked != locked {
             log::info!("screen: {}", if locked { "locked" } else { "unlocked" });
         }
-        let player = lock.changed(locked, cue_current);
-        let acted = player != Player::Keep;
-        if let Err(error) = apply(player, lock.held.as_ref()) {
-            log::warn!("cue: did not start at the lock: {error}");
-        } else if acted {
-            log::info!(
+        match lock.changed(locked, cue_current, &mut System) {
+            Ok(true) => log::info!(
                 "cue: {} with the screen",
                 if locked { "plays" } else { "stops" }
-            );
+            ),
+            Ok(false) => {}
+            Err(error) => log::warn!("cue: did not start at the lock: {error}"),
         }
     });
 }
@@ -564,14 +613,33 @@ mod tests {
         assert!(!cue_current(second));
     }
 
-    fn held(ticket: u64) -> Held {
-        Held {
-            cue: Cue::Thinking,
-            prepared: Prepared {
-                key: "soft-heartbeat@0".into(),
-                wav: Vec::new(),
-            },
-            ticket,
+    /// A player that writes down what the lock asks of it.
+    #[derive(Default)]
+    struct Recorder(Vec<String>);
+
+    impl Player for Recorder {
+        fn start(&mut self, _: Cue, key: &str, _: &[u8]) -> Result<(), String> {
+            self.0.push(format!("start {key}"));
+            Ok(())
+        }
+
+        fn stop(&mut self, _: Cue) {
+            self.0.push("stop".into());
+        }
+    }
+
+    impl Recorder {
+        fn took(&mut self) -> Vec<String> {
+            std::mem::take(&mut self.0)
+        }
+    }
+
+    const KEY: &str = "soft-heartbeat@0x1";
+
+    fn prepared() -> Prepared {
+        Prepared {
+            key: KEY.into(),
+            wav: vec![1, 2, 3],
         }
     }
 
@@ -581,6 +649,8 @@ mod tests {
             held: None,
         }
     }
+
+    const PLAYS: &str = "start soft-heartbeat@0x1";
 
     #[test]
     fn only_a_start_asked_while_locked_waits_for_the_lock() {
@@ -592,36 +662,132 @@ mod tests {
 
     #[test]
     fn a_cue_for_the_lock_plays_from_each_lock_to_the_unlock_until_the_page_stops_it() {
-        let current = |_| true;
-        let mut lock = unlocked();
+        let (mut lock, mut player, current) = (unlocked(), Recorder::default(), |_| true);
         // The agent works with the app in front or behind, the screen on: nothing plays (what played stops).
-        assert_eq!(lock.hold(held(1)), Player::Stop);
-        // The phone locks: it plays; the system saying so again changes nothing.
-        assert_eq!(lock.changed(true, current), Player::Play);
-        assert_eq!(lock.changed(true, current), Player::Keep);
+        lock.start(Cue::Thinking, prepared(), 1, When::WhileLocked, &mut player)
+            .unwrap();
+        assert_eq!(player.took(), ["stop"]);
+        // The phone locks: it plays; the system saying so again asks nothing.
+        assert_eq!(lock.changed(true, current, &mut player), Ok(true));
+        assert_eq!(player.took(), [PLAYS]);
+        assert_eq!(lock.changed(true, current, &mut player), Ok(false));
+        assert!(player.took().is_empty());
         // Unlocked: it stops, and plays again at the next lock.
-        assert_eq!(lock.changed(false, current), Player::Stop);
-        assert_eq!(lock.changed(false, current), Player::Keep);
-        assert_eq!(lock.changed(true, current), Player::Play);
-        // The page's stop (the agent's answer, the setting, the call's end): no lock plays it any more.
-        lock.forget();
-        assert_eq!(lock.changed(false, current), Player::Keep);
-        assert_eq!(lock.changed(true, current), Player::Keep);
+        assert_eq!(lock.changed(false, current, &mut player), Ok(true));
+        assert_eq!(player.took(), ["stop"]);
+        assert_eq!(lock.changed(false, current, &mut player), Ok(false));
+        lock.changed(true, current, &mut player).unwrap();
+        assert_eq!(player.took(), [PLAYS]);
+        // The page's stop (the agent's answer, the setting, the call's end): it stops, and no lock plays it any more.
+        lock.stop(Cue::Thinking, &mut player);
+        assert_eq!(player.took(), ["stop"]);
+        lock.changed(false, current, &mut player).unwrap();
+        lock.changed(true, current, &mut player).unwrap();
+        assert!(player.took().is_empty());
     }
 
     #[test]
     fn a_cue_for_the_lock_started_with_the_screen_locked_plays_at_once() {
-        let mut lock = unlocked();
-        assert_eq!(lock.changed(true, |_| true), Player::Keep, "nothing held");
-        assert_eq!(lock.hold(held(1)), Player::Play);
+        let (mut lock, mut player) = (unlocked(), Recorder::default());
+        assert_eq!(
+            lock.changed(true, |_| true, &mut player),
+            Ok(false),
+            "nothing held"
+        );
+        lock.start(Cue::Thinking, prepared(), 1, When::WhileLocked, &mut player)
+            .unwrap();
+        assert_eq!(player.took(), [PLAYS]);
+    }
+
+    #[test]
+    fn a_cue_that_plays_at_once_is_none_of_the_lock_s() {
+        let (mut lock, mut player, current) = (unlocked(), Recorder::default(), |_| true);
+        // "Always": at once, and neither a lock nor an unlock touches it.
+        lock.start(Cue::Thinking, prepared(), 1, When::Always, &mut player)
+            .unwrap();
+        assert_eq!(player.took(), [PLAYS]);
+        lock.changed(true, current, &mut player).unwrap();
+        lock.changed(false, current, &mut player).unwrap();
+        assert!(player.took().is_empty());
+        // The setting turned to "only with the screen off" while it plays, the screen on: it stops until the lock.
+        lock.start(Cue::Thinking, prepared(), 2, When::WhileLocked, &mut player)
+            .unwrap();
+        assert_eq!(player.took(), ["stop"]);
+        // And back to "always" while locked: it plays, and the unlock leaves it playing.
+        lock.changed(true, current, &mut player).unwrap();
+        player.took();
+        lock.start(Cue::Thinking, prepared(), 3, When::Always, &mut player)
+            .unwrap();
+        lock.changed(false, current, &mut player).unwrap();
+        assert_eq!(player.took(), [PLAYS]);
     }
 
     #[test]
     fn a_held_cue_asked_for_no_more_plays_at_no_lock() {
-        let mut lock = unlocked();
-        lock.hold(held(1));
+        let (mut lock, mut player) = (unlocked(), Recorder::default());
+        lock.start(Cue::Thinking, prepared(), 1, When::WhileLocked, &mut player)
+            .unwrap();
+        player.took();
         // A call's end, or the page's stop, moved the ticket on: its stop is on its way to the main thread.
-        assert_eq!(lock.changed(true, |ticket| ticket != 1), Player::Keep);
+        assert_eq!(
+            lock.changed(true, |ticket| ticket != 1, &mut player),
+            Ok(false)
+        );
+        assert!(player.took().is_empty());
+    }
+
+    #[test]
+    fn the_frequency_multiplies_the_silence_after_each_play_and_none_is_the_sound_s_own() {
+        // None, or what a page cannot mean, is the sound's own cadence; a number is kept within the page's steps.
+        assert_eq!(interval_scale(None), 1.0);
+        assert_eq!(interval_scale(Some(f64::NAN)), 1.0);
+        assert_eq!(interval_scale(Some(f64::INFINITY)), 1.0);
+        assert_eq!(interval_scale(Some(1.5)), 1.5);
+        assert_eq!(interval_scale(Some(0.1)), 0.5);
+        assert_eq!(interval_scale(Some(9.0)), 3.0);
+        // The soft heartbeat's 7–10 s: half, as is, three times.
+        assert_eq!(scaled_interval([7.0, 10.0], 0.5), [3.5, 5.0]);
+        assert_eq!(scaled_interval([7.0, 10.0], 1.0), [7.0, 10.0]);
+        assert_eq!(scaled_interval([7.0, 10.0], 3.0), [21.0, 30.0]);
+        // The web's longest gap (12 s) three times is what the app takes at most; a longer one is drawn at that.
+        assert_eq!(scaled_interval([10.0, 12.0], 3.0), [30.0, 36.0]);
+        assert_eq!(scaled_interval([20.0, 30.0], 3.0), [36.0, 36.0]);
+    }
+
+    #[test]
+    fn another_frequency_is_another_loop_and_its_gaps_are_the_scaled_ones() {
+        let rate = 8_000;
+        let play = tone(rate, 0.5);
+        let gaps = |wav: &[u8]| {
+            // The silences between the plays, in seconds (a play is 0.5 s of tone, never a run of exact zeros).
+            let all = samples(wav);
+            let mut runs = Vec::new();
+            let mut run = 0usize;
+            for sample in all {
+                if sample == 0 {
+                    run += 1;
+                } else {
+                    if run > rate as usize / 10 {
+                        runs.push(run as f32 / rate as f32);
+                    }
+                    run = 0;
+                }
+            }
+            runs
+        };
+        let own = render(&play, rate, scaled_interval([2.0, 2.0], 1.0), 0.0, 3).unwrap();
+        let slow = render(&play, rate, scaled_interval([2.0, 2.0], 3.0), 0.0, 3).unwrap();
+        assert!(
+            gaps(&own).iter().all(|gap| (gap - 2.0).abs() < 0.05),
+            "{:?}",
+            gaps(&own)
+        );
+        assert!(
+            gaps(&slow).iter().all(|gap| (gap - 6.0).abs() < 0.05),
+            "{:?}",
+            gaps(&slow)
+        );
+        assert!(!gaps(&slow).is_empty());
     }
 
     fn samples(wav: &[u8]) -> Vec<i16> {

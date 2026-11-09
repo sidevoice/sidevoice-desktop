@@ -327,12 +327,13 @@ type CueName = "thinking";   // the sound that says the agent is working
 interface CueOptions {
   sound?: string;    // an id of the bundled web's thinking sounds (below); none: their default
   gainDb?: number;   // the person's offset from the sound's own level, in dB (whole, -20..+10); none: 0
+  intervalScale?: number; // the person's frequency: what multiplies the silence after each play (0.5..3); none: 1
   whileLocked?: boolean; // true: it plays only while the screen is locked, from each lock to the unlock (below); none: at once
 }
 interface CueBridge {
   start(cue: CueName, options?: CueOptions): void;   // idempotent, never throws
   stop(cue: CueName): void;                          // idempotent, never throws
-  readonly options: readonly string[];               // what start honours: ["sound", "gainDb", "whileLocked"]
+  readonly options: readonly string[];               // what start honours: ["sound", "gainDb", "intervalScale", "whileLocked"]
 }
 ```
 
@@ -346,12 +347,14 @@ interface CueBridge {
   sound is kept in this repository; `test/cue-sounds.test.mjs` checks the pinned web has every one where the app looks. A
   web without them (a pin from before them) leaves the app with no player to offer, and the page plays its own.
 - **How it plays**: as the page does (sidevoice-web `services/thinking-sound.ts`): the sound at once, then again after a
-  silence drawn in its `interval` (seconds, from the end of one play to the start of the next), moved by `gainDb` and through
+  silence drawn in its `interval` (seconds, from the end of one play to the start of the next) times `intervalScale` (a number
+  that is not one is 1, one out of 0.5..3 is held there; a gap is drawn at most 36 s), moved by `gainDb` and through
   the page's limiter (threshold -2 dB, hard knee, ratio 20, attack 3 ms, release 100 ms, and the makeup a Web Audio
   compressor adds). iOS: the sound decoded by `AVAudioFile` (from a temporary file, removed), shaped and laid out as a loop of
   at least 20 s of plays and silences, looped by an `AVAudioPlayer` in the active session: it changes nothing of the
   session. The sound is read and decoded on a thread of its own, neither the main thread nor the call's; a sound of no samples or
-  longer than 15 s, or a silence past 30 s, is refused, which bounds what the loop holds.
+  longer than 15 s, or a silence past 36 s in its manifest, is refused, which bounds what the loop holds (about 7 MB with the
+  longest gaps). Another frequency while the cue plays is another start, and plays the new loop.
 - **Older pages and older apps.** A start with no options (a page before the sounds: `start("thinking")`) plays the default
   sound at its own level. An app before the sounds has no `options`: its start would play a breath of its own whatever the
   page asks, so a page that wants the chosen sound plays it in its own Web Audio there. A start while the cue plays changes
@@ -365,8 +368,8 @@ interface CueBridge {
   hears nothing. The lock's changes are the system's notifications (iOS: the protected data going and coming back, read again
   as the app becomes active), on the main thread; nothing is polled. A page that sends no `whileLocked` (one before it) gets
   the cue at once, and with that setting starts it when `host.screen` says locked.
-- The app's command `cue` (`action`: `available`, `start` or `stop`, with `name` for the last two, and `sound`, `gainDb` and
-  `whileLocked` for a start) is granted to the app's window alone. The player runs on the main thread; the sound is read and
+- The app's command `cue` (`action`: `available`, `start` or `stop`, with `name` for the last two, and `sound`, `gainDb`,
+  `intervalScale` and `whileLocked` for a start) is granted to the app's window alone. The player runs on the main thread; the sound is read and
   decoded off it.
 - An unknown name, a `gainDb` that is not a number, are refused (`bad_request`). A start only plays while a call's audio is
   open; one still being read when a later start, a stop or the call's end is asked for plays nothing (stale), and every end
@@ -383,7 +386,9 @@ says `CGSSessionScreenIsLocked`; Windows, the input desktop is the secure one; L
 The mobile app answers it too (its own `screen_locked`, granted to its window; `mobile/tauri/plugin/src/platform/screen`), a
 screen that is off counting as locked:
 - **Android**: the keyguard shows (`KeyguardManager.isKeyguardLocked`, a swipe lock too) or the screen is off (not
-  `PowerManager.isInteractive`, a phone with no lock at all too).
+  `PowerManager.isInteractive`, a phone with no lock at all too; `MobilePlugin`'s `ScreenLock`). `isInteractive` turns false as
+  the device starts going to sleep, before the activity stops and the page is hidden, so the page's question from its own
+  `visibilitychange` (sidevoice-web#565), before its webview may be suspended, already reads locked.
 - **iOS** has no public answer to "is the screen locked" or "is it off" (Apple says so; SpringBoard's lock notifications are
   private, and not read). What it says is whether the files it protects can be read: `UIApplication.isProtectedDataAvailable`
   is false once the phone has locked, and its notifications say when that changes. So the phone reads as locked **only with a

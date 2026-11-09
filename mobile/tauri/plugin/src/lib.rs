@@ -36,8 +36,8 @@ pub use call_surface::{
     STILL_LIMIT, STILL_MAX_PX, URL_SCHEME,
 };
 pub use cue::{
-    cue_available, cue_current, cue_ticket, end_cues, gain_db, prepare_cue, start_cue, stop_cue,
-    Cue, Prepared, When,
+    cue_available, cue_current, cue_ticket, end_cues, gain_db, interval_scale, prepare_cue,
+    start_cue, stop_cue, Cue, Prepared, When,
 };
 pub use screen::{keep_screen_on, screen_locked, ScreenError};
 

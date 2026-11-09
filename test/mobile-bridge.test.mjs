@@ -73,21 +73,23 @@ test("the phone's own cue is offered only where the app says it has a player, an
     const { cue } = api.host;
     assert.equal(typeof cue.start, "function");
     assert.equal(typeof cue.stop, "function");
-    // It says it plays the chosen sound at the offset, and only while the screen is locked when asked: a page then asks it for
-    // that, not for a sound of its own, and leaves the lock to it.
-    assert.deepEqual([...cue.options], ["sound", "gainDb", "whileLocked"]);
+    // It says it plays the chosen sound at the offset and the frequency, and only while the screen is locked when asked: a page
+    // then asks it for that, not for a sound of its own, and leaves the lock to it.
+    assert.deepEqual([...cue.options], ["sound", "gainDb", "intervalScale", "whileLocked"]);
     assert.ok(Object.isFrozen(cue.options));
-    // An older page's start, then a page's with its choice, then one with options that are not what they say, then one for the lock.
+    // An older page's start, then a page's with its choice, then one with options that are not what they say, then one with the
+    // frequency and for the lock.
     cue.start("thinking");
     cue.start("thinking", { sound: "deep-heartbeat", gainDb: -4 });
-    cue.start("thinking", { sound: 3, gainDb: Number.NaN, extra: "x", whileLocked: "yes" });
-    cue.start("thinking", { sound: "deep-heartbeat", gainDb: -4, whileLocked: true });
+    cue.start("thinking", { sound: 3, gainDb: Number.NaN, extra: "x", intervalScale: "2", whileLocked: "yes" });
+    cue.start("thinking", { sound: "deep-heartbeat", gainDb: -4, intervalScale: 1.5, whileLocked: true });
+    cue.start("thinking", { sound: "deep-heartbeat", gainDb: -4, intervalScale: Number.POSITIVE_INFINITY });
     cue.stop("thinking");
     await settled();
     assert.equal(JSON.stringify(invoked.filter(([command]) => command === "cue").map(([, args]) => args)),
       JSON.stringify([{ action: "available" }, { action: "start", name: "thinking" }, { action: "start", name: "thinking", sound: "deep-heartbeat", gainDb: -4 },
-        { action: "start", name: "thinking" }, { action: "start", name: "thinking", sound: "deep-heartbeat", gainDb: -4, whileLocked: true },
-        { action: "stop", name: "thinking" }]));
+        { action: "start", name: "thinking" }, { action: "start", name: "thinking", sound: "deep-heartbeat", gainDb: -4, intervalScale: 1.5, whileLocked: true },
+        { action: "start", name: "thinking", sound: "deep-heartbeat", gainDb: -4 }, { action: "stop", name: "thinking" }]));
   } finally { delete live.plugin.cue; }
 
   live.plugin.cue = () => { throw new Error("no audio"); };

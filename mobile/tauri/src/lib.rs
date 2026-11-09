@@ -202,8 +202,9 @@ fn global_shortcuts(
 
 /// `host.cue`'s one command (docs/BRIDGE.md -> "The cues"): `action` `available` (whether this phone plays the page's cues
 /// itself), or `start` and `stop` with the cue's `name`; a start may say which `sound` (an id of the bundled web's manifest,
-/// else its default), its `gainDb` (the person's offset, else 0) and `whileLocked` (true: it plays only while the screen is
-/// locked, from each lock to the unlock, `When::WhileLocked`; else at once). The sound is read from the app's own assets, the
+/// else its default), its `gainDb` (the person's offset, else 0), its `intervalScale` (the person's frequency: what multiplies the
+/// silence after each play, 0.5 to 3; else 1) and `whileLocked` (true: it plays only while the screen is locked, from each lock
+/// to the unlock, `When::WhileLocked`; else at once). The sound is read from the app's own assets, the
 /// web it bundles. The player belongs to the main thread.
 #[tauri::command]
 fn cue(
@@ -213,11 +214,12 @@ fn cue(
     name: Option<String>,
     sound: Option<String>,
     gain_db: Option<f64>,
+    interval_scale: Option<f64>,
     while_locked: Option<bool>,
 ) -> Result<bool, serde_json::Value> {
     use sidevoice_mobile_plugin::{
-        cue_available, cue_current, cue_ticket, end_cues, gain_db as offset, prepare_cue,
-        start_cue, stop_cue, Cue, When,
+        cue_available, cue_current, cue_ticket, end_cues, gain_db as offset,
+        interval_scale as frequency, prepare_cue, start_cue, stop_cue, Cue, When,
     };
     let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
@@ -241,6 +243,7 @@ fn cue(
         return Ok(true);
     }
     let gain_db = offset(gain_db).map_err(|why| refusal(&why))?;
+    let interval_scale = frequency(interval_scale);
     let when = When::asked(while_locked);
     // Only in a call whose audio session is open: a page outside a call plays nothing and touches no session. Asked in the room's
     // own order, so that a start after the call's end finds it ended (and the call's end stops what played: `Room::stop_cue`).
@@ -272,6 +275,7 @@ fn cue(
                     |path| assets(&handle, path),
                     sound.as_deref(),
                     gain_db,
+                    interval_scale,
                     seed,
                 ) {
                     Ok(prepared) => prepared,
