@@ -200,6 +200,19 @@ time (`install.busy`), and while it runs the state is `installing`.
 
 The private directory is removed whatever happens: on success, on a failure, on a cancel.
 
+**Where it stages** (`install::staging_root`). On macOS and Linux, in the system's temporary directory (macOS gives
+each user a private one; Linux's `/tmp` is sticky). On Windows, not in `%TEMP%`: it is often moved below a drive root
+(`C:\Temp`, `D:\Temp`, a RAM disk, a junction), where it inherits the root's "Authenticated Users: Modify" and the
+shared private-directory policy rightly refuses it (desktop 0.4.0 failed there with `install.unsafe` at `download`).
+It stages in `%LOCALAPPDATA%\Sidevoice\ai.sidevoice.desktop-staging` instead: the folder the app is installed in and
+`D` (`…\Sidevoice\Data`) is in, whose ancestry the package's installer requires for `D` anyway, so staging there asks
+nothing more of the computer. The app makes that folder private if it is missing (one that is there and not private
+is refused, not repaired), and before each install removes from it the private directories an interrupted install
+left (the app killed, the computer off) that last changed a day ago or more, through the held folder, no link followed.
+It is beside the standard `D`, never in it, and does not follow `SIDEVOICE_DATA_DIR` (as the reset's control state,
+`ai.sidevoice.desktop-reset`, beside it). The one value that differs per OS is `platform::staging` (whether the
+temporary directory is often redirected); the choice is common code.
+
 **Trust.** The registry is the trust, as for `npx`: every request is HTTPS (rustls with the platform's verifier, the
 system's proxy, the client the engine's downloads and the updater already use) to `registry.npmjs.org`, and no redirect
 is followed. The tarball's URL, read from the registry's own document, must be
@@ -212,7 +225,7 @@ MiB (`download-size`) and 15 min; any one read 30 s. Not checked: the registry's
 attestations (npm's ECDSA `dist.signatures`, sigstore) — what `npm install` checks by default is the integrity, as
 here.
 
-**Unpacking.** Into the private directory — a fresh `sidevoice-install-XXXXXX` made private (0700) in the system's temporary directory, then checked as the
+**Unpacking.** Into the private directory — a fresh `sidevoice-install-XXXXXX` made private (0700; a protected owner-only DACL on Windows) where it stages (above), then checked as the
 app's own directories are (this user's, private, every directory above it root's or this user's and closed to others,
 sticky as `/tmp` allowed; `install.unsafe`) — entry by entry, written by hand: every entry a plain file or directory
 below `package/`. Refused (`install.authenticity`, with the check): a path that is absolute, has an empty, `.` or `..`

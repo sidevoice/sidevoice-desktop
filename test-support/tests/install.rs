@@ -4,7 +4,7 @@ use sidevoice_desktop_test_support::fixture;
 use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_local_host::install::*;
-use sidevoice_platform::fs::{Files, TestFiles};
+use sidevoice_platform::fs::{Files, Fs, TestFiles};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -31,7 +31,7 @@ impl World {
     fn options(&self) -> Options {
         Options {
             package: Some(PLATFORM.into()),
-            temp: self.temp.clone(),
+            staging: StagingRoot { root: Root::Temp, path: self.temp.clone() },
             installer_time: Duration::from_secs(20),
             settle_time: Duration::from_millis(100),
             ..Options::standard()
@@ -184,21 +184,137 @@ fn download_bounds_hold() {
     assert_eq!(world.leftovers(), 0);
 }
 
+const DAY: Duration = Duration::from_secs(24 * 3600);
+
+fn in_temp(path: &Path) -> StagingRoot {
+    StagingRoot { root: Root::Temp, path: path.to_path_buf() }
+}
+
 #[test]
 fn the_private_directory_is_private_and_below_a_safe_root_only() {
     let world = World::new();
-    let scratch = Scratch::create(&world.temp).unwrap();
+    let scratch = Scratch::create(&in_temp(&world.temp), DAY).unwrap();
     StorageFixtures::assert_private(scratch.path());
     let path = scratch.path().to_path_buf();
     drop(scratch);
     assert!(!path.exists());
     Files::let_others_change(&world.temp);
-    let failure = Scratch::create(&world.temp.join(".")).unwrap_err();
+    let failure = Scratch::create(&in_temp(&world.temp.join(".")), DAY).unwrap_err();
     assert_eq!(failure.key, "install.unsafe", "a temporary directory others can write in, not sticky");
+    assert_eq!(failure.step, Some(Step::Download));
+    let params = failure.params.clone().unwrap();
+    assert_eq!((&params["where"], &params["root"]), (&json!("scratch"), &json!("temp")), "{params}");
+    // Windows names who may replace what is in it; Unix says owner or permissions, without saying which.
+    assert!(["others-can-replace", "unsafe-ancestor"].contains(&params["reason"].as_str().unwrap()), "{params}");
+    let report = failure.log_report();
+    assert!(report.contains("where=scratch") && report.contains("root=temp"), "{report}");
+    assert!(!report.contains(&*world.temp.to_string_lossy()), "no path in the log: {report}");
     if temp::share_sticky(&world.temp) {
-        assert!(Scratch::create(&world.temp).is_ok(), "sticky, as /tmp");
+        assert!(Scratch::create(&in_temp(&world.temp), DAY).is_ok(), "sticky, as /tmp");
     }
-    assert_eq!(Scratch::create(Path::new("relative")).unwrap_err().key, "install.unsafe");
+    let relative = Scratch::create(&in_temp(Path::new("relative")), DAY).unwrap_err();
+    assert_eq!(relative.key, "install.unsafe");
+    assert_eq!(relative.params, Some(json!({"where": "staging-root", "reason": "not-absolute", "root": "temp"})));
+}
+
+/// The report this fixes (sidevoice-desktop 0.4.0 on Windows: `install.unsafe` at `download`): a temporary directory
+/// moved below a drive root, as `C:\Temp` inherits `C:\`'s "Authenticated Users: Modify", is refused and says so, and
+/// the app's own folder, where Windows stages instead, is not affected by it. Only where an ordinary user can make a
+/// folder below the volume's root (Windows; `/` is root's elsewhere).
+#[test]
+fn a_temporary_directory_below_a_drive_root_is_refused_with_why_and_the_app_folder_still_works() {
+    let Some(below) = temp::below_volume_root() else { return };
+    let failure = Scratch::create(&in_temp(below.path()), DAY).unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.step), ("install.unsafe", Some(Step::Download)));
+    let params = failure.params.clone().unwrap();
+    assert_eq!(params["where"], "scratch", "{params}");
+    assert_eq!(params["reason"], "others-can-replace", "{params}");
+    assert!(failure.log_report().contains("reason=others-can-replace"), "{}", failure.log_report());
+    assert_eq!(std::fs::read_dir(below.path()).unwrap().count(), 0, "nothing left below the drive root");
+
+    let world = World::new();
+    let staging =
+        staging_root(true, below.path().to_path_buf(), Some(&world.tmp.path().join("Sidevoice").join("Data")));
+    assert_eq!(staging.root, Root::AppFolder);
+    let scratch = Scratch::create(&staging, DAY).unwrap();
+    StorageFixtures::assert_private(scratch.path());
+}
+
+fn app_folder(world: &World) -> StagingRoot {
+    let standard_data = world.tmp.path().join("app").join("Data");
+    staging_root(true, world.temp.clone(), Some(&standard_data))
+}
+
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn the_app_folder_is_made_private_and_what_an_interrupted_install_left_there_is_removed() {
+    let world = World::new();
+    let staging = app_folder(&world);
+    assert_eq!(staging.path, world.tmp.path().join("app").join(STAGING_DIR));
+    assert!(!staging.path.exists());
+    let scratch = Scratch::create(&staging, DAY).unwrap();
+    StorageFixtures::assert_private(&staging.path);
+    StorageFixtures::assert_private(scratch.path());
+    drop(scratch);
+    assert!(entries(&staging.path).is_empty(), "its private directory is gone");
+
+    // What a killed install leaves: its private directory with the download in it. And what is not an install's.
+    let left = staging.path.join("sidevoice-install-AbC123");
+    Files::create_private_dir(&left).unwrap();
+    std::fs::write(left.join("package.tgz"), b"partial").unwrap();
+    Files::create_private_dir(&staging.path.join("other")).unwrap();
+    std::fs::write(staging.path.join("sidevoice-install-file"), b"").unwrap();
+
+    // Recent: maybe another install's, kept.
+    drop(Scratch::create(&staging, DAY).unwrap());
+    assert_eq!(entries(&staging.path), ["other", "sidevoice-install-AbC123", "sidevoice-install-file"]);
+    // Older than the bound: removed, and only it.
+    drop(Scratch::create(&staging, Duration::ZERO).unwrap());
+    assert_eq!(entries(&staging.path), ["other", "sidevoice-install-file"]);
+}
+
+#[test]
+fn an_app_folder_that_is_there_and_not_private_is_refused_not_repaired() {
+    let world = World::new();
+    let staging = app_folder(&world);
+    std::fs::create_dir_all(&staging.path).unwrap();
+    StorageFixtures::private(&staging.path);
+    assert!(Scratch::create(&staging, DAY).is_ok(), "private, it is used as it is");
+    StorageFixtures::readable(&staging.path);
+    let failure = Scratch::create(&staging, DAY).unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.step), ("install.unsafe", Some(Step::Download)));
+    assert_eq!(
+        failure.params,
+        Some(json!({"where": "staging-root", "reason": "open-to-others", "root": "app-folder"})),
+        "{}",
+        failure.message
+    );
+    assert_eq!(
+        failure.log_report(),
+        "install.unsafe at step download (reason=open-to-others, root=app-folder, where=staging-root)"
+    );
+    assert_eq!(StorageFixtures::others(&staging.path), sidevoice_platform::fs::Others::Read, "never repaired");
+}
+
+#[test]
+fn an_install_staged_in_the_app_folder_runs_and_leaves_nothing_there() {
+    let world = World::new();
+    let registry =
+        world.registry(&world.installer(json!({"response":{"ok":true,"action":"installed","version":"0.8.1"}})));
+    let options = Options { staging: app_folder(&world), ..world.options() };
+    let answer = prepare(&Job::new("j"), &registry, &world.data, &options).unwrap();
+    assert_eq!(answer["action"], "installed");
+    assert!(world.ran().is_some());
+    assert!(entries(&options.staging.path).is_empty());
+    assert_eq!(world.leftovers(), 0, "nothing in the temporary directory either");
 }
 
 #[test]

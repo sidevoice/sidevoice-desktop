@@ -436,7 +436,24 @@ outside `download`; `cancellable` whether `cancel` would still be honoured.
 
 **Its failures** reject `{key, step?, params?, log_tail?, message}`: `step` where it failed, `params.check` the check
 that failed for `install.authenticity`, `log_tail` the installer's last lines of error output (when it ran), `message`
-an English sentence for a client that does not know the key. The keys:
+an English sentence for a client that does not know the key. The app's own local file failures (`install.unsafe`,
+`install.disk`, and `install.failed` when it is the app's) also say, in `params`, what failed, never with a path (the
+path is only in `message`), and the app log records them (`Failure::log_report`); each is optional, and a reader
+ignores a value it does not know:
+
+- `where`: `staging-root` (the folder the private directory is made in), `scratch` (the private directory itself),
+  `download` (the tarball in it), `package` (what it unpacks to), `installer` (the package's installer, checked before
+  it runs);
+- `reason`: the shared private-directory policy's refusal, `owned-by-other`, `others-can-replace` (others may delete or
+  rename what is in a directory on the way: Windows' inherited "Authenticated Users: Modify"), `open-to-others`,
+  `unsafe-ancestor` (Unix: an owner or permissions it refuses on the way), `link` (a link, junction or other reparse
+  point it does not follow), `network`, `not-absolute`, `not-utf8`, `refused` (worded otherwise); or the OS's,
+  `not-found`, `access-denied`, `already-exists`, `disk-full`, `read-only`, `os`;
+- `os_error`: the OS's own code (a number), when it gave one;
+- `root`, for `staging-root` and `scratch`: where the install stages, `temp` (the system's temporary directory) or
+  `app-folder` (Windows: `%LOCALAPPDATA%\Sidevoice\ai.sidevoice.desktop-staging`; docs/LOCAL_HOST.md → Install).
+
+The keys:
 
 | Key | When |
 |---|---|
@@ -447,7 +464,7 @@ an English sentence for a client that does not know the key. The keys:
 | `install.authenticity` | `params.check`: `manifest` (a registry document that is not one, no SHA-512 integrity; the installer's `core.package-mismatch`), `download` (a tarball URL or a redirect off the registry), `download-size` (over 512 MiB), `archive-path`, `archive-link`, `archive-type`, `archive-size` (docs/LOCAL_HOST.md → Install) |
 | `install.checksum` | the tarball's SHA-512 is not the registry's integrity; nothing of it was unpacked |
 | `install.disk` | the disk is full |
-| `install.unsafe` | the temporary directory is not private to this user (or its ancestry is not) |
+| `install.unsafe` | where the install stages is not private to this user (or its ancestry is not): `params.where`, `params.reason` say which and why |
 | `launch.failed` | the package's installer could not be started |
 | `cli.timeout` | the installer did not finish within 3 min (it was killed) |
 | `install.rollback` | the installer's `install.rolled-back`: the update did not start and the previous release runs again |
