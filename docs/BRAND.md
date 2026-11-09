@@ -14,8 +14,8 @@ dark interfaces, and the one-ink variant "Tono" (the fourth bar at 45 % of the i
 | Thing | Drawn from | Where |
 |---|---|---|
 | macOS app icon, every `.icns` entry (16 → 1024, 1x and 2x) | `logo/tile/sidevoice-tile.svg`; bare `logo/mark/sidevoice-mark.svg` at 16 px @1x | `desktop/tauri/packaging/macos/icon.icns` |
-| Windows app icon (16, 20, 24, 32, 40, 48, 64, 256) | the tile; the bare mark (16 px box) at 16 and 20 px | `desktop/tauri/packaging/windows/icon.ico` |
-| Linux icons (32, 64, 128, 256, 512) | the tile | `desktop/tauri/packaging/linux/icons/*.png` |
+| Windows app icon (16, 20, 24, 32, 40, 48, 64, 256), also the installer's and the uninstaller's | the tile; the bare mark (16 px box) at 16 and 20 px | `desktop/tauri/packaging/windows/icon.ico` (`bundle.windows.nsis.installerIcon`, `uninstallerIcon`) |
+| Linux icons (16, 24, 32, 48, 64, 128, 256, 512), each filed under `hicolor/<size>` | the tile; the bare mark (16 px box) at 16 px | `desktop/tauri/packaging/linux/icons/*.png` |
 | macOS menu bar: idle, live, muted | `logo/mark/sidevoice-mark-black.svg` (Tono) | `desktop/tauri/packaging/shared/tray/{idle,live,muted}.png` |
 | Windows / Linux tray: idle, live, muted, for light and dark bars | `sidevoice-mark.svg`, `…-on-dark.svg`, and Tono in their inks | `desktop/tauri/packaging/shared/tray/{light,dark}-*.png` |
 | `.dmg` window background (1x, 2x) | `logo/lockup/sidevoice-lockup.svg` | `desktop/tauri/packaging/macos/dmg/`, laid out by `scripts/dmg-settings.py` |
@@ -101,7 +101,9 @@ The room window (pairing, calls, first open) is the web interface, bundled from 
   Composer asset (`Assets.car` with `CFBundleIconName`), which needs Xcode 26; the CI runner is macOS 14. Not
   checked on a real macOS 26.
 - **Copyright / publisher** for the About panel and installers: still to be named.
-- **NSIS installer artwork** (header and sidebar bitmaps): the installer uses the app icon only.
+- **NSIS wizard artwork**: the installer and uninstaller carry the app icon, but the installer's Welcome and Finish
+  pages still show NSIS's stock sidebar bitmap (`win.bmp`, 164 × 314): the brand has no drawing for it
+  (`bundle.windows.nsis.sidebarImage`). The inner pages have no header bitmap (Tauri leaves `MUI_HEADERIMAGE` off).
 - The room window's brand fixes (in sidevoice-web) reach the app when `web.pin.json` moves to a release with them.
 
 ## Tray platform boundary

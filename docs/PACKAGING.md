@@ -8,12 +8,12 @@ objects merge and arrays replace, so each OS overlay contains the complete targe
 | OS | Bundle targets | Resources |
 | --- | --- | --- |
 | macOS | `app`, `dmg` | `packaging/macos/`: plists, ICNS, icon preview, DMG backgrounds and layout |
-| Windows | `nsis` | `packaging/windows/`: ICO |
-| Linux | `deb`, `appimage` | `packaging/linux/icons/`: PNGs |
+| Windows | `nsis` | `packaging/windows/`: ICO (the app's, and the installer's and uninstaller's: `bundle.windows.nsis`) |
+| Linux | `deb`, `appimage` | `packaging/linux/icons/`: PNGs, each named by its plain size (an `@2x` name would be filed under a `@2` hicolor directory) |
 | Shared runtime | — | `packaging/shared/tray/`: tray PNGs included by Rust |
 
-Paths are relative to `desktop/tauri/`. The full original icon order is retained in every overlay, including the PNG
-fallbacks used for the default window icon; relocating an icon does not change which icon Tauri selects.
+Paths are relative to `desktop/tauri/`. Every overlay holds the same icon list (`test/packaging-icons.test.mjs`). The first
+PNG is Linux's default window icon (tauri-codegen takes the first PNG), so `32x32.png` stays first.
 `npm run icons` regenerates the same bytes at the new paths. `cargo xtask icons` checks those directories.
 The generator, brand previews, Rust `include_bytes!`, xtask's custom DMG build and documentation use this layout.
 

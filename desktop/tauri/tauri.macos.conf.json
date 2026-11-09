@@ -7,9 +7,12 @@
     ],
     "icon": [
       "packaging/linux/icons/32x32.png",
+      "packaging/linux/icons/16x16.png",
+      "packaging/linux/icons/24x24.png",
+      "packaging/linux/icons/48x48.png",
       "packaging/linux/icons/64x64.png",
       "packaging/linux/icons/128x128.png",
-      "packaging/linux/icons/128x128@2x.png",
+      "packaging/linux/icons/256x256.png",
       "packaging/linux/icons/icon.png",
       "packaging/macos/icon.icns",
       "packaging/windows/icon.ico"
