@@ -207,6 +207,8 @@ fn global_shortcuts(
 /// locked, from each lock to the unlock, `When::WhileLocked`; else at once). The sound is read from the app's own assets, the
 /// web it bundles. The player belongs to the main thread.
 #[tauri::command]
+// The page's own arguments (six) and the app's two: a command is its wire.
+#[allow(clippy::too_many_arguments)]
 fn cue(
     app: AppHandle,
     webview: Webview,
