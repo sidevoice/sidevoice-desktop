@@ -348,7 +348,7 @@ interface CueBridge {
   web without them (a pin from before them) leaves the app with no player to offer, and the page plays its own.
 - **How it plays**: as the page does (sidevoice-web `services/thinking-sound.ts`): the sound at once, then again after a
   silence drawn in its `interval` (seconds, from the end of one play to the start of the next) times `intervalScale` (a number
-  that is not one is 1, one out of 0.5..3 is held there; a gap is drawn at most 36 s), moved by `gainDb` and through
+  out of 0.5..3, or not one, is 1; a gap is drawn at most 36 s), moved by `gainDb` and through
   the page's limiter (threshold -2 dB, hard knee, ratio 20, attack 3 ms, release 100 ms, and the makeup a Web Audio
   compressor adds). iOS: the sound decoded by `AVAudioFile` (from a temporary file, removed), shaped and laid out as a loop of
   at least 20 s of plays and silences, looped by an `AVAudioPlayer` in the active session: it changes nothing of the

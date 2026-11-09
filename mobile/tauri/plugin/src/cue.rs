@@ -119,13 +119,12 @@ pub fn gain_db(value: Option<f64>) -> Result<f32, String> {
     }
 }
 
-/// The person's frequency, as a start gives it (`intervalScale`): none, or a number that is not one, is the sound's own cadence
-/// (1); a number is kept within the page's range.
+/// The person's frequency, as a start gives it (`intervalScale`): a number within the page's range; none, or anything else (not
+/// a number, or out of the range), is the sound's own cadence (1).
 pub fn interval_scale(value: Option<f64>) -> f32 {
+    let (low, high) = INTERVAL_SCALE;
     match value {
-        Some(scale) if scale.is_finite() => {
-            (scale as f32).clamp(INTERVAL_SCALE.0, INTERVAL_SCALE.1)
-        }
+        Some(scale) if (f64::from(low)..=f64::from(high)).contains(&scale) => scale as f32,
         _ => 1.0,
     }
 }
@@ -738,13 +737,16 @@ mod tests {
 
     #[test]
     fn the_frequency_multiplies_the_silence_after_each_play_and_none_is_the_sound_s_own() {
-        // None, or what a page cannot mean, is the sound's own cadence; a number is kept within the page's steps.
+        // None, or what a page cannot mean (not a number, out of the page's range), is the sound's own cadence.
         assert_eq!(interval_scale(None), 1.0);
         assert_eq!(interval_scale(Some(f64::NAN)), 1.0);
         assert_eq!(interval_scale(Some(f64::INFINITY)), 1.0);
         assert_eq!(interval_scale(Some(1.5)), 1.5);
-        assert_eq!(interval_scale(Some(0.1)), 0.5);
-        assert_eq!(interval_scale(Some(9.0)), 3.0);
+        assert_eq!(interval_scale(Some(0.5)), 0.5);
+        assert_eq!(interval_scale(Some(3.0)), 3.0);
+        assert_eq!(interval_scale(Some(0.1)), 1.0);
+        assert_eq!(interval_scale(Some(9.0)), 1.0);
+        assert_eq!(interval_scale(Some(-2.0)), 1.0);
         // The soft heartbeat's 7–10 s: half, as is, three times.
         assert_eq!(scaled_interval([7.0, 10.0], 0.5), [3.5, 5.0]);
         assert_eq!(scaled_interval([7.0, 10.0], 1.0), [7.0, 10.0]);

@@ -202,9 +202,9 @@ fn global_shortcuts(
 
 /// `host.cue`'s one command (docs/BRIDGE.md -> "The cues"): `action` `available` (whether this phone plays the page's cues
 /// itself), or `start` and `stop` with the cue's `name`; a start may say which `sound` (an id of the bundled web's manifest,
-/// else its default), its `gainDb` (the person's offset, else 0), its `intervalScale` (the person's frequency: what multiplies the
-/// silence after each play, 0.5 to 3; else 1) and `whileLocked` (true: it plays only while the screen is locked, from each lock
-/// to the unlock, `When::WhileLocked`; else at once). The sound is read from the app's own assets, the
+/// else its default), its `gainDb` (the person's offset, else 0), its `intervalScale` (the person's frequency: what multiplies
+/// the silence after each play, 0.5 to 3; anything else, or none, 1) and `whileLocked` (true: it plays only while the screen is
+/// locked, from each lock to the unlock, `When::WhileLocked`; else at once). The sound is read from the app's own assets, the
 /// web it bundles. The player belongs to the main thread.
 #[tauri::command]
 fn cue(
