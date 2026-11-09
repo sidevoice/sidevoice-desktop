@@ -3,7 +3,7 @@
 //
 //   desktop/tauri/packaging/macos/icon.icns             macOS app icon, every size (16…1024), on Apple's icon grid
 //   desktop/tauri/packaging/windows/icon.ico              Windows app icon (16…256)
-//   desktop/tauri/packaging/linux/icons/{32x32,64x64,128x128,128x128@2x,icon}.png   Linux
+//   desktop/tauri/packaging/linux/icons/{16x16,24x24,32x32,48x48,64x64,128x128,256x256,icon}.png   Linux (hicolor; icon.png is 512)
 //   desktop/tauri/packaging/shared/tray/{idle,live,muted}.png          macOS menu bar, template images (one ink)
 //   desktop/tauri/packaging/shared/tray/{light,dark}-{idle,live,muted}.png   Windows / Linux tray, for light and dark bars
 //   desktop/tauri/packaging/macos/dmg/background.png, background@2x.png      the .dmg window
@@ -155,7 +155,10 @@ out("desktop/tauri/packaging/macos/icon.icns", icns([
   ["ic09", mac[512]], ["ic10", mac[1024]], // 512, 512@2x
 ]));
 out("desktop/tauri/packaging/windows/icon.ico", ico([16, 20, 24, 32, 40, 48, 64, 256].map((s) => [s, appIconFlat(s)])));
-for (const [file, size] of [["32x32.png", 32], ["64x64.png", 64], ["128x128.png", 128], ["128x128@2x.png", 256], ["icon.png", 512]]) {
+// Linux: the bundler files each PNG under hicolor/<width>x<height>/apps by its pixel size (an `@2x` name goes to a
+// `@2` directory, which the icon theme reads as twice that many pixels), so every name is its plain size. 48 is the
+// size the freedesktop icon theme spec asks every application for; 16 and 24 are panel and menu sizes.
+for (const [file, size] of [["16x16.png", 16], ["24x24.png", 24], ["32x32.png", 32], ["48x48.png", 48], ["64x64.png", 64], ["128x128.png", 128], ["256x256.png", 256], ["icon.png", 512]]) {
   out(`desktop/tauri/packaging/linux/icons/${file}`, appIconFlat(size));
 }
 // For the screens in docs/brand-screens and anyone who wants to look at it.
