@@ -4,7 +4,7 @@ use sidevoice_desktop_test_support::fixture;
 use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_local_host::install::*;
-use sidevoice_platform::fs::{Files, TestFiles};
+use sidevoice_platform::fs::{Files, Fs, TestFiles};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -32,6 +32,7 @@ impl World {
         Options {
             package: Some(PLATFORM.into()),
             temp: self.temp.clone(),
+            temp_often_redirected: false,
             installer_time: Duration::from_secs(20),
             settle_time: Duration::from_millis(100),
             ..Options::standard()
@@ -184,21 +185,144 @@ fn download_bounds_hold() {
     assert_eq!(world.leftovers(), 0);
 }
 
+const DAY: Duration = Duration::from_secs(24 * 3600);
+
+fn in_temp(path: &Path) -> StagingRoot {
+    StagingRoot { root: Root::Temp, path: path.to_path_buf() }
+}
+
 #[test]
 fn the_private_directory_is_private_and_below_a_safe_root_only() {
     let world = World::new();
-    let scratch = Scratch::create(&world.temp).unwrap();
+    let scratch = Scratch::create(&in_temp(&world.temp), DAY).unwrap();
     StorageFixtures::assert_private(scratch.path());
     let path = scratch.path().to_path_buf();
     drop(scratch);
     assert!(!path.exists());
     Files::let_others_change(&world.temp);
-    let failure = Scratch::create(&world.temp.join(".")).unwrap_err();
+    let failure = Scratch::create(&in_temp(&world.temp.join(".")), DAY).unwrap_err();
     assert_eq!(failure.key, "install.unsafe", "a temporary directory others can write in, not sticky");
+    assert_eq!(failure.step, Some(Step::Download));
+    let params = failure.params.clone().unwrap();
+    assert_eq!((&params["where"], &params["root"]), (&json!("scratch"), &json!("temp")), "{params}");
+    // Windows names who may replace what is in it; Unix says owner or permissions, without saying which.
+    assert!(["others-can-replace", "unsafe-ancestor"].contains(&params["reason"].as_str().unwrap()), "{params}");
+    let report = failure.log_report();
+    assert!(report.contains("where=scratch") && report.contains("root=temp"), "{report}");
+    assert!(!report.contains(&*world.temp.to_string_lossy()), "no path in the log: {report}");
     if temp::share_sticky(&world.temp) {
-        assert!(Scratch::create(&world.temp).is_ok(), "sticky, as /tmp");
+        assert!(Scratch::create(&in_temp(&world.temp), DAY).is_ok(), "sticky, as /tmp");
     }
-    assert_eq!(Scratch::create(Path::new("relative")).unwrap_err().key, "install.unsafe");
+    let relative = Scratch::create(&in_temp(Path::new("relative")), DAY).unwrap_err();
+    assert_eq!(relative.key, "install.unsafe");
+    assert_eq!(relative.params, Some(json!({"where": "staging-root", "reason": "not-absolute", "root": "temp"})));
+}
+
+/// The report this fixes (sidevoice-desktop 0.4.0 on Windows: `install.unsafe` at `download`): a temporary directory
+/// moved below a drive root, as `C:\Temp` inherits `C:\`'s "Authenticated Users: Modify", is refused and says so, and
+/// the staging folder beside `D`, where Windows stages instead, is not affected by it. Only where an ordinary user can
+/// make a folder below the volume's root (Windows; `/` is root's elsewhere).
+#[test]
+fn a_temporary_directory_below_a_drive_root_is_refused_with_why_and_beside_d_still_works() {
+    let Some(below) = temp::below_volume_root() else { return };
+    let failure = Scratch::create(&in_temp(below.path()), DAY).unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.step), ("install.unsafe", Some(Step::Download)));
+    let params = failure.params.clone().unwrap();
+    assert_eq!(params["where"], "scratch", "{params}");
+    assert_eq!(params["reason"], "others-can-replace", "{params}");
+    assert!(failure.log_report().contains("reason=others-can-replace"), "{}", failure.log_report());
+    assert_eq!(std::fs::read_dir(below.path()).unwrap().count(), 0, "nothing left below the drive root");
+
+    let world = World::new();
+    let staging = staging_root(true, below.path().to_path_buf(), &world.data);
+    assert_eq!(staging.root, Root::BesideData);
+    let scratch = Scratch::create(&staging, DAY).unwrap();
+    StorageFixtures::assert_private(scratch.path());
+}
+
+/// The staging folder for a `D` in a place of its own (as `SIDEVOICE_DATA_DIR` names one): beside it.
+fn beside(data: &Path) -> StagingRoot {
+    staging_root(true, std::env::temp_dir(), data)
+}
+
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn the_folder_beside_d_is_made_private_and_what_an_interrupted_install_left_there_is_removed() {
+    let world = World::new();
+    let staging = beside(&world.tmp.path().join("app").join("Data"));
+    assert_eq!(staging.path, world.tmp.path().join("app").join(STAGING_DIR));
+    assert!(!staging.path.exists());
+    let scratch = Scratch::create(&staging, DAY).unwrap();
+    StorageFixtures::assert_private(&staging.path);
+    StorageFixtures::assert_private(scratch.path());
+    drop(scratch);
+    assert!(entries(&staging.path).is_empty(), "its private directory is gone");
+
+    // What a killed install leaves: its private directory with the download in it. And what is not an install's.
+    let left = staging.path.join("sidevoice-install-AbC123");
+    Files::create_private_dir(&left).unwrap();
+    std::fs::write(left.join("package.tgz"), b"partial").unwrap();
+    Files::create_private_dir(&staging.path.join("other")).unwrap();
+    std::fs::write(staging.path.join("sidevoice-install-file"), b"").unwrap();
+
+    // Recent: maybe another install's, kept.
+    drop(Scratch::create(&staging, DAY).unwrap());
+    assert_eq!(entries(&staging.path), ["other", "sidevoice-install-AbC123", "sidevoice-install-file"]);
+    // Older than the bound: removed, and only it.
+    drop(Scratch::create(&staging, Duration::ZERO).unwrap());
+    assert_eq!(entries(&staging.path), ["other", "sidevoice-install-file"]);
+}
+
+#[test]
+fn a_folder_beside_d_that_is_there_and_not_private_is_refused_not_repaired() {
+    let world = World::new();
+    let staging = beside(&world.tmp.path().join("app").join("Data"));
+    std::fs::create_dir_all(&staging.path).unwrap();
+    StorageFixtures::private(&staging.path);
+    assert!(Scratch::create(&staging, DAY).is_ok(), "private, it is used as it is");
+    StorageFixtures::readable(&staging.path);
+    let failure = Scratch::create(&staging, DAY).unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.step), ("install.unsafe", Some(Step::Download)));
+    assert_eq!(
+        failure.params,
+        Some(json!({"where": "staging-root", "reason": "open-to-others", "root": "beside-data"})),
+        "{}",
+        failure.message
+    );
+    assert!(failure.message.starts_with(&*staging.path.to_string_lossy()), "the path, then why: {}", failure.message);
+    assert_eq!(
+        failure.log_report(),
+        "install.unsafe at step download (reason=open-to-others, root=beside-data, where=staging-root)"
+    );
+    assert_eq!(StorageFixtures::others(&staging.path), sidevoice_platform::fs::Others::Read, "never repaired");
+}
+
+/// Where the temporary directory is often redirected (Windows), an install for a `D` that is not the standard one
+/// (`SIDEVOICE_DATA_DIR` on another drive or in a profile) stages beside that `D`, never in the standard place nor in
+/// the temporary directory: here one other users can change, which would be refused.
+#[test]
+fn an_install_for_a_configured_d_stages_beside_it_and_leaves_nothing_there() {
+    let world = World::new();
+    let registry =
+        world.registry(&world.installer(json!({"response":{"ok":true,"action":"installed","version":"0.8.1"}})));
+    Files::let_others_change(&world.temp);
+    let configured = world.tmp.path().join("profile").join("SidevoiceProfile");
+    let options = Options { temp_often_redirected: true, ..world.options() };
+    let answer = prepare(&Job::new("j"), &registry, &configured, &options).unwrap();
+    assert_eq!(answer["action"], "installed");
+    let ran = world.ran().expect("the installer ran");
+    assert!(ran.starts_with(&format!("install --json {}", configured.display())), "{ran}");
+    let staging = world.tmp.path().join("profile").join(STAGING_DIR);
+    assert!(entries(&staging).is_empty(), "made beside D, and its private directory gone");
+    assert_eq!(world.leftovers(), 0, "nothing in the temporary directory");
 }
 
 #[test]

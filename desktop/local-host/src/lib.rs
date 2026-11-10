@@ -18,7 +18,8 @@
 //! - [`host`]: the startup cases, the poll, the actions and the install, tied together.
 //! - [`platform`]: the way to the OS. What differs per OS is `sidevoice_platform`'s (the local channel and its peer
 //!   check, child process trees and their bounded output, private files and programs); `platform` only drives its
-//!   async channel from blocking code. Nothing here has code of its own per OS.
+//!   async channel from blocking code. Nothing here has code of its own per OS; one value differs (`platform::staging`:
+//!   whether the temporary directory is often redirected, which decides where an install stages).
 //!
 //! The trust boundary is the OS user: the device token travels only over the socket, and the page only ever holds
 //! the proxy's in-memory secret (sidevoice design "Onboarding, hosts and settings" §1, §4.1).

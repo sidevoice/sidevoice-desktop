@@ -896,6 +896,7 @@ fn install_options(world: &World) -> install::Options {
     install::Options {
         package: Some(PLATFORM.into()),
         temp,
+        temp_often_redirected: false,
         installer_time: Duration::from_secs(20),
         settle_time: Duration::from_secs(5),
         ..install::Options::standard()

@@ -12,7 +12,7 @@
 //! is already there (twice in the archive, or a file where a directory is) is refused (`archive-path`). No link is
 //! ever created, so a path built from checked segments below the directory stays below it.
 
-use crate::install::{Failure, Step};
+use crate::install::{Failure, Step, Where};
 use sidevoice_platform::fs::{Create, Files, Fs};
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
@@ -41,7 +41,7 @@ fn refused(check: &str, message: impl Into<String>) -> Failure {
 }
 
 fn written(e: io::Error, path: &Path) -> Failure {
-    Failure::io(&e, Step::Staging, &format!("Could not write {}", path.display()))
+    Failure::io(&e, Step::Staging, Where::Package, &format!("Could not write {}", path.display()))
 }
 
 /// An entry's path as checked segments, the first of them [`ROOT`].

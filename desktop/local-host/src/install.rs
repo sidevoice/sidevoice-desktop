@@ -2,7 +2,8 @@
 //! install` does, with the npm package fetched directly.
 //!
 //! 1. `download`: the latest release and this computer's platform package, from the registry ([`npm`]), and its
-//!    tarball into a fresh private directory ([`Scratch`]), its bytes counted as they come. Cancellable.
+//!    tarball into a fresh private directory ([`Scratch`], made where [`staging_root`] says: the system's temporary
+//!    directory, or on Windows a folder beside `D`), its bytes counted as they come. Cancellable.
 //! 2. `verification`: the tarball's SHA-512 against the registry's integrity; a mismatch is refused
 //!    (`install.checksum`) and nothing of it is unpacked. Cancellable.
 //! 3. `staging`: the tarball unpacked ([`tarball`]), then the package's own installer run from it,
@@ -15,7 +16,8 @@
 //!
 //! The private directory is removed whatever happens. A failure is `{key, step?, params?, log_tail?, message}`
 //! ([`Failure`]): the keys sidevoice-web knows where one fits (`local-host-install.ts`), the installer's own keys
-//! through ([`installer_failure`]).
+//! through ([`installer_failure`]). A local file operation that fails also names, in `params`, what it was at
+//! ([`Where`]), why ([`Reason`]) and the OS's own code (`os_error`), so the app log says what failed without a path.
 
 use crate::cli::Cli;
 use crate::npm::{self, Fetch};
@@ -25,6 +27,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha512};
 use sidevoice_platform::fs::{Access, Create, Directory, FileId, Files, Fs, HeldDirectory};
+use sidevoice_platform::removal::Removal;
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -58,7 +62,8 @@ pub enum Step {
 }
 
 /// A failed install as the page gets it: a stable `key`, the step it failed at, what the page may say with it
-/// (`params`: `check` for `install.authenticity`; the installer's own), the installer's last lines of error output,
+/// (`params`: `check` for `install.authenticity`; `where`, `reason`, `os_error` and `root` for the app's own local file
+/// failures, [`Failure::at`]; the installer's own), the installer's last lines of error output,
 /// and an English sentence for a client that does not know the key.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Failure {
@@ -78,22 +83,188 @@ impl Failure {
     }
 
     /// The check that failed, for `install.authenticity` (sidevoice-web's `INSTALL_CHECKS`).
-    pub fn check(mut self, check: &str) -> Failure {
+    pub fn check(self, check: &str) -> Failure {
+        self.param("check", json!(check))
+    }
+
+    /// `params[name]` = `value`, beside the params already there.
+    fn param(mut self, name: &str, value: Value) -> Failure {
         let mut params = self.params.take().filter(Value::is_object).unwrap_or_else(|| json!({}));
-        params["check"] = json!(check);
+        params[name] = value;
         self.params = Some(params);
         self
+    }
+
+    /// What failed, for support: `params.where` ([`Where`]), `params.reason` ([`Reason`]) and, when the OS gave one,
+    /// `params.os_error`, its raw code. Closed sets and a number, never a path, so the app log keeps them
+    /// ([`Failure::log_report`]); the path stays in `message`.
+    pub fn at(self, place: Where, reason: Reason, os_error: Option<i32>) -> Failure {
+        let failure = self.param("where", json!(place)).param("reason", json!(reason));
+        match os_error {
+            Some(code) => failure.param("os_error", json!(code)),
+            None => failure,
+        }
     }
 
     pub fn cancelled(step: Step) -> Failure {
         Failure::new(CANCELLED, step, "The install was cancelled.")
     }
 
-    /// A local file could not be written: a full disk is `install.disk`, anything else `install.failed`.
-    pub fn io(e: &io::Error, step: Step, what: &str) -> Failure {
+    /// A local file operation at `place` failed: a full disk is `install.disk`, anything else `install.failed`; with
+    /// [`Failure::at`] from the error.
+    pub fn io(e: &io::Error, step: Step, place: Where, what: &str) -> Failure {
         let full = matches!(e.kind(), io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded);
-        Failure::new(if full { "install.disk" } else { "install.failed" }, step, format!("{what}: {e}"))
+        Failure::new(if full { "install.disk" } else { "install.failed" }, step, format!("{what}: {e}")).at(
+            place,
+            Reason::of(e),
+            os_code(e),
+        )
     }
+
+    /// A directory at `place` that the shared private-directory policy refused, or that could not be checked:
+    /// `install.unsafe`, with [`Failure::at`] from the error.
+    pub fn unsafe_dir(e: &io::Error, step: Step, place: Where, what: &str) -> Failure {
+        Failure::new("install.unsafe", step, format!("{what}: {e}")).at(place, Reason::of(e), os_code(e))
+    }
+}
+
+/// What a local file operation of the install was at when it failed (`params.where`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Where {
+    /// The directory the private directory is made in ([`StagingRoot`]).
+    StagingRoot,
+    /// The private directory itself, as made and checked.
+    Scratch,
+    /// The downloaded tarball in it.
+    Download,
+    /// What the tarball unpacks to.
+    Package,
+    /// The package's installer, checked before it runs.
+    Installer,
+}
+
+impl Where {
+    const ALL: [Where; 5] = [Where::StagingRoot, Where::Scratch, Where::Download, Where::Package, Where::Installer];
+}
+
+/// Why a local file operation failed (`params.reason`). The shared policy's refusals (`sidevoice_platform::fs`,
+/// `PermissionDenied`) say why only in their English text, so until it gives a typed reason they are read from the
+/// phrases of the pinned release ([`Reason::of`]); a refusal it words otherwise is `refused`, never guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Reason {
+    /// The path is not absolute.
+    NotAbsolute,
+    /// The path is not UTF-8, so it cannot be run.
+    NotUtf8,
+    /// A directory on the way, or the directory itself, belongs to another user.
+    OwnedByOther,
+    /// Somebody else may delete or rename what is in a directory on the way (Windows: an inherited
+    /// "Authenticated Users: Modify", as below a drive root).
+    OthersCanReplace,
+    /// The directory itself is open to others.
+    OpenToOthers,
+    /// A directory on the way has an owner or permissions the policy refuses (Unix, which does not say which).
+    UnsafeAncestor,
+    /// A link, junction, mount point or other reparse point the policy does not follow, or not an ordinary directory.
+    Link,
+    /// On a network or shared drive.
+    Network,
+    /// Refused by the policy for a reason worded otherwise.
+    Refused,
+    /// Not there.
+    NotFound,
+    /// The OS refused access (`os_error` says how).
+    AccessDenied,
+    /// Already there.
+    AlreadyExists,
+    /// The disk or the quota is full.
+    DiskFull,
+    /// A read-only file system.
+    ReadOnly,
+    /// Any other OS error (`os_error` says which).
+    Os,
+}
+
+impl Reason {
+    const ALL: [Reason; 15] = [
+        Reason::NotAbsolute,
+        Reason::NotUtf8,
+        Reason::OwnedByOther,
+        Reason::OthersCanReplace,
+        Reason::OpenToOthers,
+        Reason::UnsafeAncestor,
+        Reason::Link,
+        Reason::Network,
+        Reason::Refused,
+        Reason::NotFound,
+        Reason::AccessDenied,
+        Reason::AlreadyExists,
+        Reason::DiskFull,
+        Reason::ReadOnly,
+        Reason::Os,
+    ];
+
+    /// Why `e` happened: by its kind, and for a refusal (`PermissionDenied`) by the policy's wording, checked from the
+    /// most specific; a `PermissionDenied` the policy did not word but the OS gave a code for is `access-denied`.
+    pub fn of(e: &io::Error) -> Reason {
+        let text = e.to_string();
+        let says = |phrases: &[&str]| phrases.iter().any(|phrase| text.contains(phrase));
+        match e.kind() {
+            io::ErrorKind::NotFound => Reason::NotFound,
+            io::ErrorKind::AlreadyExists => Reason::AlreadyExists,
+            io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => Reason::DiskFull,
+            io::ErrorKind::ReadOnlyFilesystem => Reason::ReadOnly,
+            io::ErrorKind::InvalidInput if says(&["is not an absolute path"]) => Reason::NotAbsolute,
+            io::ErrorKind::PermissionDenied => {
+                if says(&["unsafe link", "a link of another user's", "not an ordinary directory", ": a link"]) {
+                    Reason::Link
+                } else if says(&["a network or shared drive"]) {
+                    Reason::Network
+                } else if says(&["owned by another user", "not this user's"]) {
+                    Reason::OwnedByOther
+                } else if says(&["others can replace what is in it"]) {
+                    Reason::OthersCanReplace
+                } else if says(&["open to others"]) {
+                    Reason::OpenToOthers
+                } else if says(&["unsafe ancestor owner or permissions"]) {
+                    Reason::UnsafeAncestor
+                } else if os_code(e).is_some() {
+                    Reason::AccessDenied
+                } else {
+                    Reason::Refused
+                }
+            }
+            _ => Reason::Os,
+        }
+    }
+
+    /// Whether this is the policy refusing a directory (`install.unsafe`), not the OS failing an operation.
+    fn is_refusal(self) -> bool {
+        matches!(
+            self,
+            Reason::NotAbsolute
+                | Reason::NotUtf8
+                | Reason::OwnedByOther
+                | Reason::OthersCanReplace
+                | Reason::OpenToOthers
+                | Reason::UnsafeAncestor
+                | Reason::Link
+                | Reason::Network
+                | Reason::Refused
+        )
+    }
+}
+
+/// The OS's own code for `e`: its raw code, else the last `(os error N)` in its text (the shared policy rewraps OS
+/// errors with the path, keeping their kind and text but not their code).
+fn os_code(e: &io::Error) -> Option<i32> {
+    e.raw_os_error().or_else(|| {
+        let text = e.to_string();
+        let from = text.rfind("(os error ")? + "(os error ".len();
+        text[from..].split_once(')')?.0.parse().ok()
+    })
 }
 
 impl Failure {
@@ -115,7 +286,9 @@ impl Failure {
             for (name, value) in params {
                 match value {
                     Value::String(text) if param_value_ok(name, text) => logged.push(format!("{name}={text}")),
-                    Value::Number(n) if name == "status" && n.is_u64() => logged.push(format!("{name}={n}")),
+                    Value::Number(n) if (name == "status" && n.is_u64()) || (name == "os_error" && n.is_i64()) => {
+                        logged.push(format!("{name}={n}"))
+                    }
                     _ => withheld += 1,
                 }
             }
@@ -167,14 +340,23 @@ fn is_digest(text: &str) -> bool {
     matches!(text.len(), 40 | 64 | 128) && text.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
 }
 
+/// Whether `text` is how one of `values` serialises.
+fn one_of<T: Serialize>(values: &[T], text: &str) -> bool {
+    values.iter().any(|value| json!(value) == text)
+}
+
 /// A value is logged only if it has its param's grammar (never sanitized): `check` one of [`CHECKS`]; `version` a
-/// release version; `expected` and `found` a version or a digest; `status` is logged only as a number (the
-/// connector sends no word for it).
+/// release version; `expected` and `found` a version or a digest; `where`, `reason` and `root` one of [`Where`],
+/// [`Reason`] and [`Root`]; `status` and `os_error` are logged only as numbers (the connector sends no word for
+/// `status`).
 fn param_value_ok(name: &str, text: &str) -> bool {
     match name {
         "check" => CHECKS.contains(&text),
         "version" => is_version(text),
         "expected" | "found" => is_version(text) || is_digest(text),
+        "where" => one_of(&Where::ALL, text),
+        "reason" => one_of(&Reason::ALL, text),
+        "root" => one_of(&Root::ALL, text),
         _ => false,
     }
 }
@@ -290,8 +472,15 @@ impl Job {
 pub struct Options {
     /// This computer's platform package; none has no release (`install.no-bundle`).
     pub package: Option<String>,
-    /// Where the private directory is made: the system's temporary directory.
+    /// The system's temporary directory: where the private directory is made unless `temp_often_redirected`
+    /// ([`staging_root`]).
     pub temp: PathBuf,
+    /// Whether this OS's temporary directory is often redirected to a place other users can change
+    /// ([`crate::platform::staging`]): then the private directory is made beside `D` instead ([`staging_root`]).
+    pub temp_often_redirected: bool,
+    /// How long ago a private directory left in the staging folder beside `D` must have last changed to be removed
+    /// before an install ([`Scratch::create`]).
+    pub stale_after: Duration,
     /// The tarball's largest size, and how long its download may take in all.
     pub download_limit: u64,
     pub download_time: Duration,
@@ -308,6 +497,9 @@ impl Options {
         Options {
             package: current_package(),
             temp: std::env::temp_dir(),
+            temp_often_redirected: crate::platform::staging::temp_often_redirected(),
+            // A day: far past an install's own bounds (a 15 min download, 3 min for the installer).
+            stale_after: Duration::from_secs(24 * 3600),
             download_limit: 512 * 1024 * 1024,
             download_time: Duration::from_secs(15 * 60),
             unpack: tarball::LIMITS,
@@ -317,6 +509,53 @@ impl Options {
     }
 }
 
+/// Which directory the install's private directory is made in (`params.root`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Root {
+    /// The system's temporary directory (`std::env::temp_dir`), there already and the OS's to clean.
+    Temp,
+    /// [`STAGING_DIR`] beside the `D` the install is for, made private by the install itself, which also removes what
+    /// an interrupted install left in it.
+    BesideData,
+}
+
+impl Root {
+    const ALL: [Root; 2] = [Root::Temp, Root::BesideData];
+}
+
+/// Where the install's private directory is made: which kind of directory, and its path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagingRoot {
+    pub root: Root,
+    pub path: PathBuf,
+}
+
+/// The staging folder beside `D`, in `D`'s parent, named as the reset's control state beside the standard `D` is
+/// (`ai.sidevoice.desktop-reset`).
+pub const STAGING_DIR: &str = "ai.sidevoice.desktop-staging";
+
+/// Where an install for the data directory `data` stages its download: the system's temporary directory `temp`, unless
+/// this OS's is often redirected to a place other users can change (`temp_often_redirected`, from
+/// [`crate::platform::staging`]); then [`STAGING_DIR`] beside `data`, in its parent.
+///
+/// `data` is the `D` the installer is run for, `$SIDEVOICE_DATA_DIR` when set (`DataDirs::from_env`), so the staging
+/// folder's ancestry is exactly `D`'s: every directory above it is one above `D`, which the package's installer
+/// requires the shared private-directory policy to accept anyway, and `D` itself is neither made nor written by the
+/// app. Staging there asks nothing more of this computer. With the standard `D` on Windows that is
+/// `%LOCALAPPDATA%\Sidevoice\ai.sidevoice.desktop-staging`, in the folder the app is installed in; with
+/// `SIDEVOICE_DATA_DIR=E:\Profile`, `E:\ai.sidevoice.desktop-staging`. A `D` with no parent (a volume's root) stages
+/// in the temporary directory.
+pub fn staging_root(temp_often_redirected: bool, temp: PathBuf, data: &Path) -> StagingRoot {
+    match data.parent().filter(|parent| temp_often_redirected && !parent.as_os_str().is_empty()) {
+        Some(parent) => StagingRoot { root: Root::BesideData, path: parent.join(STAGING_DIR) },
+        None => StagingRoot { root: Root::Temp, path: temp },
+    }
+}
+
+/// The name of every install's private directory starts with this.
+const SCRATCH_PREFIX: &str = "sidevoice-install-";
+
 /// A fresh private directory for one install, removed with everything in it when dropped.
 #[derive(Debug)]
 pub struct Scratch {
@@ -324,30 +563,53 @@ pub struct Scratch {
 }
 
 impl Scratch {
-    /// A new private directory below `root` (`Fs::create_private_dir`: 0700 on Unix) under a fresh name
-    /// (`sidevoice-install-` and six random characters, `tempfile`'s, taken only if nobody has it), then checked as the
-    /// app checks its own directories: this user's, private, every directory above it safe from other users (sticky,
-    /// as `/tmp`, is fine).
-    pub fn create(root: &Path) -> Result<Scratch, Failure> {
-        let unsafe_root = |why: String| Failure::new("install.unsafe", Step::Download, why);
+    /// A new private directory in `staging` (`Fs::create_private_dir`: 0700 on Unix, a protected owner-only DACL on
+    /// Windows) under a fresh name (`sidevoice-install-` and six random characters, `tempfile`'s, taken only if nobody
+    /// has it), then checked as the app checks its own directories: this user's, private, every directory above it
+    /// safe from other users (sticky, as `/tmp`, is fine). The staging folder beside `D` ([`Root::BesideData`]) is
+    /// first made private if missing (refused if it is there and not private), and what an interrupted install left in
+    /// it more than `stale_after` ago removed ([`remove_stale`]).
+    ///
+    /// A failure is `install.unsafe` when the policy refuses a directory (`install.failed` / `install.disk` when the
+    /// OS fails to make one), at step `download`, with `params` `{where, reason, os_error?, root}`
+    /// ([`Failure::at`]). Its `message` is the English fallback the keys already had: no new sentence, the new facts
+    /// are params the client translates.
+    pub fn create(staging: &StagingRoot, stale_after: Duration) -> Result<Scratch, Failure> {
+        let root = &staging.path;
+        let rooted = |failure: Failure| failure.param("root", json!(staging.root));
         if !root.is_absolute() {
-            return Err(unsafe_root(format!("The temporary directory {} is not absolute.", root.display())));
+            let message = format!("The temporary directory {} is not absolute.", root.display());
+            let failure = Failure::new("install.unsafe", Step::Download, message);
+            return Err(rooted(failure.at(Where::StagingRoot, Reason::NotAbsolute, None)));
+        }
+        if staging.root == Root::BesideData {
+            Files::ensure_private_dir(root).map_err(|e| {
+                let what = root.display().to_string();
+                rooted(if Reason::of(&e).is_refusal() {
+                    Failure::unsafe_dir(&e, Step::Download, Where::StagingRoot, &what)
+                } else {
+                    Failure::io(&e, Step::Download, Where::StagingRoot, &what)
+                })
+            })?;
+            remove_stale(root, stale_after);
         }
         let made = tempfile::Builder::new()
-            .prefix("sidevoice-install-")
+            .prefix(SCRATCH_PREFIX)
             .rand_bytes(6)
             .make_in(root, Files::create_private_dir)
             .and_then(|made| made.keep().map_err(|e| e.error))
             .map_err(|e| {
-                Failure::io(&e, Step::Download, &format!("Could not make a directory in {}", root.display()))
+                let what = format!("Could not make a directory in {}", root.display());
+                rooted(Failure::io(&e, Step::Download, Where::StagingRoot, &what))
             })?;
         // Removed again, by this name, if the check below refuses it.
         let mut scratch = Scratch { path: made.1 };
-        HeldDirectory::open(&scratch.path, Access::Private)
-            .map_err(|error| unsafe_root(format!("{}: {error}", scratch.path.display())))?;
+        let refused = |e: io::Error, path: &Path| {
+            rooted(Failure::unsafe_dir(&e, Step::Download, Where::Scratch, &path.display().to_string()))
+        };
+        HeldDirectory::open(&scratch.path, Access::Private).map_err(|e| refused(e, &scratch.path))?;
         // Resolve only after the shared policy has accepted the original ancestry (e.g. macOS /var).
-        scratch.path =
-            scratch.path.canonicalize().map_err(|error| unsafe_root(format!("{}: {error}", scratch.path.display())))?;
+        scratch.path = scratch.path.canonicalize().map_err(|e| refused(e, &scratch.path))?;
         Ok(scratch)
     }
 
@@ -362,6 +624,27 @@ impl Drop for Scratch {
     }
 }
 
+/// Removes, as far as it can, the private directories an install that never finished (the app killed, the computer
+/// turned off) left in the app's staging folder `root`, already made private: each directory named
+/// [`SCRATCH_PREFIX`]… that last changed `stale_after` ago or more, one at a time, through the folder held open
+/// (`Removal`: no link followed, nothing of another user's or that others can change, nothing else touched). One it
+/// cannot remove stays, and the install goes on. Never in the system's temporary directory: that is the OS's to clean,
+/// and what other users have there is not this app's to judge.
+fn remove_stale(root: &Path, stale_after: Duration) {
+    let Ok(held) = HeldDirectory::open(root, Access::Private) else { return };
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    let stale = |entry: &std::fs::DirEntry| {
+        let named = entry.file_name().to_str().is_some_and(|name| name.starts_with(SCRATCH_PREFIX));
+        // `DirEntry::metadata` does not follow a link: a link is not a directory here.
+        let age = entry.metadata().ok().filter(|meta| meta.is_dir()).and_then(|meta| meta.modified().ok());
+        named && age.and_then(|changed| changed.elapsed().ok()).is_some_and(|age| age >= stale_after)
+    };
+    let names: Vec<OsString> = entries.flatten().filter(stale).map(|entry| entry.file_name()).collect();
+    for name in &names {
+        let _ = held.remove_contents(&[name.as_os_str()]);
+    }
+}
+
 /// Steps 1–4: the release resolved, downloaded, verified, unpacked and installed by its own installer. The
 /// installer's answer (`{ok: true, action, version, …}`).
 pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> Result<Value, Failure> {
@@ -370,7 +653,8 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     })?;
     job.enter(Step::Download)?;
     let (release, dist) = npm::resolve(fetch, package)?;
-    let scratch = Scratch::create(&options.temp)?;
+    let staging = staging_root(options.temp_often_redirected, options.temp.clone(), data);
+    let scratch = Scratch::create(&staging, options.stale_after)?;
     let archive = scratch.path().join("package.tgz");
     let digest = download(job, fetch, &dist, &archive, options)?;
 
@@ -384,8 +668,8 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     }
 
     job.enter(Step::Staging)?;
-    let file =
-        std::fs::File::open(&archive).map_err(|e| Failure::io(&e, Step::Staging, "Could not read the download"))?;
+    let file = std::fs::File::open(&archive)
+        .map_err(|e| Failure::io(&e, Step::Staging, Where::Download, "Could not read the download"))?;
     tarball::extract(io::BufReader::new(file), scratch.path(), &installer_entry(), options.unpack, &|| {
         job.cancelled()
     })?;
@@ -402,7 +686,7 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     }
     // Unpacked as a program (`tarball::extract`); what runs is the path checked here.
     let installer = Files::trusted_program(&installer)
-        .map_err(|e| Failure::io(&e, Step::Staging, "The installer cannot be run"))?;
+        .map_err(|e| Failure::io(&e, Step::Staging, Where::Installer, "The installer cannot be run"))?;
     job.commit()?;
     run_installer(job, &installer, data, options.installer_time)
 }
@@ -428,7 +712,7 @@ fn download(
     }
     job.bytes(0, total)?;
     let mut out = Files::open_private(file, Create::New)
-        .map_err(|e| Failure::io(&e, Step::Download, "Could not save the download"))?;
+        .map_err(|e| Failure::io(&e, Step::Download, Where::Download, "Could not save the download"))?;
     let mut body = response.body;
     let mut hasher = Sha512::new();
     let mut chunk = vec![0u8; 64 * 1024];
@@ -458,7 +742,8 @@ fn download(
             return Err(too_big(options.download_limit));
         }
         hasher.update(&chunk[..n]);
-        out.write_all(&chunk[..n]).map_err(|e| Failure::io(&e, Step::Download, "Could not save the download"))?;
+        out.write_all(&chunk[..n])
+            .map_err(|e| Failure::io(&e, Step::Download, Where::Download, "Could not save the download"))?;
         job.bytes(done, total)?;
     }
     if total.is_some_and(|total| total != done) {
@@ -490,9 +775,13 @@ fn stamp(path: &Path) -> Option<(FileId, SystemTime)> {
 /// `installer install --json`, with `SIDEVOICE_DATA_DIR` = `data`, as the app runs the CLI (no shell, a process group
 /// of its own, killed past `timeout`). `service-start` once `install.json` changes.
 fn run_installer(job: &Job, installer: &Path, data: &Path, timeout: Duration) -> Result<Value, Failure> {
-    let program = installer
-        .to_str()
-        .ok_or_else(|| Failure::new("install.unsafe", Step::Staging, "The temporary directory's path is not UTF-8."))?;
+    let program = installer.to_str().ok_or_else(|| {
+        Failure::new("install.unsafe", Step::Staging, "The temporary directory's path is not UTF-8.").at(
+            Where::Installer,
+            Reason::NotUtf8,
+            None,
+        )
+    })?;
     let record = data.join("install.json");
     let before = stamp(&record);
     let cli = Cli { prefix: vec![program.to_string()], data: data.to_path_buf() };
@@ -641,12 +930,13 @@ mod tests {
     #[ignore = "network"]
     fn the_real_registry_resolves_downloads_and_unpacks() {
         let tmp = tempfile::tempdir().unwrap();
-        let options = Options { temp: tmp.path().into(), ..Options::standard() };
+        let options = Options { temp: tmp.path().into(), temp_often_redirected: false, ..Options::standard() };
         let options = Options { package: current_package(), ..options };
         let fetch = npm::Https::new().unwrap();
         let job = Job::new("real");
         let (release, dist) = npm::resolve(&fetch, options.package.as_deref().unwrap()).unwrap();
-        let scratch = Scratch::create(&options.temp).unwrap();
+        let staging = StagingRoot { root: Root::Temp, path: options.temp.clone() };
+        let scratch = Scratch::create(&staging, options.stale_after).unwrap();
         let archive = scratch.path().join("package.tgz");
         let digest = download(&job, &fetch, &dist, &archive, &options).unwrap();
         assert_eq!(digest, dist.sha512, "{} {}", release.package, release.version);
@@ -677,15 +967,136 @@ mod tests {
         assert_eq!(json!(progress), json!({"step": "download", "done": 5, "total": null, "cancellable": true}));
         let full = [io::Error::from(io::ErrorKind::StorageFull), io::Error::from(io::ErrorKind::QuotaExceeded)];
         for error in full {
-            let disk = Failure::io(&error, Step::Staging, "w");
+            let disk = Failure::io(&error, Step::Staging, Where::Package, "w");
             assert_eq!(disk.key, "install.disk");
             assert_eq!(disk.step, Some(Step::Staging));
             assert_eq!(disk.message, format!("w: {error}"));
         }
         let other = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
-        let failure = Failure::io(&other, Step::Download, "save");
+        let failure = Failure::io(&other, Step::Download, Where::Download, "save");
         assert_eq!(failure.key, "install.failed");
         assert_eq!(failure.step, Some(Step::Download));
         assert_eq!(failure.message, format!("save: {other}"));
+        assert_eq!(failure.params, Some(json!({"where": "download", "reason": "refused"})));
+        let denied = io::Error::new(io::ErrorKind::PermissionDenied, "C:\\Temp: Access is denied. (os error 5)");
+        let failure = Failure::io(&denied, Step::Staging, Where::Package, "write");
+        assert_eq!(failure.params, Some(json!({"where": "package", "reason": "access-denied", "os_error": 5})));
+        // Beside what is there already.
+        let both = Failure::new("install.authenticity", Step::Staging, "m").check("archive-path").at(
+            Where::Package,
+            Reason::Os,
+            Some(-3),
+        );
+        assert_eq!(
+            both.params,
+            Some(json!({"check": "archive-path", "where": "package", "reason": "os", "os_error": -3}))
+        );
+    }
+
+    /// The shared policy's refusals as the pinned `sidevoice-platform` words them (`fs.rs`, `fs/unix.rs`,
+    /// `fs/windows.rs`), and OS errors by kind; a new wording reads as `refused`, never as another reason.
+    #[test]
+    fn a_reason_is_read_from_the_policys_wording_and_the_errors_kind() {
+        use io::ErrorKind::*;
+        let cases = [
+            (PermissionDenied, r"unsafe directory D:\Temp: others can replace what is in it", Reason::OthersCanReplace),
+            (PermissionDenied, r"unsafe directory C:\Users\x: owned by another user", Reason::OwnedByOther),
+            (PermissionDenied, "unsafe private directory /x/y: not this user's", Reason::OwnedByOther),
+            (PermissionDenied, "unsafe private directory /x/y: open to others", Reason::OpenToOthers),
+            (
+                PermissionDenied,
+                "unsafe private directory /x/y: unsafe ancestor owner or permissions",
+                Reason::UnsafeAncestor,
+            ),
+            (
+                PermissionDenied,
+                r"unsafe directory C:\T: not an ordinary directory; choose an unredirected data directory",
+                Reason::Link,
+            ),
+            (PermissionDenied, r"unsafe link C:\T: others can change it", Reason::Link),
+            (PermissionDenied, "unsafe directory /tmp/l: a link of another user's", Reason::Link),
+            (
+                PermissionDenied,
+                r"unsafe private directory Z:\: a network or shared drive; the directories behind it cannot be checked",
+                Reason::Network,
+            ),
+            (PermissionDenied, "unsafe private directory /x: something new", Reason::Refused),
+            (PermissionDenied, r"unsafe private directory C:\x: Access is denied. (os error 5)", Reason::AccessDenied),
+            (InvalidInput, "relative is not an absolute path", Reason::NotAbsolute),
+            (NotFound, "gone", Reason::NotFound),
+            (AlreadyExists, "there", Reason::AlreadyExists),
+            (StorageFull, "full", Reason::DiskFull),
+            (QuotaExceeded, "quota", Reason::DiskFull),
+            (ReadOnlyFilesystem, "ro", Reason::ReadOnly),
+            (InvalidData, "odd", Reason::Os),
+        ];
+        for (kind, text, reason) in cases {
+            assert_eq!(Reason::of(&io::Error::new(kind, text)), reason, "{text}");
+        }
+        for reason in Reason::ALL {
+            let refusal = matches!(json!(reason).as_str(), Some(name) if !["not-found", "access-denied", "already-exists", "disk-full", "read-only", "os"].contains(&name));
+            assert_eq!(reason.is_refusal(), refusal, "{reason:?}");
+        }
+    }
+
+    #[test]
+    fn the_os_code_is_the_raw_one_else_the_last_in_the_text() {
+        assert_eq!(os_code(&io::Error::from_raw_os_error(2)), Some(2));
+        let wrapped =
+            io::Error::new(io::ErrorKind::PermissionDenied, r"C:\a (os error 9): Access is denied. (os error 5)");
+        assert_eq!(os_code(&wrapped), Some(5));
+        assert_eq!(os_code(&io::Error::other("no code (os error x)")), None);
+        assert_eq!(os_code(&io::Error::other("no code")), None);
+    }
+
+    #[test]
+    fn where_reason_root_and_os_error_are_logged_by_their_grammar_only() {
+        let mut failure = Failure::new("install.unsafe", Step::Download, r"C:\Temp\sidevoice-install-x: refused");
+        failure = failure.at(Where::Scratch, Reason::OthersCanReplace, Some(5)).param("root", json!(Root::Temp));
+        assert_eq!(
+            failure.log_report(),
+            "install.unsafe at step download (os_error=5, reason=others-can-replace, root=temp, where=scratch)"
+        );
+        failure.params =
+            Some(json!({"where": r"C:\Temp", "reason": "Others Can Replace", "root": "/tmp", "os_error": "5"}));
+        assert_eq!(failure.log_report(), "install.unsafe at step download [4 param(s) not logged]");
+        failure.params = Some(json!({"os_error": 1.5}));
+        assert_eq!(failure.log_report(), "install.unsafe at step download [1 param(s) not logged]");
+        for name in Where::ALL.iter().map(|w| json!(w)).chain(Reason::ALL.iter().map(|r| json!(r))) {
+            let name = name.as_str().unwrap().to_string();
+            assert!(name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'), "{name}");
+        }
+    }
+
+    /// Where an install stages, off any particular OS: beside the `D` it is for where the temporary directory is often
+    /// redirected (Windows), whether that `D` is the standard one or `SIDEVOICE_DATA_DIR`'s; the temporary directory
+    /// otherwise, or for a `D` with no parent.
+    #[test]
+    fn the_staging_root_is_beside_the_configured_data_directory_where_the_temporary_directory_is_often_redirected() {
+        let temp = PathBuf::from("/system-temp");
+        let standard = PathBuf::from("/home/a/AppData/Local/Sidevoice/Data");
+        let beside = staging_root(true, temp.clone(), &standard);
+        assert_eq!(beside, StagingRoot { root: Root::BesideData, path: standard.parent().unwrap().join(STAGING_DIR) });
+        assert!(!beside.path.starts_with(&standard), "beside D, never in it");
+        // `SIDEVOICE_DATA_DIR` elsewhere (another drive, a profile): beside that one, never the standard place.
+        let configured = PathBuf::from("/profiles/E/SidevoiceProfile");
+        let beside = staging_root(true, temp.clone(), &configured);
+        assert_eq!(
+            beside,
+            StagingRoot { root: Root::BesideData, path: PathBuf::from("/profiles/E").join(STAGING_DIR) }
+        );
+        assert_eq!(beside.path.parent(), configured.parent(), "the same ancestry as D");
+        assert_eq!(
+            staging_root(false, temp.clone(), &configured),
+            StagingRoot { root: Root::Temp, path: temp.clone() }
+        );
+        for rootless in [PathBuf::from("/"), PathBuf::from("relative")] {
+            assert_eq!(staging_root(true, temp.clone(), &rootless).root, Root::Temp, "{rootless:?}");
+        }
+        assert_eq!(json!(Root::BesideData), "beside-data");
+        // As the app builds it on this computer.
+        let options = Options::standard();
+        assert_eq!(options.temp_often_redirected, crate::platform::staging::temp_often_redirected());
+        assert_eq!(options.temp, std::env::temp_dir());
     }
 }

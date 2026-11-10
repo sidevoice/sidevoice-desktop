@@ -28,6 +28,12 @@ trait Area {
     fn let_group_read(_dir: &Path) -> bool {
         false
     }
+
+    /// The root of the system's volume, when an ordinary user may make folders directly in it and they inherit from it
+    /// access for other users. `None` where there is no such place (Unix: `/` is root's).
+    fn shared_volume_root() -> Option<PathBuf> {
+        None
+    }
 }
 
 /// A directory whose children get paths short enough for a local socket, and which a private child is safe in.
@@ -45,4 +51,33 @@ pub fn share_sticky(dir: &Path) -> bool {
 /// group-only access.
 pub fn let_group_read(dir: &Path) -> bool {
     Os::let_group_read(dir)
+}
+
+/// A fresh folder directly below the system volume's root, with the access new folders there inherit, removed (with
+/// what is in it) when dropped.
+pub struct BelowVolumeRoot(PathBuf);
+
+impl BelowVolumeRoot {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for BelowVolumeRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A fresh folder directly below the system volume's root, as a temporary directory moved there is (`C:\Temp`): on
+/// Windows it inherits the root's "Authenticated Users: Modify", so other users can replace what is in it. `None`
+/// where an ordinary user cannot make one there (Unix).
+pub fn below_volume_root() -> Option<BelowVolumeRoot> {
+    let root = Os::shared_volume_root()?;
+    let mut random = [0u8; 6];
+    getrandom::fill(&mut random).unwrap();
+    let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let dir = root.join(format!("sidevoice-test-{name}"));
+    std::fs::create_dir(&dir).unwrap();
+    Some(BelowVolumeRoot(dir))
 }
