@@ -439,6 +439,8 @@ impl From<CallReport> for CallState {
             double_press_wanted: false,
             // iOS: the single press is the system's mute, whatever was chosen (`media_controls::presses`); Android does not read it.
             press_keeps_mic: false,
+            // Said by the room's call, which knows whether its audio is open (`call.rs`, `media`).
+            record_active: false,
         }
     }
 }

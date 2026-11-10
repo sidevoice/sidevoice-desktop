@@ -102,6 +102,7 @@ mod tests {
             title: " Repo ".into(),
             double_press_wanted: false,
             press_keeps_mic: false,
+            record_active: false,
         };
         assert_eq!(session_state(&call), json!({"active": true, "playing": false, "title": "Repo", "next": false}));
         let wanted = CallState { double_press_wanted: true, ..call.clone() };

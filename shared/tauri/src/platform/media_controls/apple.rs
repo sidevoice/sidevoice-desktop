@@ -23,7 +23,7 @@
 
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject};
+use objc2::runtime::{AnyClass, AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2_avf_audio::AVAudioApplication;
 use objc2_foundation::{NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSOperationQueue, NSString};
 use objc2_media_player::{
@@ -35,8 +35,8 @@ use std::ptr::NonNull;
 use std::time::Instant;
 
 use crate::headset::{
-    duplicate_press, gesture_step, is_echo, is_press, media_dispatch, mute_gesture, registered_commands, Changed,
-    Dispatch, Gesture, GestureMoment, PressSource, ALL_COMMANDS,
+    duplicate_press, gesture_step, is_echo, is_press, media_dispatch, mute_gesture, registered_commands, reobserve,
+    Changed, Dispatch, Gesture, GestureMoment, PressSource, ALL_COMMANDS,
 };
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
@@ -194,10 +194,11 @@ pub fn update<N: Os>(app: &AppHandle, snapshot: &CallState) {
     let now_playing = active && N::NOW_PLAYING;
     let title = snapshot.title.trim().to_owned();
     let (mic, in_call) = (snapshot.mic_enabled, snapshot.ready && snapshot.joined);
-    let next = N::NEXT_TRACK;
+    let (next, record) = (N::NEXT_TRACK, snapshot.record_active);
     let app2 = app.clone();
-    let _ =
-        app.run_on_main_thread(move || apply::<N>(&app2, Applied { active, now_playing, in_call, mic, next }, &title));
+    let _ = app.run_on_main_thread(move || {
+        apply::<N>(&app2, Applied { active, now_playing, in_call, mic, next, record }, &title)
+    });
 }
 
 /// Whether the gesture is heard now: from launch, for the process's life ([`gesture_step`]).
@@ -291,8 +292,34 @@ fn exported_string(symbol: &CStr) -> Option<&'static NSString> {
     }
 }
 
-/// Whether the input-mute notification is observed: once, for the process's life.
-static OBSERVED: Mutex<bool> = Mutex::new(false);
+/// The input-mute notification's observer: its token, the block it runs and the notification's name, kept to add it again
+/// ([`reobserve_input_mute`]). Only touched on the main thread.
+struct Observer {
+    token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
+    block: RcBlock<dyn Fn(NonNull<NSNotification>)>,
+    name: &'static NSString,
+}
+// SAFETY: made, replaced and read on the main thread only (`setup` and `apply` run there); the mutex only keeps it.
+unsafe impl Send for Observer {}
+static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
+/// Whether this call's record session has had the observer added again ([`reobserve`]).
+static REOBSERVED: Mutex<bool> = Mutex::new(false);
+
+/// Adds the observer of `name` running `block`, on the main queue.
+fn add_observer(
+    name: &NSString,
+    block: &RcBlock<dyn Fn(NonNull<NSNotification>)>,
+) -> Retained<ProtocolObject<dyn NSObjectProtocol>> {
+    // SAFETY: main thread; the center keeps the block until the observer is removed.
+    unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(name),
+            None::<&AnyObject>,
+            Some(&NSOperationQueue::mainQueue()),
+            block,
+        )
+    }
+}
 
 /// Observes `AVAudioApplicationInputMuteStateChangeNotification` on the main queue, once, for the process's life, each with the
 /// state it carries (`AVAudioApplicationMuteStateKey`) handed to `on_state`; whether it is observed. This is the opt-in to
@@ -308,8 +335,8 @@ static OBSERVED: Mutex<bool> = Mutex::new(false);
 /// not initialise it), and the iPhone then refused the press with "Can't control mic with AirPods". That the framework only
 /// sees an observer added once it is initialised is an inference from that difference, not something Apple documents.
 pub(super) fn observe_input_mute(on_state: impl Fn(bool) + 'static) -> bool {
-    let mut observed = OBSERVED.lock().unwrap();
-    if *observed {
+    let mut observer = OBSERVER.lock().unwrap();
+    if observer.is_some() {
         return true;
     }
     // SAFETY: the class exists (the caller checked); the shared instance lives for the process's life.
@@ -320,7 +347,7 @@ pub(super) fn observe_input_mute(on_state: impl Fn(bool) + 'static) -> bool {
     ) else {
         return false;
     };
-    let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+    let block: RcBlock<dyn Fn(NonNull<NSNotification>)> = RcBlock::new(move |notification: NonNull<NSNotification>| {
         // SAFETY: the notification is valid for the block's call; its user info holds the state as an NSNumber.
         let muted = unsafe {
             notification
@@ -334,19 +361,25 @@ pub(super) fn observe_input_mute(on_state: impl Fn(bool) + 'static) -> bool {
             on_state(muted);
         }
     });
-    // SAFETY: main thread; the center keeps the block until the observer is removed, which it never is.
-    let token = unsafe {
-        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
-            Some(name),
-            None::<&AnyObject>,
-            Some(&NSOperationQueue::mainQueue()),
-            &block,
-        )
-    };
-    // Never removed: the opt-in lasts as long as the process.
-    std::mem::forget(token);
-    *observed = true;
+    let token = add_observer(name, &block);
+    *observer = Some(Observer { token, block, name });
     true
+}
+
+/// Adds the observer again, removed first so that each gesture is still heard once, when the call's record session has become
+/// active ([`reobserve`]): the order that worked before #469 (the observer added once the call's audio was up), kept beside
+/// the opt-in at launch, since which of the two the system reads is not documented.
+fn reobserve_input_mute(record_active: bool) {
+    let mut observer = OBSERVER.lock().unwrap();
+    let mut done = REOBSERVED.lock().unwrap();
+    let step = reobserve(observer.is_some(), record_active, *done);
+    *done = step.done;
+    let (true, Some(observer)) = (step.again, observer.as_mut()) else { return };
+    let token: &AnyObject = AsRef::<AnyObject>::as_ref(&*observer.token);
+    // SAFETY: main thread; the token is the one the center returned.
+    unsafe { NSNotificationCenter::defaultCenter().removeObserver(token) };
+    observer.token = add_observer(observer.name, &observer.block);
+    sidevoice_shared::debug::debug("headset: press to mute observed again, the call's audio active");
 }
 
 /// Every command of the shared command center, by name ([`ALL_COMMANDS`]): the app registers only [`commands`], but any of
@@ -474,10 +507,12 @@ struct Applied {
     in_call: bool,
     mic: bool,
     next: bool,
+    /// The call's record session is active (`CallState::record_active`).
+    record: bool,
 }
 
 fn apply<N: Os>(app: &AppHandle, shown: Applied, title: &str) {
-    let Applied { active, now_playing, in_call, mic: mic_enabled, next } = shown;
+    let Applied { active, now_playing, in_call, mic: mic_enabled, next, record } = shown;
     // Let go of Now Playing whenever it is not to show the call and something changed: a call starting (the report that
     // starts the call's service; on iOS, every call, which shows no Now Playing) and a call ending. What was there at a
     // call's start, and what is left after, go to the app log.
@@ -535,7 +570,7 @@ fn apply<N: Os>(app: &AppHandle, shown: Applied, title: &str) {
             );
         }
     }
-    gesture::<N>(app, active, in_call, mic_enabled);
+    gesture::<N>(app, active, in_call, mic_enabled, record);
     static SEEN: Changed = Changed(Mutex::new(None));
     let line = format!(
         "headset apply active={active} now_playing={now_playing} in_call={in_call} mic={mic_enabled} handlers={} gesture_api={} gesture_on={}",
@@ -551,10 +586,11 @@ fn apply<N: Os>(app: &AppHandle, shown: Applied, title: &str) {
 /// AirPods / Beats mute gesture (macOS 14+, iOS 17+, where `AVAudioApplication` exists): heard for the process's life, from
 /// launch (a call tries again when that did not take), the system's input mute kept in step with the microphone during a call
 /// and given back unmuted at its end ([`gesture_step`]).
-fn gesture<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool) {
+fn gesture<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, record: bool) {
     if !gesture_api() {
         return;
     }
+    reobserve_input_mute(record);
     // SAFETY: the class exists (checked above); main thread.
     unsafe {
         let shared = AVAudioApplication::sharedInstance();

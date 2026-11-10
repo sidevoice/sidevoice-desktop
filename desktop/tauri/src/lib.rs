@@ -295,6 +295,8 @@ fn media_state(snapshot: &CallSnapshot, press_keeps_mic: bool) -> CallState {
         title: snapshot.title.clone(),
         double_press_wanted: false,
         press_keeps_mic,
+        // macOS has no record session to wait for: the opt-in at launch is the one there.
+        record_active: false,
     }
 }
 

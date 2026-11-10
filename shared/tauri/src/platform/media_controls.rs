@@ -33,6 +33,9 @@ pub struct CallState {
     /// runs it and the system's mute is refused, so the system never says "muted" while the call listens. False (the mute, the
     /// default) where the app does not say.
     pub press_keeps_mic: bool,
+    /// The call's record session is active (iOS: the audio session the call activated, its capture about to run or running):
+    /// the AirPods / Beats Press to Mute observer is added again then, once per call. False where the app does not say.
+    pub record_active: bool,
 }
 
 /// What a media action asks of the call.

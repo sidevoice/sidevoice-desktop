@@ -50,6 +50,24 @@ pub fn gesture_step(on: bool, active: bool, held: bool) -> GestureStep {
     GestureStep { listen: active && !on, give_back: !active && held }
 }
 
+/// What [`reobserve`] says: whether the input-mute observer is added again now (removed first, so it is never there twice),
+/// and whether this call's record session has had it done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Reobserve {
+    pub again: bool,
+    pub done: bool,
+}
+
+/// Whether the input-mute observer is added again: once per call, when its record session is active (`record_active`), if it
+/// is observed at all (`observed`; one that failed at launch is tried again by [`gesture_step`]'s `listen`). `done`: this call
+/// has had it; a record session no longer active ends the call's turn.
+pub fn reobserve(observed: bool, record_active: bool, done: bool) -> Reobserve {
+    if !record_active {
+        return Reobserve::default();
+    }
+    Reobserve { again: observed && !done, done: done || observed }
+}
+
 /// What a mute gesture does to the call ([`mute_gesture`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gesture {
@@ -378,6 +396,27 @@ mod tests {
         assert!(!duplicate_press(gesture, Some((gesture, true, soon))));
         assert!(!duplicate_press(gesture, None));
         assert!(!duplicate_press(remote, Some((gesture, true, DUPLICATE_WINDOW))));
+    }
+
+    /// The observer opted in at launch is added again once per call, when the call's record session is active, and always
+    /// removed first: across calls and repeated reports it is there exactly once.
+    #[test]
+    fn the_observer_is_added_again_once_per_call_start_and_never_twice() {
+        let (mut done, mut observers, mut again) = (false, 1, 0);
+        // The room reports many times: before the audio opens, while it is open, after the call, and a second call.
+        for record_active in [false, false, true, true, true, false, false, true, true, false] {
+            let step = reobserve(true, record_active, done);
+            if step.again {
+                observers -= 1; // removed first
+                observers += 1;
+                again += 1;
+            }
+            done = step.done;
+            assert_eq!(observers, 1, "never twice, never none");
+        }
+        assert_eq!(again, 2, "once per call start");
+        // Not observed at all (launch did not take): nothing to add again.
+        assert_eq!(reobserve(false, true, false), Reobserve::default());
     }
 
     #[test]
