@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.4.0...v0.4.1) (2026-11-10)
+
+
+### Features
+
+* **mobile:** host.screen says whether the screen is locked, and the iOS cue plays "only with the screen off" while locked ([#482](https://github.com/sidevoice/sidevoice-desktop/issues/482)) ([853281f](https://github.com/sidevoice/sidevoice-desktop/commit/853281fca1f6832929ec9c2d36452a4b1e7618ec))
+
+
+### Bug Fixes
+
+* **local-host:** stage installs on Windows in the app's folder, not %TEMP%, and say what failed ([#485](https://github.com/sidevoice/sidevoice-desktop/issues/485)) ([8d1e93a](https://github.com/sidevoice/sidevoice-desktop/commit/8d1e93ab39f2d14b60e7ba81ef0517e70ae38fb8))
+* **media-controls:** AirPods Press to Mute on iPhone and Mac ([#487](https://github.com/sidevoice/sidevoice-desktop/issues/487)) ([f9a13ba](https://github.com/sidevoice/sidevoice-desktop/commit/f9a13baaf5d0fda5dbc29d0b35b009ed8ab6e095))
+* **packaging:** the brand icon on the Windows installer and uninstaller, and every hicolor size on Linux ([#484](https://github.com/sidevoice/sidevoice-desktop/issues/484)) ([e4e9623](https://github.com/sidevoice/sidevoice-desktop/commit/e4e96237bd2695c7bbee036ecd169720c78cd717))
+
+
+### Miscellaneous Chores
+
+* release desktop as 0.4.1 ([#491](https://github.com/sidevoice/sidevoice-desktop/issues/491)) ([c68262b](https://github.com/sidevoice/sidevoice-desktop/commit/c68262bf263e3b2ac584d629cc69e88be8e1117f))
+
 ## [0.4.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.3.0...v0.4.0) (2026-11-09)
 
 
