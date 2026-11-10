@@ -932,6 +932,8 @@ impl Room {
         } else {
             CallState {
                 double_press_wanted: wanted,
+                // The call's audio session is active: Press to Mute's observer is added again then (`media_controls`).
+                record_active: self.cue_allowed(),
                 ..self.state.clone()
             }
         };
