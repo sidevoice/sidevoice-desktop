@@ -38,16 +38,18 @@ impl apple::Os for Native {
     }
 
     /// The gesture reaches a handler block the app gives `AVAudioApplication` (macOS only), which answers whether the
-    /// microphone is now as asked.
+    /// microphone is now as asked. The handler alone is not the opt-in: the audio server gives the gesture only to a recording
+    /// app that observes the input-mute notification, and refuses it otherwise ("Cannot Control Mic with AirPods"). So the
+    /// notification is observed too, and does nothing more: the handler already carries the state, and the notification
+    /// that follows it would be the same gesture a second time.
     fn listen_for_mute_gesture(app: &AppHandle) -> bool {
         let app = app.clone();
         let handler = RcBlock::new(move |muted: Bool| -> Bool { Bool::new(apple::heard(&app, muted.as_bool())) });
         // SAFETY: the caller checked that the class exists; the system retains the block.
-        unsafe { AVAudioApplication::sharedInstance().setInputMuteStateChangeHandler_error(Some(&handler)).is_ok() }
-    }
-
-    fn stop_listening_for_mute_gesture() {
-        // SAFETY: as above.
-        let _ = unsafe { AVAudioApplication::sharedInstance().setInputMuteStateChangeHandler_error(None) };
+        let handled = unsafe {
+            AVAudioApplication::sharedInstance().setInputMuteStateChangeHandler_error(Some(&handler)).is_ok()
+        };
+        let opted_in = apple::observe_input_mute(|_| {});
+        handled && opted_in
     }
 }

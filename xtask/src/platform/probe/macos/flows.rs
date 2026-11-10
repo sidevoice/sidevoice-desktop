@@ -227,13 +227,27 @@ pub fn probe() -> Result<()> {
         "the call never took the headset",
     )?;
     let applied = grep(&text, "headset apply");
+    eprintln!("{}", applied.join("\n"));
     ensure(
         applied
             .last()
-            .is_some_and(|line| re("active=false now_playing=false in_call=false .* gesture_on=false").is_match(line)),
+            .is_some_and(|line| re("active=false now_playing=false in_call=false .* handlers=false ").is_match(line)),
         "the app did not let go of the headset",
     )?;
-    eprintln!("{}", applied.join("\n"));
+    // The AirPods mute gesture is opted in to at launch and for the process's life (the input-mute notification observed with
+    // the handler): before the call records and after it, wherever the system has it (macOS 14+). A handler set only during
+    // the call, without the notification, is what macOS refuses with "Cannot Control Mic with AirPods".
+    let opt_in = grep(&text, "headset: press to mute");
+    eprintln!("{}", opt_in.join("\n"));
+    ensure(
+        applied.iter().all(|line| !line.contains("gesture_api=true") || line.ends_with("gesture_on=true")),
+        "the mute gesture was not heard before, during and after the call",
+    )?;
+    ensure(
+        !applied.iter().any(|line| line.contains("gesture_api=true"))
+            || opt_in.iter().any(|line| line.ends_with("headset: press to mute opted in")),
+        "the app did not opt in to the mute gesture at launch",
+    )?;
     // The app's own mute is not mistaken for an AirPods gesture.
     ensure(!text.contains("headset airpods"), "echo recorded as a gesture")
 }

@@ -35,18 +35,49 @@ pub fn is_echo(set: Option<(bool, std::time::Duration)>, muted: bool) -> bool {
 /// What the AirPods / Beats mute gesture's listening does at a report of the call ([`gesture_step`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GestureStep {
-    /// Start hearing it: a call is on and it is not heard yet.
+    /// Start hearing it: a call is on and it is not heard yet (opting in at launch did not take).
     pub listen: bool,
-    /// Stop hearing it: no call, and it is heard only during calls.
-    pub stop: bool,
     /// Give the system's input mute back unmuted: the call that held it in step has ended.
     pub give_back: bool,
 }
 
-/// What the gesture's listening does now: `for_life`, it is heard from launch (iOS: observing the notification is the opt-in),
-/// so a call's end never stops it; `on`, it is heard; `active`, a call is on; `held`, the last call held the system's mute in step.
-pub fn gesture_step(for_life: bool, on: bool, active: bool, held: bool) -> GestureStep {
-    GestureStep { listen: active && !on, stop: !active && on && !for_life, give_back: !active && held }
+/// What the gesture's listening does now. It is heard for the process's life, from launch, on macOS and iOS alike: the system
+/// gives the gesture only to a process that records *and* has opted in, and observing the input-mute notification is that
+/// opt-in on both (on macOS a handler alone is refused: "Cannot Control Mic with AirPods"). So a call's end never stops it,
+/// and a call only tries again when launch did not take. `on`, it is heard; `active`, a call is on; `held`, the last call held
+/// the system's mute in step.
+pub fn gesture_step(on: bool, active: bool, held: bool) -> GestureStep {
+    GestureStep { listen: active && !on, give_back: !active && held }
+}
+
+/// What a mute gesture does to the call ([`mute_gesture`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gesture {
+    /// The headset's single press, which does what the person chose for it; `what` is the state the system asked for.
+    Press(&'static str),
+    /// In a call, and the microphone is already as the system asks.
+    Unchanged,
+    /// No call: nothing to mute.
+    NoCall,
+}
+
+impl Gesture {
+    /// What the system is answered (macOS's handler returns it): whether the call's microphone is now as asked. False only
+    /// with no call, which the system shows as a mute it could not do.
+    pub fn accepted(self) -> bool {
+        !matches!(self, Gesture::NoCall)
+    }
+}
+
+/// What the mute gesture asking for `muted` does, given whether a call is on and its microphone's state now.
+pub fn mute_gesture(in_call: bool, muted: bool, mic_enabled: bool) -> Gesture {
+    if !in_call {
+        return Gesture::NoCall;
+    }
+    match mute_gesture_action(muted, mic_enabled) {
+        Some(what) => Gesture::Press(what),
+        None => Gesture::Unchanged,
+    }
 }
 
 /// Every command of the command center the app lets go of when Now Playing ends: those it registers, and the rest, which
@@ -168,22 +199,29 @@ mod tests {
     }
 
     #[test]
-    fn the_mute_gesture_is_heard_during_a_call_or_from_launch_and_its_mute_is_given_back_when_the_call_ends() {
-        let step = |listen, stop, give_back| GestureStep { listen, stop, give_back };
-        // macOS: heard only while a call is on, its handler set and removed with it.
-        assert_eq!(gesture_step(false, false, true, false), step(true, false, false), "a call starts");
-        assert_eq!(gesture_step(false, true, true, true), step(false, false, false), "the call goes on");
-        assert_eq!(gesture_step(false, true, false, true), step(false, true, true), "the call ends");
-        assert_eq!(gesture_step(false, false, false, false), GestureStep::default(), "no call");
-        // iOS: opted in at launch, for the process's life; a call's end gives the mute back and keeps listening.
-        assert_eq!(gesture_step(true, true, true, false), GestureStep::default(), "a call starts, already heard");
-        assert_eq!(gesture_step(true, true, false, true), step(false, false, true), "the call ends");
-        assert_eq!(gesture_step(true, true, false, false), GestureStep::default(), "between calls");
-        assert_eq!(
-            gesture_step(true, false, true, false),
-            step(true, false, false),
-            "not heard at launch: a call tries again"
-        );
+    fn the_mute_gesture_is_heard_from_launch_for_life_and_its_mute_is_given_back_when_a_call_ends() {
+        let step = |listen, give_back| GestureStep { listen, give_back };
+        // Opted in at launch (macOS and iOS): no call starts or stops it, so it is there before the call records.
+        assert_eq!(gesture_step(true, false, false), GestureStep::default(), "before any call");
+        assert_eq!(gesture_step(true, true, false), GestureStep::default(), "a call starts, already heard");
+        assert_eq!(gesture_step(true, true, true), GestureStep::default(), "the call goes on");
+        assert_eq!(gesture_step(true, false, true), step(false, true), "the call ends: unmuted, and still heard");
+        assert_eq!(gesture_step(true, false, false), GestureStep::default(), "between calls");
+        // Launch did not take: a call tries again, and its end gives the mute back.
+        assert_eq!(gesture_step(false, true, false), step(true, false), "a call tries again");
+        assert_eq!(gesture_step(false, false, false), GestureStep::default(), "no call and not heard: nothing");
+    }
+
+    #[test]
+    fn a_mute_gesture_is_the_single_press_during_a_call_and_refused_outside_one() {
+        assert_eq!(mute_gesture(true, true, true), Gesture::Press("mute"));
+        assert_eq!(mute_gesture(true, false, false), Gesture::Press("unmute"));
+        assert_eq!(mute_gesture(true, true, false), Gesture::Unchanged, "already muted");
+        assert_eq!(mute_gesture(true, false, true), Gesture::Unchanged, "already open");
+        assert_eq!(mute_gesture(false, true, true), Gesture::NoCall);
+        assert!(mute_gesture(true, true, true).accepted());
+        assert!(mute_gesture(true, true, false).accepted(), "already as asked: done");
+        assert!(!mute_gesture(false, false, false).accepted(), "no call: the system says it could not");
     }
 
     #[test]

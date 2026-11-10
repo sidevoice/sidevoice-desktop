@@ -11,8 +11,11 @@
 //!   (`Os::NEXT_TRACK`), while the app shows the call as Now Playing. The app sends it as `MediaCommand::NextTrack`; a keyboard's
 //!   next-track key arrives the same way.
 //! - **AirPods / Beats** (macOS 14+, iOS 17+): the stem-press mute gesture ("Press to Mute and Unmute"), heard through
-//!   `AVAudioApplication` (macOS: a handler, while a call is on; iOS: a notification, opted in at launch,
-//!   `Os::MUTE_GESTURE_FOR_LIFE`); the app keeps that state in step with its own mute.
+//!   `AVAudioApplication` (macOS: a handler; iOS: the notification). The system gives it only to a process that records and
+//!   has opted in, and on both the opt-in is observing `AVAudioApplicationInputMuteStateChangeNotification` (Apple, WWDC23
+//!   "Enhance your app's audio experience with AirPods"): on macOS a handler alone is refused with the system's "Cannot
+//!   Control Mic with AirPods" banner. So the app opts in once, at launch, for the process's life
+//!   ([`observe_input_mute`], [`gesture_step`]), and keeps that state in step with its own mute during a call.
 //! - No CallKit: neither needs it.
 //!
 //! Every event that arrives is recorded in the app log (`headset …` lines), so which buttons of a headset reach the
@@ -22,16 +25,17 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2_avf_audio::AVAudioApplication;
-use objc2_foundation::{NSDictionary, NSString};
+use objc2_foundation::{NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSOperationQueue, NSString};
 use objc2_media_player::{
     MPMediaItemPropertyArtist, MPMediaItemPropertyTitle, MPNowPlayingInfoCenter, MPNowPlayingPlaybackState,
     MPRemoteCommand, MPRemoteCommandCenter, MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
 };
+use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
 use std::time::Instant;
 
 use crate::headset::{
-    gesture_step, is_echo, media_dispatch, mute_gesture_action, registered_commands, Changed, Dispatch, ALL_COMMANDS,
+    gesture_step, is_echo, media_dispatch, mute_gesture, registered_commands, Changed, Dispatch, Gesture, ALL_COMMANDS,
 };
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
@@ -52,18 +56,13 @@ pub(super) trait Os {
     /// play/pause arrives as it (macOS). False by default.
     const NEXT_TRACK: bool = false;
 
-    /// Whether the mute gesture is heard from launch for the process's life (iOS: observing the notification is the opt-in, done
-    /// before any call's audio session is active), rather than only while a call is on. False by default.
-    const MUTE_GESTURE_FOR_LIFE: bool = false;
-
-    /// Starts hearing the AirPods / Beats mute gesture, each one handed to [`heard`]; whether it does. Called on the main
-    /// thread, with `AVAudioApplication` present. None by default.
+    /// Opts in to the AirPods / Beats mute gesture for the process's life, each one handed to [`heard`]; whether it did. Called
+    /// once at launch (and at a call only if that did not take), on the main thread, with `AVAudioApplication` present. Both
+    /// OSes observe the notification ([`observe_input_mute`]), which is the opt-in; how the gesture's state reaches the app
+    /// is what differs. None by default.
     fn listen_for_mute_gesture(_app: &AppHandle) -> bool {
         false
     }
-
-    /// Stops hearing it.
-    fn stop_listening_for_mute_gesture() {}
 
     /// Tells the system the app no longer takes remote-control events (iOS's `UIApplication`), so that it stops being the
     /// Now Playing app. Main thread. Nothing by default.
@@ -109,22 +108,20 @@ fn on_media_command(app: &AppHandle, command: &str) {
 /// The AirPods gesture arrived (the system calls it on its own queue). Returns whether the call's microphone is
 /// now as asked (what the system wants the handler to answer): false when there is no call to mute.
 fn on_mute_gesture(app: &AppHandle, muted: bool) -> bool {
-    let headset = app.state::<Headset>();
+    let Some(headset) = app.try_state::<Headset>() else { return false };
     let snapshot = headset.call.lock().unwrap().clone();
     let source = if muted { "airpods:mute" } else { "airpods:unmute" };
-    if !(snapshot.ready && snapshot.joined) {
-        headset.record(source, "sin llamada: solo registrado");
-        return false;
-    }
-    match mute_gesture_action(muted, snapshot.mic_enabled) {
-        Some(what) => {
+    let gesture = mute_gesture(snapshot.ready && snapshot.joined, muted, snapshot.mic_enabled);
+    match gesture {
+        Gesture::Press(what) => {
             let app = app.clone();
             let _ = app.clone().run_on_main_thread(move || (app.state::<Headset>().sink)(MediaCommand::ToggleMute));
             headset.record(source, what);
         }
-        None => headset.record(source, "ya estaba así"),
+        Gesture::Unchanged => headset.record(source, "ya estaba así"),
+        Gesture::NoCall => headset.record(source, "sin llamada: solo registrado"),
     }
-    true
+    gesture.accepted()
 }
 
 /// The mute gesture arrived (as the system says it, on any thread): what the call does with it, unless it is the app's
@@ -157,7 +154,7 @@ pub fn update<N: Os>(app: &AppHandle, snapshot: &CallState) {
         app.run_on_main_thread(move || apply::<N>(&app2, Applied { active, now_playing, in_call, mic, next }, &title));
 }
 
-/// Whether the gesture is heard now (during a call; from launch where [`Os::MUTE_GESTURE_FOR_LIFE`]).
+/// Whether the gesture is heard now: from launch, for the process's life ([`gesture_step`]).
 static GESTURE_ON: Mutex<bool> = Mutex::new(false);
 /// Whether a call holds the system's input mute in step with its own (so its end gives it back unmuted).
 static GESTURE_HELD: Mutex<bool> = Mutex::new(false);
@@ -224,6 +221,74 @@ fn gesture_api() -> bool {
     AnyClass::get(c"AVAudioApplication").is_some()
 }
 
+/// Darwin's `RTLD_DEFAULT`: every image loaded in the process.
+const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+
+extern "C" {
+    /// libSystem's, which every macOS and iOS app links.
+    fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
+}
+
+/// The `NSString *` constant AVFAudio exports as `symbol`, when this system has it. Read at run time, never linked: the app
+/// runs on macOS 13 and iOS 15, which lack the input-mute notification, and a missing symbol would stop it from launching.
+fn exported_string(symbol: &CStr) -> Option<&'static NSString> {
+    // SAFETY: `dlsym` only looks the name up; a constant AVFAudio exports is an `NSString *const`, valid for the process's
+    // life.
+    unsafe {
+        let address = dlsym(RTLD_DEFAULT, symbol.as_ptr()) as *const *const NSString;
+        address.as_ref().and_then(|string| string.as_ref())
+    }
+}
+
+/// Whether the input-mute notification is observed: once, for the process's life.
+static OBSERVED: Mutex<bool> = Mutex::new(false);
+
+/// Observes `AVAudioApplicationInputMuteStateChangeNotification` on the main queue, once, for the process's life, each with the
+/// state it carries (`AVAudioApplicationMuteStateKey`) handed to `on_state`; whether it is observed. This is the opt-in to
+/// the AirPods / Beats mute gesture on macOS and iOS alike (Apple, WWDC23 "Enhance your app's audio experience with AirPods":
+/// "This opts your application into Press to Mute and Unmute"): without it the audio server finds no recording app opted in
+/// and refuses the press, and macOS shows "Cannot Control Mic with AirPods" even with a handler set. A second call keeps the
+/// first observer (two would hear each gesture twice).
+pub(super) fn observe_input_mute(on_state: impl Fn(bool) + 'static) -> bool {
+    let mut observed = OBSERVED.lock().unwrap();
+    if *observed {
+        return true;
+    }
+    let (Some(name), Some(key)) = (
+        exported_string(c"AVAudioApplicationInputMuteStateChangeNotification"),
+        exported_string(c"AVAudioApplicationMuteStateKey"),
+    ) else {
+        return false;
+    };
+    let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+        // SAFETY: the notification is valid for the block's call; its user info holds the state as an NSNumber.
+        let muted = unsafe {
+            notification
+                .as_ref()
+                .userInfo()
+                .and_then(|info| info.objectForKey(key))
+                .and_then(|value| value.downcast::<NSNumber>().ok())
+                .map(|number| number.boolValue())
+        };
+        if let Some(muted) = muted {
+            on_state(muted);
+        }
+    });
+    // SAFETY: main thread; the center keeps the block until the observer is removed, which it never is.
+    let token = unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(name),
+            None::<&AnyObject>,
+            Some(&NSOperationQueue::mainQueue()),
+            &block,
+        )
+    };
+    // Never removed: the opt-in lasts as long as the process.
+    std::mem::forget(token);
+    *observed = true;
+    true
+}
+
 /// Every command of the shared command center, by name ([`ALL_COMMANDS`]): the app registers only [`commands`], but any of
 /// them with a target, or enabled, keeps the app the Now Playing app as much (HANDOVER-live-activity R2-6), so all of them
 /// are let go.
@@ -240,15 +305,20 @@ static REGISTERED: Mutex<bool> = Mutex::new(false);
 /// What the last [`apply`] had: whether a call was active, and whether Now Playing showed it. None before the first.
 static LAST: Mutex<Option<(bool, bool)>> = Mutex::new(None);
 
-/// At launch: no handlers yet (see [`REGISTERED`]); they are registered when a call is shown. Where the mute gesture is heard
-/// for the process's life, it starts now; the app log says whether it did.
+/// At launch: no handlers yet (see [`REGISTERED`]); they are registered when a call is shown. The mute gesture is opted in to
+/// now, for the process's life, before any call records ([`gesture_step`]); the app log says whether it was.
 fn setup<N: Os>(app: &AppHandle) {
     release::<N>();
-    if N::MUTE_GESTURE_FOR_LIFE {
-        let on = gesture_api() && N::listen_for_mute_gesture(app);
-        *GESTURE_ON.lock().unwrap() = on;
-        log::info!("headset: press to mute {}", if on { "opted in" } else { "unavailable (needs iOS 17)" });
-    }
+    let api = gesture_api();
+    let on = api && N::listen_for_mute_gesture(app);
+    *GESTURE_ON.lock().unwrap() = on;
+    let said = match (api, on) {
+        (true, true) => "opted in",
+        (true, false) => "not opted in (the system refused)",
+        (false, _) => "unavailable (needs macOS 14 or iOS 17)",
+    };
+    // The app log, and stderr with SIDEVOICE_DEBUG=1, which CI's probe reads.
+    sidevoice_shared::debug::debug(&format!("headset: press to mute {said}"));
 }
 
 /// What Now Playing holds now, for the app log (`call: now playing …`): `released`, whether the app's side holds nothing
@@ -418,9 +488,9 @@ fn apply<N: Os>(app: &AppHandle, shown: Applied, title: &str) {
     }
 }
 
-/// AirPods / Beats mute gesture (macOS 14+, iOS 17+, where `AVAudioApplication` exists): heard while active (or for the process's
-/// life, [`Os::MUTE_GESTURE_FOR_LIFE`]), the system's input mute kept in step with the microphone during a call and given back
-/// unmuted at its end ([`gesture_step`]).
+/// AirPods / Beats mute gesture (macOS 14+, iOS 17+, where `AVAudioApplication` exists): heard for the process's life, from
+/// launch (a call tries again when that did not take), the system's input mute kept in step with the microphone during a call
+/// and given back unmuted at its end ([`gesture_step`]).
 fn gesture<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool) {
     if !gesture_api() {
         return;
@@ -430,13 +500,9 @@ fn gesture<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: boo
         let shared = AVAudioApplication::sharedInstance();
         let mut on = GESTURE_ON.lock().unwrap();
         let mut held = GESTURE_HELD.lock().unwrap();
-        let step = gesture_step(N::MUTE_GESTURE_FOR_LIFE, *on, active, *held);
+        let step = gesture_step(*on, active, *held);
         if step.listen {
             *on = N::listen_for_mute_gesture(app);
-        }
-        if step.stop {
-            N::stop_listening_for_mute_gesture();
-            *on = false;
         }
         if step.give_back {
             set_muted(&shared, false);
