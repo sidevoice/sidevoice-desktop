@@ -299,12 +299,21 @@ static OBSERVED: Mutex<bool> = Mutex::new(false);
 /// the AirPods / Beats mute gesture on macOS and iOS alike (Apple, WWDC23 "Enhance your app's audio experience with AirPods":
 /// "This opts your application into Press to Mute and Unmute"): without it the audio server finds no recording app opted in
 /// and refuses the press, and macOS shows "Cannot Control Mic with AirPods" even with a handler set. A second call keeps the
-/// first observer (two would hear each gesture twice).
+/// first observer (two would hear each gesture twice). Called with `AVAudioApplication` present.
+///
+/// The shared `AVAudioApplication` is made first, as every implementation known to work does before observing: Apple's own
+/// sample (WWDC23 10233, `let instance = AVAudioApplication.shared`, then the observer), WebKit's capture
+/// (`CoreAudioCaptureUnit.mm`, `getSharedAVAudioApplication()`, then the handler and the observer) and the macOS spike that
+/// found the opt-in. Opting in at launch (#469) observed before anything had ever messaged the class (`AnyClass::get` does
+/// not initialise it), and the iPhone then refused the press with "Can't control mic with AirPods". That the framework only
+/// sees an observer added once it is initialised is an inference from that difference, not something Apple documents.
 pub(super) fn observe_input_mute(on_state: impl Fn(bool) + 'static) -> bool {
     let mut observed = OBSERVED.lock().unwrap();
     if *observed {
         return true;
     }
+    // SAFETY: the class exists (the caller checked); the shared instance lives for the process's life.
+    let _shared = unsafe { AVAudioApplication::sharedInstance() };
     let (Some(name), Some(key)) = (
         exported_string(c"AVAudioApplicationInputMuteStateChangeNotification"),
         exported_string(c"AVAudioApplicationMuteStateKey"),
