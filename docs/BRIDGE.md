@@ -451,7 +451,7 @@ ignores a value it does not know:
   `not-found`, `access-denied`, `already-exists`, `disk-full`, `read-only`, `os`;
 - `os_error`: the OS's own code (a number), when it gave one;
 - `root`, for `staging-root` and `scratch`: where the install stages, `temp` (the system's temporary directory) or
-  `app-folder` (Windows: `%LOCALAPPDATA%\Sidevoice\ai.sidevoice.desktop-staging`; docs/LOCAL_HOST.md → Install).
+  `beside-data` (Windows: `ai.sidevoice.desktop-staging` beside `D`, in its parent; docs/LOCAL_HOST.md → Install).
 
 The keys:
 

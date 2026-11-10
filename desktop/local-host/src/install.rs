@@ -3,7 +3,7 @@
 //!
 //! 1. `download`: the latest release and this computer's platform package, from the registry ([`npm`]), and its
 //!    tarball into a fresh private directory ([`Scratch`], made where [`staging_root`] says: the system's temporary
-//!    directory, or on Windows the app's own folder beside `D`), its bytes counted as they come. Cancellable.
+//!    directory, or on Windows a folder beside `D`), its bytes counted as they come. Cancellable.
 //! 2. `verification`: the tarball's SHA-512 against the registry's integrity; a mismatch is refused
 //!    (`install.checksum`) and nothing of it is unpacked. Cancellable.
 //! 3. `staging`: the tarball unpacked ([`tarball`]), then the package's own installer run from it,
@@ -472,10 +472,14 @@ impl Job {
 pub struct Options {
     /// This computer's platform package; none has no release (`install.no-bundle`).
     pub package: Option<String>,
-    /// Where the private directory is made ([`staging_root`]).
-    pub staging: StagingRoot,
-    /// How long ago a private directory left in the app's staging folder must have last changed to be removed before
-    /// an install ([`Scratch::create`]).
+    /// The system's temporary directory: where the private directory is made unless `temp_often_redirected`
+    /// ([`staging_root`]).
+    pub temp: PathBuf,
+    /// Whether this OS's temporary directory is often redirected to a place other users can change
+    /// ([`crate::platform::staging`]): then the private directory is made beside `D` instead ([`staging_root`]).
+    pub temp_often_redirected: bool,
+    /// How long ago a private directory left in the staging folder beside `D` must have last changed to be removed
+    /// before an install ([`Scratch::create`]).
     pub stale_after: Duration,
     /// The tarball's largest size, and how long its download may take in all.
     pub download_limit: u64,
@@ -492,11 +496,8 @@ impl Options {
     pub fn standard() -> Options {
         Options {
             package: current_package(),
-            staging: staging_root(
-                crate::platform::staging::temp_often_redirected(),
-                std::env::temp_dir(),
-                sidevoice_platform::data_dir::standard().as_deref(),
-            ),
+            temp: std::env::temp_dir(),
+            temp_often_redirected: crate::platform::staging::temp_often_redirected(),
             // A day: far past an install's own bounds (a 15 min download, 3 min for the installer).
             stale_after: Duration::from_secs(24 * 3600),
             download_limit: 512 * 1024 * 1024,
@@ -514,13 +515,13 @@ impl Options {
 pub enum Root {
     /// The system's temporary directory (`std::env::temp_dir`), there already and the OS's to clean.
     Temp,
-    /// [`STAGING_DIR`] in the app's own folder beside the standard `D`, made private by the install itself, which also
-    /// removes what an interrupted install left in it.
-    AppFolder,
+    /// [`STAGING_DIR`] beside the `D` the install is for, made private by the install itself, which also removes what
+    /// an interrupted install left in it.
+    BesideData,
 }
 
 impl Root {
-    const ALL: [Root; 2] = [Root::Temp, Root::AppFolder];
+    const ALL: [Root; 2] = [Root::Temp, Root::BesideData];
 }
 
 /// Where the install's private directory is made: which kind of directory, and its path.
@@ -530,19 +531,24 @@ pub struct StagingRoot {
     pub path: PathBuf,
 }
 
-/// The app's staging folder, in the folder that holds the standard `D` (`D`'s parent), named as the reset's control
-/// state beside it is (`ai.sidevoice.desktop-reset`).
+/// The staging folder beside `D`, in `D`'s parent, named as the reset's control state beside the standard `D` is
+/// (`ai.sidevoice.desktop-reset`).
 pub const STAGING_DIR: &str = "ai.sidevoice.desktop-staging";
 
-/// Where an install stages its download: the system's temporary directory `temp`, unless this OS's is often redirected
-/// to a place other users can change (`temp_often_redirected`, from [`crate::platform::staging`]); then
-/// [`STAGING_DIR`] beside the standard `D` (`standard_data`: `sidevoice_platform::data_dir::standard`, never
-/// `$SIDEVOICE_DATA_DIR`, as for the reset's state). On Windows that is `%LOCALAPPDATA%\Sidevoice\…`: the folder the
-/// app is installed in and `D` is in, whose ancestry the package's installer requires anyway for `D`, so staging there
-/// asks nothing more of this computer. With no standard `D`, the temporary directory.
-pub fn staging_root(temp_often_redirected: bool, temp: PathBuf, standard_data: Option<&Path>) -> StagingRoot {
-    match standard_data.and_then(Path::parent).filter(|_| temp_often_redirected) {
-        Some(folder) => StagingRoot { root: Root::AppFolder, path: folder.join(STAGING_DIR) },
+/// Where an install for the data directory `data` stages its download: the system's temporary directory `temp`, unless
+/// this OS's is often redirected to a place other users can change (`temp_often_redirected`, from
+/// [`crate::platform::staging`]); then [`STAGING_DIR`] beside `data`, in its parent.
+///
+/// `data` is the `D` the installer is run for, `$SIDEVOICE_DATA_DIR` when set (`DataDirs::from_env`), so the staging
+/// folder's ancestry is exactly `D`'s: every directory above it is one above `D`, which the package's installer
+/// requires the shared private-directory policy to accept anyway, and `D` itself is neither made nor written by the
+/// app. Staging there asks nothing more of this computer. With the standard `D` on Windows that is
+/// `%LOCALAPPDATA%\Sidevoice\ai.sidevoice.desktop-staging`, in the folder the app is installed in; with
+/// `SIDEVOICE_DATA_DIR=E:\Profile`, `E:\ai.sidevoice.desktop-staging`. A `D` with no parent (a volume's root) stages
+/// in the temporary directory.
+pub fn staging_root(temp_often_redirected: bool, temp: PathBuf, data: &Path) -> StagingRoot {
+    match data.parent().filter(|parent| temp_often_redirected && !parent.as_os_str().is_empty()) {
+        Some(parent) => StagingRoot { root: Root::BesideData, path: parent.join(STAGING_DIR) },
         None => StagingRoot { root: Root::Temp, path: temp },
     }
 }
@@ -560,24 +566,25 @@ impl Scratch {
     /// A new private directory in `staging` (`Fs::create_private_dir`: 0700 on Unix, a protected owner-only DACL on
     /// Windows) under a fresh name (`sidevoice-install-` and six random characters, `tempfile`'s, taken only if nobody
     /// has it), then checked as the app checks its own directories: this user's, private, every directory above it
-    /// safe from other users (sticky, as `/tmp`, is fine). The app's folder ([`Root::AppFolder`]) is first made
-    /// private if missing (refused if it is there and not private), and what an interrupted install left in it more
-    /// than `stale_after` ago removed ([`remove_stale`]).
+    /// safe from other users (sticky, as `/tmp`, is fine). The staging folder beside `D` ([`Root::BesideData`]) is
+    /// first made private if missing (refused if it is there and not private), and what an interrupted install left in
+    /// it more than `stale_after` ago removed ([`remove_stale`]).
     ///
     /// A failure is `install.unsafe` when the policy refuses a directory (`install.failed` / `install.disk` when the
     /// OS fails to make one), at step `download`, with `params` `{where, reason, os_error?, root}`
-    /// ([`Failure::at`]).
+    /// ([`Failure::at`]). Its `message` is the English fallback the keys already had: no new sentence, the new facts
+    /// are params the client translates.
     pub fn create(staging: &StagingRoot, stale_after: Duration) -> Result<Scratch, Failure> {
         let root = &staging.path;
         let rooted = |failure: Failure| failure.param("root", json!(staging.root));
         if !root.is_absolute() {
-            let message = format!("The staging directory {} is not absolute.", root.display());
+            let message = format!("The temporary directory {} is not absolute.", root.display());
             let failure = Failure::new("install.unsafe", Step::Download, message);
             return Err(rooted(failure.at(Where::StagingRoot, Reason::NotAbsolute, None)));
         }
-        if staging.root == Root::AppFolder {
+        if staging.root == Root::BesideData {
             Files::ensure_private_dir(root).map_err(|e| {
-                let what = format!("The staging directory {}", root.display());
+                let what = root.display().to_string();
                 rooted(if Reason::of(&e).is_refusal() {
                     Failure::unsafe_dir(&e, Step::Download, Where::StagingRoot, &what)
                 } else {
@@ -646,7 +653,8 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     })?;
     job.enter(Step::Download)?;
     let (release, dist) = npm::resolve(fetch, package)?;
-    let scratch = Scratch::create(&options.staging, options.stale_after)?;
+    let staging = staging_root(options.temp_often_redirected, options.temp.clone(), data);
+    let scratch = Scratch::create(&staging, options.stale_after)?;
     let archive = scratch.path().join("package.tgz");
     let digest = download(job, fetch, &dist, &archive, options)?;
 
@@ -768,7 +776,7 @@ fn stamp(path: &Path) -> Option<(FileId, SystemTime)> {
 /// of its own, killed past `timeout`). `service-start` once `install.json` changes.
 fn run_installer(job: &Job, installer: &Path, data: &Path, timeout: Duration) -> Result<Value, Failure> {
     let program = installer.to_str().ok_or_else(|| {
-        Failure::new("install.unsafe", Step::Staging, "The staging directory's path is not UTF-8.").at(
+        Failure::new("install.unsafe", Step::Staging, "The temporary directory's path is not UTF-8.").at(
             Where::Installer,
             Reason::NotUtf8,
             None,
@@ -922,13 +930,13 @@ mod tests {
     #[ignore = "network"]
     fn the_real_registry_resolves_downloads_and_unpacks() {
         let tmp = tempfile::tempdir().unwrap();
-        let staging = StagingRoot { root: Root::Temp, path: tmp.path().into() };
-        let options = Options { staging, ..Options::standard() };
+        let options = Options { temp: tmp.path().into(), temp_often_redirected: false, ..Options::standard() };
         let options = Options { package: current_package(), ..options };
         let fetch = npm::Https::new().unwrap();
         let job = Job::new("real");
         let (release, dist) = npm::resolve(&fetch, options.package.as_deref().unwrap()).unwrap();
-        let scratch = Scratch::create(&options.staging, options.stale_after).unwrap();
+        let staging = StagingRoot { root: Root::Temp, path: options.temp.clone() };
+        let scratch = Scratch::create(&staging, options.stale_after).unwrap();
         let archive = scratch.path().join("package.tgz");
         let digest = download(&job, &fetch, &dist, &archive, &options).unwrap();
         assert_eq!(digest, dist.sha512, "{} {}", release.package, release.version);
@@ -1060,28 +1068,35 @@ mod tests {
         }
     }
 
-    /// Where an install stages, off any particular OS: the app's folder beside the standard `D` where the temporary
-    /// directory is often redirected (Windows), the temporary directory otherwise or with no standard `D`.
+    /// Where an install stages, off any particular OS: beside the `D` it is for where the temporary directory is often
+    /// redirected (Windows), whether that `D` is the standard one or `SIDEVOICE_DATA_DIR`'s; the temporary directory
+    /// otherwise, or for a `D` with no parent.
     #[test]
-    fn the_staging_root_is_the_app_folder_where_the_temporary_directory_is_often_redirected() {
+    fn the_staging_root_is_beside_the_configured_data_directory_where_the_temporary_directory_is_often_redirected() {
         let temp = PathBuf::from("/system-temp");
-        let data = PathBuf::from("/home/a/AppData/Local/Sidevoice/Data");
-        let app = staging_root(true, temp.clone(), Some(&data));
-        assert_eq!(app, StagingRoot { root: Root::AppFolder, path: data.parent().unwrap().join(STAGING_DIR) });
-        assert!(!app.path.starts_with(&data), "beside D, never in it");
+        let standard = PathBuf::from("/home/a/AppData/Local/Sidevoice/Data");
+        let beside = staging_root(true, temp.clone(), &standard);
+        assert_eq!(beside, StagingRoot { root: Root::BesideData, path: standard.parent().unwrap().join(STAGING_DIR) });
+        assert!(!beside.path.starts_with(&standard), "beside D, never in it");
+        // `SIDEVOICE_DATA_DIR` elsewhere (another drive, a profile): beside that one, never the standard place.
+        let configured = PathBuf::from("/profiles/E/SidevoiceProfile");
+        let beside = staging_root(true, temp.clone(), &configured);
         assert_eq!(
-            staging_root(false, temp.clone(), Some(&data)),
+            beside,
+            StagingRoot { root: Root::BesideData, path: PathBuf::from("/profiles/E").join(STAGING_DIR) }
+        );
+        assert_eq!(beside.path.parent(), configured.parent(), "the same ancestry as D");
+        assert_eq!(
+            staging_root(false, temp.clone(), &configured),
             StagingRoot { root: Root::Temp, path: temp.clone() }
         );
-        assert_eq!(staging_root(true, temp.clone(), None), StagingRoot { root: Root::Temp, path: temp.clone() });
-        assert_eq!(json!(Root::AppFolder), "app-folder");
-        // On this computer, as the app builds it.
-        let standard = Options::standard().staging;
-        let expected = staging_root(
-            crate::platform::staging::temp_often_redirected(),
-            std::env::temp_dir(),
-            sidevoice_platform::data_dir::standard().as_deref(),
-        );
-        assert_eq!(standard, expected);
+        for rootless in [PathBuf::from("/"), PathBuf::from("relative")] {
+            assert_eq!(staging_root(true, temp.clone(), &rootless).root, Root::Temp, "{rootless:?}");
+        }
+        assert_eq!(json!(Root::BesideData), "beside-data");
+        // As the app builds it on this computer.
+        let options = Options::standard();
+        assert_eq!(options.temp_often_redirected, crate::platform::staging::temp_often_redirected());
+        assert_eq!(options.temp, std::env::temp_dir());
     }
 }

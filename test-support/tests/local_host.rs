@@ -895,7 +895,8 @@ fn install_options(world: &World) -> install::Options {
     std::fs::create_dir_all(&temp).unwrap();
     install::Options {
         package: Some(PLATFORM.into()),
-        staging: install::StagingRoot { root: install::Root::Temp, path: temp },
+        temp,
+        temp_often_redirected: false,
         installer_time: Duration::from_secs(20),
         settle_time: Duration::from_secs(5),
         ..install::Options::standard()
@@ -952,7 +953,7 @@ fn an_install_runs_alone_says_installing_meanwhile_and_ends_with_the_core_reacha
     // Free again; one begun and dropped unrun frees it too.
     drop(host.begin_install("job-3").unwrap());
     drop(host.begin_install("job-4").unwrap());
-    assert_eq!(std::fs::read_dir(&options.staging.path).unwrap().count(), 0, "nothing left behind");
+    assert_eq!(std::fs::read_dir(&options.temp).unwrap().count(), 0, "nothing left behind");
 }
 
 #[test]

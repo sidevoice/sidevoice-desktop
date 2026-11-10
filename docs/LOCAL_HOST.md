@@ -204,14 +204,16 @@ The private directory is removed whatever happens: on success, on a failure, on 
 each user a private one; Linux's `/tmp` is sticky). On Windows, not in `%TEMP%`: it is often moved below a drive root
 (`C:\Temp`, `D:\Temp`, a RAM disk, a junction), where it inherits the root's "Authenticated Users: Modify" and the
 shared private-directory policy rightly refuses it (desktop 0.4.0 failed there with `install.unsafe` at `download`).
-It stages in `%LOCALAPPDATA%\Sidevoice\ai.sidevoice.desktop-staging` instead: the folder the app is installed in and
-`D` (`…\Sidevoice\Data`) is in, whose ancestry the package's installer requires for `D` anyway, so staging there asks
-nothing more of the computer. The app makes that folder private if it is missing (one that is there and not private
-is refused, not repaired), and before each install removes from it the private directories an interrupted install
-left (the app killed, the computer off) that last changed a day ago or more, through the held folder, no link followed.
-It is beside the standard `D`, never in it, and does not follow `SIDEVOICE_DATA_DIR` (as the reset's control state,
-`ai.sidevoice.desktop-reset`, beside it). The one value that differs per OS is `platform::staging` (whether the
-temporary directory is often redirected); the choice is common code.
+It stages beside the `D` the installer is run for, in `ai.sidevoice.desktop-staging` in `D`'s parent: with the
+standard `D` (`%LOCALAPPDATA%\Sidevoice\Data`), `%LOCALAPPDATA%\Sidevoice\ai.sidevoice.desktop-staging`, the folder
+the app is installed in; with `SIDEVOICE_DATA_DIR=E:\Profile`, `E:\ai.sidevoice.desktop-staging`. Every directory above
+it is one above `D`, whose ancestry the package's installer requires anyway, and `D` itself is neither made nor
+written by the app, so staging there asks nothing more of the computer. The app makes that folder private if it is
+missing (one that is there and not private is refused, not repaired), and before each install removes from it the
+private directories an interrupted install left (the app killed, the computer off) that last changed a day ago or
+more, through the held folder, no link followed. A `D` with no parent (a volume's root) stages in the temporary
+directory. The one value that differs per OS is `platform::staging` (whether the temporary directory is often
+redirected); the choice is common code.
 
 **Trust.** The registry is the trust, as for `npx`: every request is HTTPS (rustls with the platform's verifier, the
 system's proxy, the client the engine's downloads and the updater already use) to `registry.npmjs.org`, and no redirect
