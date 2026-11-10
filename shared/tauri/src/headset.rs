@@ -53,30 +53,105 @@ pub fn gesture_step(on: bool, active: bool, held: bool) -> GestureStep {
 /// What a mute gesture does to the call ([`mute_gesture`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gesture {
-    /// The headset's single press, which does what the person chose for it; `what` is the state the system asked for.
-    Press(&'static str),
-    /// In a call, and the microphone is already as the system asks.
+    /// The single press mutes (the person's choice, the default), and the microphone is not yet as the system asks: the press
+    /// mutes or unmutes it; `what` says which.
+    Toggle(&'static str),
+    /// The single press mutes, and the microphone is already as the system asks.
     Unchanged,
+    /// The single press does something else the person chose (say one thing, skip, nothing): it runs, and the microphone stays
+    /// as it is.
+    Action,
+    /// The same press already arrived as a play/pause and was acted on ([`duplicate_press`]): it is not acted on twice.
+    Duplicate,
+    /// No press: the system asks for the state it already holds, as it does when the app starts recording (seen on the macOS
+    /// runner: two "unmute" calls of the handler as the probe's voice opened, no call on). Agreed to, and not recorded.
+    Report,
     /// No call: nothing to mute.
     NoCall,
 }
 
 impl Gesture {
-    /// What the system is answered (macOS's handler returns it): whether the call's microphone is now as asked. False only
-    /// with no call, which the system shows as a mute it could not do.
-    pub fn accepted(self) -> bool {
-        !matches!(self, Gesture::NoCall)
+    /// What the system is answered (macOS's handler returns it): whether the call's microphone is now as the system asked,
+    /// which the system then shows and plays as muted or unmuted. False is the system's refusal (its reject tone and banner),
+    /// and the system's mute stays as it was. So it is true only where the press leaves the microphone as asked: never for a
+    /// press that does something else, or the system would say "muted" while the app still listens.
+    pub fn accepted(self, press_keeps_mic: bool) -> bool {
+        match self {
+            Gesture::Toggle(_) | Gesture::Unchanged | Gesture::Report => true,
+            // The play/pause already muted or unmuted the microphone, unless the press is not the mute.
+            Gesture::Duplicate => !press_keeps_mic,
+            Gesture::Action | Gesture::NoCall => false,
+        }
+    }
+
+    /// Whether the press goes to the app's single press (`MediaCommand::ToggleMute`, which does what the person chose).
+    pub fn presses(self) -> bool {
+        matches!(self, Gesture::Toggle(_) | Gesture::Action)
     }
 }
 
-/// What the mute gesture asking for `muted` does, given whether a call is on and its microphone's state now.
-pub fn mute_gesture(in_call: bool, muted: bool, mic_enabled: bool) -> Gesture {
-    if !in_call {
+/// What [`mute_gesture`] reads of the moment a mute gesture arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GestureMoment {
+    /// A call is on.
+    pub in_call: bool,
+    /// The single press the person chose leaves the microphone alone (say one thing, skip, nothing).
+    pub press_keeps_mic: bool,
+    /// The call's microphone is open.
+    pub mic_enabled: bool,
+    /// The system's input mute, as the app last knew it (what it set, what it agreed to, what the notification said).
+    pub system_muted: bool,
+}
+
+/// Whether the system's call asking for `muted` is a press at all: it asks for a state the system does not already hold.
+pub fn is_press(muted: bool, system_muted: bool) -> bool {
+    muted != system_muted
+}
+
+/// What the mute gesture asking for `muted` does at `now`; `duplicate` says the same press already arrived as an acted-on
+/// play/pause ([`duplicate_press`], asked only of a press during a call).
+pub fn mute_gesture(muted: bool, now: GestureMoment, duplicate: bool) -> Gesture {
+    if !is_press(muted, now.system_muted) {
+        return Gesture::Report;
+    }
+    if !now.in_call {
         return Gesture::NoCall;
     }
-    match mute_gesture_action(muted, mic_enabled) {
-        Some(what) => Gesture::Press(what),
+    if duplicate {
+        return Gesture::Duplicate;
+    }
+    if now.press_keeps_mic {
+        return Gesture::Action;
+    }
+    match mute_gesture_action(muted, now.mic_enabled) {
+        Some(what) => Gesture::Toggle(what),
         None => Gesture::Unchanged,
+    }
+}
+
+/// Where a headset's single press arrived from: the remote-command center's play/pause (Now Playing) or the AirPods / Beats
+/// mute gesture. One press could come both ways; [`duplicate_press`] keeps it to one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PressSource {
+    Remote,
+    Gesture,
+}
+
+/// How close together a play/pause and a mute gesture are taken for the same press.
+pub const DUPLICATE_WINDOW: std::time::Duration = std::time::Duration::from_millis(800);
+
+/// Whether a single press from `source` is the same press as the last one (`last`: where it came from, whether it was acted on,
+/// and how long ago), already handled: it came the other way within [`DUPLICATE_WINDOW`]. The gesture wins: a play/pause
+/// after a gesture is dropped, and a gesture after a play/pause is dropped only when that play/pause did something (a play
+/// with the microphone open does nothing, and the gesture is then the press). Two presses the same way are two presses.
+pub fn duplicate_press(source: PressSource, last: Option<(PressSource, bool, std::time::Duration)>) -> bool {
+    let Some((before, acted, ago)) = last else { return false };
+    if before == source || ago >= DUPLICATE_WINDOW {
+        return false;
+    }
+    match source {
+        PressSource::Remote => true,
+        PressSource::Gesture => acted,
     }
 }
 
@@ -212,16 +287,97 @@ mod tests {
         assert_eq!(gesture_step(false, false, false), GestureStep::default(), "no call and not heard: nothing");
     }
 
+    /// A moment in a call with the microphone open and the system unmuted, the single press the mute.
+    fn in_call() -> GestureMoment {
+        GestureMoment { in_call: true, press_keeps_mic: false, mic_enabled: true, system_muted: false }
+    }
+
     #[test]
     fn a_mute_gesture_is_the_single_press_during_a_call_and_refused_outside_one() {
-        assert_eq!(mute_gesture(true, true, true), Gesture::Press("mute"));
-        assert_eq!(mute_gesture(true, false, false), Gesture::Press("unmute"));
-        assert_eq!(mute_gesture(true, true, false), Gesture::Unchanged, "already muted");
-        assert_eq!(mute_gesture(true, false, true), Gesture::Unchanged, "already open");
-        assert_eq!(mute_gesture(false, true, true), Gesture::NoCall);
-        assert!(mute_gesture(true, true, true).accepted());
-        assert!(mute_gesture(true, true, false).accepted(), "already as asked: done");
-        assert!(!mute_gesture(false, false, false).accepted(), "no call: the system says it could not");
+        let muted = GestureMoment { mic_enabled: false, system_muted: true, ..in_call() };
+        assert_eq!(mute_gesture(true, in_call(), false), Gesture::Toggle("mute"));
+        assert_eq!(mute_gesture(false, muted, false), Gesture::Toggle("unmute"));
+        // The system out of step with the call: the press asks for what the call already is.
+        let behind = GestureMoment { mic_enabled: false, ..in_call() };
+        assert_eq!(mute_gesture(true, behind, false), Gesture::Unchanged, "already muted");
+        assert!(Gesture::Unchanged.accepted(false), "agreed: the system now holds the call's state");
+        let outside = GestureMoment { in_call: false, ..in_call() };
+        assert_eq!(mute_gesture(true, outside, false), Gesture::NoCall);
+        assert_eq!(mute_gesture(true, GestureMoment { press_keeps_mic: true, ..outside }, true), Gesture::NoCall);
+        assert!(!Gesture::NoCall.accepted(false), "no call: the system says it could not");
+        assert!(!Gesture::NoCall.presses());
+    }
+
+    /// The handler is also called with the state the system already holds (on the macOS runner, as the app's voice opened
+    /// its input outside a call): no press, agreed to, and not refused, so no reject banner when a call starts recording.
+    #[test]
+    fn the_system_asking_for_the_state_it_holds_is_no_press() {
+        let outside = GestureMoment { in_call: false, mic_enabled: false, ..in_call() };
+        assert_eq!(mute_gesture(false, outside, false), Gesture::Report);
+        assert_eq!(mute_gesture(false, in_call(), true), Gesture::Report, "not a press, so never a duplicate");
+        let muted = GestureMoment { mic_enabled: false, system_muted: true, ..in_call() };
+        assert_eq!(mute_gesture(true, muted, false), Gesture::Report);
+        assert!(Gesture::Report.accepted(true));
+        assert!(!Gesture::Report.presses());
+        assert!(is_press(true, false) && is_press(false, true) && !is_press(false, false));
+    }
+
+    /// Each choice of Settings › Shortcuts › Headset, pressed twice with the microphone open: what reaches the app and what
+    /// the system is told. The system is told "done" only when the microphone really is as it asked, so it never shows
+    /// "muted" while the app listens, and the second press is never read as "already so" and swallowed.
+    #[test]
+    fn each_headset_choice_does_what_it_says_and_the_system_says_muted_only_when_it_is() {
+        use sidevoice_shared_headset::HeadsetPress;
+        for press in HeadsetPress::ALL {
+            let keeps = press.keeps_mic();
+            let start = GestureMoment { press_keeps_mic: keeps, ..in_call() };
+            // The first press asks to mute the open microphone.
+            let first = mute_gesture(true, start, false);
+            assert!(first.presses(), "{press:?}: the press reaches the app");
+            // What the system holds after it: what it asked for when agreed to, what it had when refused.
+            let system_muted = first.accepted(keeps);
+            let mic_open = press != HeadsetPress::Mute;
+            assert_eq!(system_muted, !mic_open, "{press:?}: the system's mute is the call's after one press");
+            // The second press asks for the other state than the system holds.
+            let after = GestureMoment { mic_enabled: mic_open, system_muted, ..start };
+            let second = mute_gesture(!system_muted, after, false);
+            assert!(second.presses(), "{press:?}: the second press is not swallowed");
+            match press {
+                HeadsetPress::Mute => {
+                    assert_eq!(first, Gesture::Toggle("mute"));
+                    assert_eq!(second, Gesture::Toggle("unmute"));
+                    assert!(second.accepted(keeps));
+                }
+                HeadsetPress::OneTurn | HeadsetPress::Skip | HeadsetPress::None => {
+                    assert_eq!(first, Gesture::Action, "{press:?}: the chosen action, the microphone untouched");
+                    assert_eq!(second, Gesture::Action);
+                    assert!(!second.accepted(keeps), "{press:?}: the system is refused, so it stays unmuted");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn one_press_arriving_as_play_pause_and_as_the_gesture_acts_once() {
+        use std::time::Duration;
+        let soon = Duration::from_millis(120);
+        let (remote, gesture) = (PressSource::Remote, PressSource::Gesture);
+        // The gesture first: the play/pause that follows is the same press.
+        assert!(duplicate_press(remote, Some((gesture, true, soon))));
+        assert!(duplicate_press(remote, Some((gesture, false, soon))), "even a gesture that found nothing to change");
+        // A play/pause that acted first: the gesture that follows is the same press, answered as done (the mute did it).
+        assert!(duplicate_press(gesture, Some((remote, true, soon))));
+        assert_eq!(mute_gesture(true, in_call(), true), Gesture::Duplicate);
+        assert!(Gesture::Duplicate.accepted(false), "the play/pause already muted");
+        assert!(!Gesture::Duplicate.accepted(true), "a press that is not the mute never says muted");
+        assert!(!Gesture::Duplicate.presses(), "not sent to the app twice");
+        // A play/pause that did nothing (play while open): the gesture is the press.
+        assert!(!duplicate_press(gesture, Some((remote, false, soon))));
+        // Two presses the same way, a press with nothing before, or the other way but later, are presses of their own.
+        assert!(!duplicate_press(remote, Some((remote, true, soon))));
+        assert!(!duplicate_press(gesture, Some((gesture, true, soon))));
+        assert!(!duplicate_press(gesture, None));
+        assert!(!duplicate_press(remote, Some((gesture, true, DUPLICATE_WINDOW))));
     }
 
     #[test]

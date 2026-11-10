@@ -35,7 +35,8 @@ use std::ptr::NonNull;
 use std::time::Instant;
 
 use crate::headset::{
-    gesture_step, is_echo, media_dispatch, mute_gesture, registered_commands, Changed, Dispatch, Gesture, ALL_COMMANDS,
+    duplicate_press, gesture_step, is_echo, is_press, media_dispatch, mute_gesture, registered_commands, Changed,
+    Dispatch, Gesture, GestureMoment, PressSource, ALL_COMMANDS,
 };
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
@@ -86,22 +87,44 @@ impl Headset {
     }
 }
 
+/// The last single press, from either way it arrives: where from, whether it was acted on, and when ([`duplicate_press`]).
+static LAST_PRESS: Mutex<Option<(PressSource, bool, Instant)>> = Mutex::new(None);
+
+/// Whether a single press from `source` is the last one arriving the other way ([`duplicate_press`]); records it when it is
+/// not, with whether it is acted on (`acts`, asked only then).
+fn single_press(source: PressSource, acts: impl FnOnce() -> bool) -> bool {
+    let mut last = LAST_PRESS.lock().unwrap();
+    if duplicate_press(source, last.map(|(from, acted, at)| (from, acted, at.elapsed()))) {
+        return true;
+    }
+    *last = Some((source, acts(), Instant::now()));
+    false
+}
+
 /// A media command arrived (on the main thread).
 fn on_media_command(app: &AppHandle, command: &str) {
     let headset = app.state::<Headset>();
     let snapshot = headset.call.lock().unwrap().clone();
     let in_call = snapshot.ready && snapshot.joined;
-    match media_dispatch(command, in_call, snapshot.mic_enabled) {
+    let dispatch = media_dispatch(command, in_call, snapshot.mic_enabled);
+    let source = format!("remote:{command}");
+    if matches!(dispatch, Dispatch::ToggleMute(_) | Dispatch::Unchanged)
+        && single_press(PressSource::Remote, || matches!(dispatch, Dispatch::ToggleMute(_)))
+    {
+        headset.record(&source, "same press as the AirPods gesture: ignored");
+        return;
+    }
+    match dispatch {
         Dispatch::NextTrack => {
             (headset.sink)(MediaCommand::NextTrack);
             headset.record("remote:next", "double press");
         }
         Dispatch::ToggleMute(what) => {
             (headset.sink)(MediaCommand::ToggleMute);
-            headset.record(&format!("remote:{command}"), what);
+            headset.record(&source, what);
         }
-        Dispatch::Unchanged => headset.record(&format!("remote:{command}"), "ya estaba así"),
-        Dispatch::NoCall => headset.record(&format!("remote:{command}"), "sin llamada: solo registrado"),
+        Dispatch::Unchanged => headset.record(&source, "ya estaba así"),
+        Dispatch::NoCall => headset.record(&source, "sin llamada: solo registrado"),
     }
 }
 
@@ -111,26 +134,49 @@ fn on_mute_gesture(app: &AppHandle, muted: bool) -> bool {
     let Some(headset) = app.try_state::<Headset>() else { return false };
     let snapshot = headset.call.lock().unwrap().clone();
     let source = if muted { "airpods:mute" } else { "airpods:unmute" };
-    let gesture = mute_gesture(snapshot.ready && snapshot.joined, muted, snapshot.mic_enabled);
+    let in_call = snapshot.ready && snapshot.joined;
+    let keeps = snapshot.press_keeps_mic;
+    let now = GestureMoment {
+        in_call,
+        press_keeps_mic: keeps,
+        mic_enabled: snapshot.mic_enabled,
+        system_muted: *SYSTEM_MUTED.lock().unwrap(),
+    };
+    // Only a press during a call is kept as the last press: anything else would hide the next play/pause.
+    let duplicate = in_call && is_press(muted, now.system_muted) && single_press(PressSource::Gesture, || true);
+    let gesture = mute_gesture(muted, now, duplicate);
+    if gesture.accepted(keeps) {
+        *SYSTEM_MUTED.lock().unwrap() = muted;
+    }
+    if gesture.presses() {
+        let app = app.clone();
+        let _ = app.clone().run_on_main_thread(move || (app.state::<Headset>().sink)(MediaCommand::ToggleMute));
+    }
     match gesture {
-        Gesture::Press(what) => {
-            let app = app.clone();
-            let _ = app.clone().run_on_main_thread(move || (app.state::<Headset>().sink)(MediaCommand::ToggleMute));
-            headset.record(source, what);
-        }
+        Gesture::Toggle(what) => headset.record(source, what),
         Gesture::Unchanged => headset.record(source, "ya estaba así"),
+        Gesture::Action => headset.record(source, "the single press's own action; the system's mute refused"),
+        Gesture::Duplicate => headset.record(source, "same press as a play/pause: ignored"),
+        // Not a press: nothing to record.
+        Gesture::Report => {}
         Gesture::NoCall => headset.record(source, "sin llamada: solo registrado"),
     }
-    gesture.accepted()
+    gesture.accepted(keeps)
 }
 
 /// The mute gesture arrived (as the system says it, on any thread): what the call does with it, unless it is the app's
 /// own change coming back. Returns whether the call's microphone is now as asked: false when there is no call to mute.
 pub fn heard(app: &AppHandle, muted: bool) -> bool {
     if echo(muted) {
+        *SYSTEM_MUTED.lock().unwrap() = muted;
         return true; // the app's own change, already done
     }
     on_mute_gesture(app, muted)
+}
+
+/// The system's input mute as the notification says it, after a change already handled (macOS: the handler came first).
+pub(super) fn system_says(muted: bool) {
+    *SYSTEM_MUTED.lock().unwrap() = muted;
 }
 
 /// Keeps where the commands go, once; their handlers are registered while a call is shown ([`REGISTERED`]).
@@ -156,6 +202,9 @@ pub fn update<N: Os>(app: &AppHandle, snapshot: &CallState) {
 
 /// Whether the gesture is heard now: from launch, for the process's life ([`gesture_step`]).
 static GESTURE_ON: Mutex<bool> = Mutex::new(false);
+/// The system's input mute as the app last knew it: what it set, what it agreed to, what the notification said. A call of the
+/// handler asking for this same state is no press ([`is_press`]).
+static SYSTEM_MUTED: Mutex<bool> = Mutex::new(false);
 /// Whether a call holds the system's input mute in step with its own (so its end gives it back unmuted).
 static GESTURE_HELD: Mutex<bool> = Mutex::new(false);
 /// The state the app itself last set with `setInputMuted`, and when: the system calls the handler for that
@@ -177,6 +226,8 @@ fn set_muted(shared: &AVAudioApplication, muted: bool) {
     // SAFETY: the class exists (the caller checked); plain property set.
     if unsafe { shared.setInputMuted_error(muted) }.is_err() {
         *SET_BY_APP.lock().unwrap() = None;
+    } else {
+        *SYSTEM_MUTED.lock().unwrap() = muted;
     }
 }
 

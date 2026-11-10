@@ -391,8 +391,15 @@ pub(crate) fn set_headset(
         })
         .map_err(|e| refusal("internal", e))?;
         apply_locked(app, &runtime);
+        // The AirPods gesture follows the new choice during a call (whether the system is told it muted).
+        crate::refresh_media_controls(app);
     }
     Ok(status(app))
+}
+
+/// Whether the headset's single press the person chose leaves the microphone alone ([`HeadsetPress::keeps_mic`]).
+pub(crate) fn headset_press_keeps_mic(app: &AppHandle) -> bool {
+    stored(app).headset_press.keeps_mic()
 }
 
 /// The headset's single press (the system's play/pause, or the AirPods gesture) does what the person chose.

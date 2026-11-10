@@ -54,6 +54,12 @@ impl HeadsetPress {
             HeadsetPress::None => None,
         }
     }
+
+    /// Whether this press leaves the microphone as it is: everything but the mute. The system's own mute (the AirPods
+    /// gesture) is told so, so it never says "muted" for a press that did not mute.
+    pub fn keeps_mic(self) -> bool {
+        self != HeadsetPress::Mute
+    }
 }
 
 /// What a host's headset presses can do during a call (`HeadsetStatus.actions`): the actions the single press can be given, and

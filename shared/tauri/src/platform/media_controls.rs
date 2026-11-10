@@ -29,6 +29,10 @@ pub struct CallState {
     /// The double press has an action the person chose: Android's media session advertises skip-to-next only then (macOS
     /// always registers the next-track command).
     pub double_press_wanted: bool,
+    /// The single press the person chose leaves the microphone alone (say one thing, skip, nothing): the AirPods gesture then
+    /// runs it and the system's mute is refused, so the system never says "muted" while the call listens. False (the mute, the
+    /// default) where the app does not say.
+    pub press_keeps_mic: bool,
 }
 
 /// What a media action asks of the call.

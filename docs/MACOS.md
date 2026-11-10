@@ -53,7 +53,7 @@ What macOS offers a plain app, checked against Apple's documentation (2026-09-30
 | Mechanism | What it is | Availability | Used |
 |---|---|---|---|
 | `MPRemoteCommandCenter` + `MPNowPlayingInfoCenter` | Play/pause from **any** headset (Bluetooth AVRCP, wired, media keys) goes to the "Now Playing" app. On macOS the app must set `playbackState` whenever playback starts or stops, "otherwise remote control functionality may not work as expected". | macOS 10.12.2+ | **Yes, primary.** During a call the app is Now Playing; play → unmute, pause/toggle → toggle (the web interface's rule); next track (a headset's double press) → what the person chose for the double press, nothing by default. |
-| `AVAudioApplication.setInputMuteStateChangeHandler` + `AVAudioApplicationInputMuteStateChangeNotification` | The system calls the handler "due to a Bluetooth audio accessory gesture (certain AirPods / Beats headphones)". macOS only. Observing the notification is the opt-in: with the handler alone the audio server finds no recording app opted in and refuses the press ("Cannot Control Mic with AirPods"). | macOS 14+ | **Yes, extra.** Both set once at launch, for the process's life (docs/MEDIA_CONTROLS.md); during a call the app keeps `isInputMuted` in step with its own mute and gives it back unmuted at the end. |
+| `AVAudioApplication.setInputMuteStateChangeHandler` + `AVAudioApplicationInputMuteStateChangeNotification` | The system calls the handler "due to a Bluetooth audio accessory gesture (certain AirPods / Beats headphones)". macOS only. The opt-in is both together, set by the process that records: WebKit's own capture sets a handler and observes the notification ("We set the handler to enable receiving AVAudioApplicationInputMuteStateChangeNotification notifications", `CoreAudioCaptureUnit.mm`), and an app with the handler alone gets the press refused ("Cannot Control Mic with AirPods"). | macOS 14+ | **Yes, extra.** Both set once at launch, for the process's life (docs/MEDIA_CONTROLS.md); during a call the app keeps `isInputMuted` in step with its own mute and gives it back unmuted at the end. |
 | CallKit | System calling UI for VoIP apps. | macOS 13+ (per Apple's metadata) | **No.** Neither mechanism above needs it on macOS. |
 | Mic-in-use indicator | The orange dot in the menu bar. | always | Nothing to do: macOS shows it by itself whenever the app captures. |
 
@@ -62,10 +62,11 @@ Not verified on a Mac (no headset in CI), and what can go wrong:
   then send their button as an HFP command instead of AVRCP play/pause; macOS may not turn it into a media command.
   Wired headsets and the Mac's media keys are not affected.
 - **The AirPods gesture** goes to the process doing the call's audio input, and only once the AirPods are that input (the
-  hands-free profile); before that the stem is a plain play/pause. Here that process is the app's own (cpal; "The
-  microphone, layer by layer"), which is opted in from launch. Without the opt-in the press is refused with "Cannot
-  Control Mic with AirPods" and does nothing. The app log says `headset: press to mute opted in` at launch, and each
-  gesture as a `headset airpods:…` line.
+  hands-free profile); before that the stem is a plain play/pause. Until 11b2573 (#37, 2026-10-10) the page captured
+  through `getUserMedia`, so that process was WebKit's GPU process, whose capture opts in by itself (above) and turned the
+  press into the page's mute. Since then the app's own process captures (cpal; "The microphone, layer by layer"), and
+  nothing opted in until it did so itself, from launch: the press was refused with "Cannot Control Mic with AirPods". The
+  app log says `headset: press to mute opted in` at launch, and each gesture as one `headset airpods:…` line.
 - Another app that plays audio after the call started (a video) can become Now Playing and take the buttons.
 
 To see what really arrives: the app log lists every button event the app receives (`headset …` lines: source and what

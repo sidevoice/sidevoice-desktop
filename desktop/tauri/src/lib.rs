@@ -183,7 +183,7 @@ fn bridge_state(
     // its facts carry the conversation's words, which stay out of the log.
     debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
-    media_controls::update(&app, &media_state(&snapshot));
+    media_controls::update(&app, &media_state(&snapshot, shortcuts::headset_press_keeps_mic(&app)));
     media_duck::call(&app, snapshot.joined, snapshot.mic_enabled, snapshot.agent == AgentState::Speaking);
     shortcuts::call_changed(&app, snapshot.joined);
     call_controls::update(&app);
@@ -285,22 +285,30 @@ pub(crate) fn send(app: &AppHandle, command: Command) {
     }
 }
 
-/// What the headset buttons and Now Playing need of the call the room reported.
-fn media_state(snapshot: &CallSnapshot) -> CallState {
+/// What the headset buttons and Now Playing need of the call the room reported, and of the single press the person chose
+/// (`press_keeps_mic`: anything but the mute, which the AirPods gesture must not tell the system was a mute).
+fn media_state(snapshot: &CallSnapshot, press_keeps_mic: bool) -> CallState {
     CallState {
         ready: snapshot.ready,
         joined: snapshot.joined,
         mic_enabled: snapshot.mic_enabled,
         title: snapshot.title.clone(),
         double_press_wanted: false,
+        press_keeps_mic,
     }
+}
+
+/// The headset's media controls told the call again, after the person changed what the single press does.
+pub(crate) fn refresh_media_controls(app: &AppHandle) {
+    let snapshot = app.state::<AppState>().call.lock().unwrap().clone();
+    media_controls::update(app, &media_state(&snapshot, shortcuts::headset_press_keeps_mic(app)));
 }
 
 fn reset_call_state(app: &AppHandle) {
     let snapshot = CallSnapshot::default();
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
-    media_controls::update(app, &media_state(&snapshot));
+    media_controls::update(app, &media_state(&snapshot, shortcuts::headset_press_keeps_mic(app)));
     media_duck::call(app, false, false, false);
     shortcuts::call_changed(app, false);
     call_controls::update(app);

@@ -19,11 +19,18 @@ and `togglemicrophone`, where the webview supports it, to the requested micropho
 Hang-up removes the page handlers and pauses its Now Playing element. A dedicated hardware
 hang-up gesture is not claimed. AirPods/Beats' native mute gesture is macOS's (14 and later, a handler block, `setInputMuteStateChangeHandler`,
 macOS only) and iOS's (17 and later, a notification). The system gives the gesture only to a process that records and has opted in,
-and on both the opt-in is observing `AVAudioApplicationInputMuteStateChangeNotification`: on macOS a handler without it is refused, the
-system playing its rejection and showing "Cannot Control Mic with AirPods". So both apps opt in once, at launch, for the process's life
+and on both the opt-in is observing `AVAudioApplicationInputMuteStateChangeNotification` (on macOS with the handler set too, as WebKit's
+own capture does): otherwise the system plays its rejection and shows "Cannot Control Mic with AirPods". So both apps opt in once, at launch, for the process's life
 (`apple::observe_input_mute`, the rule `headset::gesture_step`; the app log says `headset: press to mute opted in`), before any call records;
 outside a call the app does not record, so the gesture is not its own, and a press that still reaches it is answered "no call" (the
 system's own refusal). During a call the system's input mute is kept in step with the call's microphone, and given back unmuted at its end.
+The gesture is the single press, so it does what Settings › Shortcuts › Headset says; the system is told the microphone is as it asked
+only when the press really muted or unmuted it (`headset::Gesture::accepted`). With say one thing, skip or nothing, the action runs and the
+system's mute is refused (its reject tone and banner), so it never shows "muted" while the call listens and the next press is never taken
+for "already so". If one press arrives both as a play/pause and as the gesture, it acts once (`headset::duplicate_press`: the gesture wins,
+within 0.8 s; a play/pause that changed nothing does not count). The system also calls the handler with the state it already holds
+(macOS CI sees two such "unmute" calls when the app's voice opens its input): that is no press, and is agreed to without a word in the
+log (`headset::is_press`).
 What differs between the two is a private trait of `apple.rs` (`Os`, as every platform concern's), one method per difference,
 implemented by `macos.rs` and `ios.rs`: the playback state (macOS sets it, iOS has none to set) and how the gesture is heard (macOS:
 the handler, the notification observed only as the opt-in; iOS: the notification).

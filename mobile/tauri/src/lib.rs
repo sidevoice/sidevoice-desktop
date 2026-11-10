@@ -437,6 +437,8 @@ impl From<CallReport> for CallState {
             mic_enabled: report.mic_enabled,
             title: report.title,
             double_press_wanted: false,
+            // iOS: the single press is the system's mute, whatever was chosen (`media_controls::presses`); Android does not read it.
+            press_keeps_mic: false,
         }
     }
 }

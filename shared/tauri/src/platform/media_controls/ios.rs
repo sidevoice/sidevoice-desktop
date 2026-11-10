@@ -38,11 +38,12 @@ impl Os for Native {
 
 impl apple::Os for Native {
     /// The notification is both the opt-in and how the gesture arrives: iOS has muted the input already, and its state is
-    /// the call's single press.
+    /// the call's single press, after which it is the system's state whatever the call did with it.
     fn listen_for_mute_gesture(app: &AppHandle) -> bool {
         let app = app.clone();
         apple::observe_input_mute(move |muted| {
             apple::heard(&app, muted);
+            apple::system_says(muted);
         })
     }
 
