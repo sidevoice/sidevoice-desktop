@@ -339,10 +339,10 @@ async fn audio_route(
         "available" => Ok(platform::audio_route_picker::available()),
         "open" => {
             use platform::audio_route_picker::{open, presentation};
-            let before = on_main(&webview, |webview| presentation(webview))
+            let before = on_main(&webview, presentation)
                 .await
                 .map_err(|why| refusal(&why))?;
-            on_main(&webview, |webview| open(webview))
+            on_main(&webview, open)
                 .await
                 .map_err(|why| refusal(&why))?
                 .map_err(|code| serde_json::json!({ "key": "audio_route", "code": code, "message": code }))?;
@@ -351,7 +351,7 @@ async fn audio_route(
             tauri::async_runtime::spawn_blocking(|| std::thread::sleep(AUDIO_ROUTE_SETTLE))
                 .await
                 .ok();
-            let after = on_main(&webview, |webview| presentation(webview))
+            let after = on_main(&webview, presentation)
                 .await
                 .map_err(|why| refusal(&why))?;
             if after == before {
