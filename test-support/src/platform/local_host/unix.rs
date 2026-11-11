@@ -18,7 +18,7 @@ impl Modes for Os {
         let dirs = DataDirs::new(data);
         let _core = FakeCore::start(&dirs.data, 1, true).expect("the stand-in core starts");
         std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o755)).expect("chmod D");
-        let config = Config { dirs, app_dir: app.to_path_buf(), name: "ci".into() };
+        let config = Config { dirs, app_dir: app.to_path_buf(), name: "ci".into(), pinned_minor: None };
         let host = LocalHost::start(config, |line| println!("{line}")).expect("the proxy starts");
         let report = host.poll();
         if report.state != State::Running {

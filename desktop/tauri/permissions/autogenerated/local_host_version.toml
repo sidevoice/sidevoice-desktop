@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-host-version"
+description = "Enables the local_host_version command without any pre-configured scope."
+commands.allow = ["local_host_version"]
+
+[[permission]]
+identifier = "deny-local-host-version"
+description = "Denies the local_host_version command without any pre-configured scope."
+commands.deny = ["local_host_version"]

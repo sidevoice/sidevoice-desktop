@@ -43,6 +43,7 @@
     "sidevoice-shared-tauri:allow-pairings-write",
     "allow-local-host-state",
     "allow-local-host-pairing",
+    "allow-local-host-version",
     "allow-local-host-action",
     "allow-local-host-pairing-code",
     "allow-local-host-install",

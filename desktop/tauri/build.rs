@@ -30,6 +30,7 @@ fn main() {
             "debug_log",
             "local_host_state",
             "local_host_pairing",
+            "local_host_version",
             "local_host_action",
             "local_host_pairing_code",
             "local_host_install",

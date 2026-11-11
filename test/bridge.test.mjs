@@ -1179,7 +1179,7 @@ test("the app carries the bridge version; localHost only where the app offers it
   const api = install(win, ORIGIN, true, true);
   assert.deepEqual(Object.keys(api.host.localHost).sort(), [
     "cancel", "install", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall",
-    "serviceUninstall", "setStartAtLogin", "start", "state", "stop", "subscribe",
+    "serviceUninstall", "setStartAtLogin", "start", "state", "stop", "subscribe", "update", "version",
   ]);
   assert.ok(Object.isFrozen(api.host.localHost));
 });
@@ -1215,6 +1215,32 @@ test("localHost calls go to their native commands and resolve what the app answe
     ["local_host_action", { action: "start-at-login-off" }],
     ["local_host_pairing_code", undefined],
   ]);
+});
+
+test("version() is the app's report with the bridge's own number, and update() is the service-update action", async () => {
+  const install = loadFactory();
+  const report = { bundled: { minor: "0.20" }, installed: { version: "0.20.0" }, core_api: 1, update: "available", latest: "0.20.2", progress: null };
+  const { win, calls } = localHostWindow({
+    local_host_version: report,
+    local_host_action: { state: "running", calls: 0 },
+  });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  // The bridge runs in the page's realm: compared as JSON, not by prototype.
+  assert.deepEqual(JSON.parse(JSON.stringify(await local.version())), { bridge: 2, ...report });
+  assert.deepEqual(await local.update(), { state: "running", calls: 0 });
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [
+    ["local_host_version", undefined],
+    ["local_host_action", { action: "service-update" }],
+  ]);
+});
+
+test("an update the app refuses rejects with its {key, message}", async () => {
+  const install = loadFactory();
+  const newer = Object.assign(new Error("refused"), { refusal: { key: "update.newer-installed", message: "m" } });
+  const { win } = localHostWindow({ local_host_action: newer, local_host_version: newer });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  await assert.rejects(local.update(), { key: "update.newer-installed", message: "m" });
+  await assert.rejects(local.version(), { key: "update.newer-installed", message: "m" });
 });
 
 test("a refused action rejects with the app's {key, message}", async () => {

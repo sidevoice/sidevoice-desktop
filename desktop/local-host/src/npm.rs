@@ -4,7 +4,9 @@
 //!
 //! 1. `GET https://registry.npmjs.org/sidevoice/latest` → `version`, and `optionalDependencies`: one package per
 //!    platform, `@sidevoice/sidevoice-<os>-<cpu>` as npm names the platform (`darwin`, `linux`; `arm64`, `x64`), each at
-//!    that same version — what `npx sidevoice@latest` would pick here.
+//!    that same version — what `npx sidevoice@latest` would pick here. With a pinned [`Minor`] (the one the app works
+//!    with) it is the newest patch of that minor instead: `GET https://registry.npmjs.org/sidevoice` (every version)
+//!    names it, and `GET .../sidevoice/<version>` is then the same document `latest` is.
 //! 2. `GET https://registry.npmjs.org/@sidevoice/sidevoice-<os>-<cpu>/<version>` → `dist.tarball` and `dist.integrity`
 //!    (its SHA-512, base64).
 //!
@@ -14,6 +16,7 @@
 
 use crate::install::{Failure, Step};
 use base64::Engine as _;
+use semver::Version;
 use serde_json::Value;
 use std::io::Read;
 
@@ -25,6 +28,9 @@ pub const PACKAGE: &str = "sidevoice";
 pub const PLATFORM_PREFIX: &str = "@sidevoice/sidevoice-";
 /// A registry document larger than this is not one (the real ones are a few KiB).
 const DOCUMENT_LIMIT: u64 = 1024 * 1024;
+/// The document that lists every version is larger (about 2 KiB a release: 70 KB at 30 releases); this is room for
+/// thousands.
+const PACKUMENT_LIMIT: u64 = 8 * 1024 * 1024;
 
 /// What a GET answered: its status, its `Content-Length` when it said one, and its body.
 pub struct Response {
@@ -69,8 +75,44 @@ pub struct Dist {
     pub sha512: [u8; 64],
 }
 
+/// A service minor, `X.Y`: the one the app works with. A release is in it when its version is `X.Y.<patch>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Minor {
+    pub major: u64,
+    pub minor: u64,
+}
+
+impl Minor {
+    /// `X.Y` and nothing else: two numbers of digits, one dot.
+    pub fn parse(text: &str) -> Option<Minor> {
+        let number = |n: &str| {
+            let plain = !n.is_empty() && n.len() <= 9 && n.bytes().all(|b| b.is_ascii_digit());
+            plain.then(|| n.parse().ok()).flatten()
+        };
+        let (major, minor) = text.split_once('.')?;
+        Some(Minor { major: number(major)?, minor: number(minor)? })
+    }
+
+    /// The minor a release version (`X.Y.Z[-pre][+build]`) is in.
+    pub fn of(version: &str) -> Option<Minor> {
+        let version = Version::parse(version).ok()?;
+        Some(Minor { major: version.major, minor: version.minor })
+    }
+}
+
+impl std::fmt::Display for Minor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
 pub fn latest_url() -> String {
     format!("{REGISTRY}/{PACKAGE}/latest")
+}
+
+/// `GET /sidevoice`: every version of the package.
+pub fn packument_url() -> String {
+    format!("{REGISTRY}/{PACKAGE}")
 }
 
 pub fn version_url(release: &Release) -> String {
@@ -186,27 +228,66 @@ pub fn expect_ok(response: &Response, url: &str) -> Result<(), Failure> {
     }
 }
 
-/// A registry document (at most [`DOCUMENT_LIMIT`]).
-fn document(fetch: &dyn Fetch, url: &str) -> Result<Vec<u8>, Failure> {
+/// A registry document (at most `limit`).
+fn document(fetch: &dyn Fetch, url: &str, limit: u64) -> Result<Vec<u8>, Failure> {
     debug_assert!(url.starts_with(&format!("{REGISTRY}/")));
     let response = fetch.get(url)?;
     expect_ok(&response, url)?;
     let mut bytes = Vec::new();
     response
         .body
-        .take(DOCUMENT_LIMIT + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| Failure::new("install.network", Step::Download, format!("{url}: {e}")))?;
-    if bytes.len() as u64 > DOCUMENT_LIMIT {
+    if bytes.len() as u64 > limit {
         return Err(manifest(format!("{url} is larger than a registry document.")));
     }
     Ok(bytes)
 }
 
-/// The latest release for `package` and where its tarball is: the two documents above.
-pub fn resolve(fetch: &dyn Fetch, package: &str) -> Result<(Release, Dist), Failure> {
-    let release = release(&document(fetch, &latest_url())?, package)?;
-    let dist = dist(&document(fetch, &version_url(&release))?, &release)?;
+/// The newest release in `minor` that `GET /sidevoice` lists: a plain `X.Y.Z`, never a pre-release, the highest patch.
+/// `None` when the registry lists none in that minor. A document that is not the package's is `install.authenticity`
+/// (`manifest`).
+pub fn newest_in_minor(packument: &[u8], minor: Minor) -> Result<Option<String>, Failure> {
+    let document: Value = serde_json::from_slice(packument)
+        .map_err(|e| manifest(format!("The registry's {PACKAGE} is not JSON: {e}")))?;
+    if document.get("name").and_then(Value::as_str) != Some(PACKAGE) {
+        return Err(manifest(format!("The registry's {PACKAGE} names another package.")));
+    }
+    let versions = document
+        .get("versions")
+        .and_then(Value::as_object)
+        .ok_or_else(|| manifest(format!("The registry's {PACKAGE} lists no versions.")))?;
+    Ok(versions
+        .keys()
+        .filter_map(|text| Version::parse(text).ok())
+        .filter(|v| v.pre.is_empty() && v.build.is_empty() && (v.major, v.minor) == (minor.major, minor.minor))
+        .max()
+        .map(|v| v.to_string()))
+}
+
+/// The newest release in `minor`, asked of the registry ([`newest_in_minor`] of its one document).
+pub fn latest_in_minor(fetch: &dyn Fetch, minor: Minor) -> Result<Option<String>, Failure> {
+    newest_in_minor(&document(fetch, &packument_url(), PACKUMENT_LIMIT)?, minor)
+}
+
+/// The release to install for `package` and where its tarball is: the latest `sidevoice`'s, or, with a `minor`, the
+/// newest patch of it (`install.no-bundle` when the registry has none); then the two documents above.
+pub fn resolve(fetch: &dyn Fetch, package: &str, minor: Option<Minor>) -> Result<(Release, Dist), Failure> {
+    let release = match minor {
+        None => release(&document(fetch, &latest_url(), DOCUMENT_LIMIT)?, package)?,
+        Some(minor) => {
+            let version = latest_in_minor(fetch, minor)?
+                .ok_or_else(|| no_bundle(format!("The registry has no {PACKAGE} {minor} release.")))?;
+            let url = format!("{REGISTRY}/{PACKAGE}/{version}");
+            let release = release(&document(fetch, &url, DOCUMENT_LIMIT)?, package)?;
+            if release.version != version {
+                return Err(manifest(format!("The registry answered {} for {PACKAGE} {version}.", release.version)));
+            }
+            release
+        }
+    };
+    let dist = dist(&document(fetch, &version_url(&release), DOCUMENT_LIMIT)?, &release)?;
     Ok((release, dist))
 }
 
@@ -382,6 +463,56 @@ mod tests {
         let short = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
         assert_eq!(sha512_of(&format!("sha512-{short}")), None, "64 bytes or nothing");
         assert_eq!(sha512_of(""), None);
+    }
+
+    #[test]
+    fn a_minor_is_two_plain_numbers() {
+        assert_eq!(Minor::parse("0.20"), Some(Minor { major: 0, minor: 20 }));
+        assert_eq!(Minor::parse("1.0").map(|m| m.to_string()).as_deref(), Some("1.0"));
+        for bad in ["", "0", "0.", ".20", "0.20.1", "v0.20", "0.20-rc", "0. 20", "-1.2", "+1.2", "0.２0", "1.2\n"] {
+            assert_eq!(Minor::parse(bad), None, "{bad:?}");
+        }
+        assert_eq!(Minor::of("0.20.3"), Minor::parse("0.20"));
+        assert_eq!(Minor::of("0.20.3-rc.1+abc"), Minor::parse("0.20"));
+        assert_eq!(Minor::of("0.20"), None);
+        assert!(Minor::parse("0.9") < Minor::parse("0.20"), "numbers, not text");
+    }
+
+    /// `GET /sidevoice` as the registry lists versions: trimmed to the keys the app reads.
+    fn packument(versions: &[&str]) -> Vec<u8> {
+        let versions: serde_json::Map<String, Value> =
+            versions.iter().map(|v| (v.to_string(), json!({"name": PACKAGE, "version": v}))).collect();
+        json!({"name": PACKAGE, "dist-tags": {"latest": "9.9.9"}, "versions": versions}).to_string().into_bytes()
+    }
+
+    #[test]
+    fn the_newest_patch_of_the_minor_is_picked_by_number() {
+        let document = packument(&["0.19.9", "0.20.0", "0.20.2", "0.20.10", "0.20.9", "0.21.0", "1.20.5"]);
+        let in_minor = |minor: &str| newest_in_minor(&document, Minor::parse(minor).unwrap()).unwrap();
+        assert_eq!(in_minor("0.20").as_deref(), Some("0.20.10"), "10 is after 9");
+        assert_eq!(in_minor("0.19").as_deref(), Some("0.19.9"));
+        assert_eq!(in_minor("0.21").as_deref(), Some("0.21.0"));
+        assert_eq!(in_minor("0.22"), None, "nothing released there yet");
+    }
+
+    #[test]
+    fn pre_releases_and_builds_are_never_the_newest() {
+        let document = packument(&["0.20.1", "0.20.2-rc.1", "0.20.3+abc123", "0.20.x", "0.20"]);
+        assert_eq!(newest_in_minor(&document, Minor::parse("0.20").unwrap()).unwrap().as_deref(), Some("0.20.1"));
+    }
+
+    #[test]
+    fn a_packument_that_is_not_the_packages_is_refused() {
+        let minor = Minor::parse("0.20").unwrap();
+        for bad in [
+            "nope".to_string(),
+            "[]".to_string(),
+            r#"{"name":"sidevoice-evil","versions":{"0.20.1":{}}}"#.to_string(),
+            r#"{"name":"sidevoice"}"#.to_string(),
+        ] {
+            let refused = newest_in_minor(bad.as_bytes(), minor).unwrap_err();
+            assert_eq!(refused.params, Some(json!({"check": "manifest"})), "{bad}");
+        }
     }
 
     #[test]

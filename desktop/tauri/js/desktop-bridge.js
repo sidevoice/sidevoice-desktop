@@ -162,6 +162,18 @@
       restart: action("restart"),
       serviceInstall: action("service-install"),
       serviceUninstall: action("service-uninstall"),
+      /** What this computer's service is against the minor this app works with (the bundled page's `service.pin.json`):
+       *  `{bridge, bundled, installed, core_api, update, latest, progress}`. `bundled` `{minor}` (`{}` when the page
+       *  pins none); `installed` `{version}` or `null`; `latest` the newest patch of that minor the npm registry
+       *  listed (asked at launch and every 6 h), `null` when unknown; `update` one of `current`, `available`,
+       *  `updating`, `waiting-call`, `newer-installed`, `incompatible`, `unknown`; `progress` 0 to 1 while `updating`,
+       *  else `null`. A service behind its minor's newest patch is updated by the app in the background, once no call
+       *  is on; a newer minor is never touched (docs/LOCAL_HOST.md → Updates). */
+      version: () => call("local_host_version").then((report) => ({ bridge: BRIDGE_VERSION, ...report })),
+      /** Asks the registry now and, if the service is behind, runs the update (the one the background update runs), then
+       *  resolves the state after it. While a call is on it changes nothing (`version().update` is `waiting-call`).
+       *  Rejects `update.unknown` (no pin, or nothing installed), `update.newer-installed`, and the install's keys. */
+      update: action("service-update"),
       /** Whether the service starts at the next sign-in, and only that: a running service keeps running, a stopped one
        *  stays stopped (the connector's `service login on|off`). `enabled` must be a boolean; anything else rejects
        *  `{key: "bad_request"}` without running anything. A connector that cannot do it rejects

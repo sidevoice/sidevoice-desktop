@@ -40,6 +40,11 @@ fn main() {
         let mut log = fs::OpenOptions::new().create(true).append(true).open(calls).unwrap();
         writeln!(log, "{}", args.join(" ")).unwrap();
     }
+    // What the installed program says it is (`--version --json`, in `host` mode), as an installer that updated it would.
+    if let Some(version) = config["set_version"].as_str() {
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("version"), json!(version).to_string()).unwrap();
+    }
     if config["install_record"] == true {
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join("install.json.tmp"), "{}").unwrap();

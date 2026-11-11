@@ -15,6 +15,8 @@
 //! - [`npm`], [`tarball`], [`install`]: preparing this computer from the app, without Node — the `sidevoice` package
 //!   from the npm registry (HTTPS, pinned to the registry, its SHA-512 checked), unpacked by hand into a private
 //!   directory, and its own installer run from there.
+//! - [`update`]: keeping the installed service at the newest patch of the minor the app pins — what `version()` says of
+//!   it, when the registry is asked, when a failed update is tried again; the install above runs it.
 //! - [`host`]: the startup cases, the poll, the actions and the install, tied together.
 //! - [`platform`]: the way to the OS. What differs per OS is `sidevoice_platform`'s (the local channel and its peer
 //!   check, child process trees and their bounded output, private files and programs); `platform` only drives its
@@ -44,6 +46,7 @@ mod runtime;
 pub mod state;
 pub mod store;
 pub mod tarball;
+pub mod update;
 
 use serde::Serialize;
 use std::fmt;
