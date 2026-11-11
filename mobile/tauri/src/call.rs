@@ -29,9 +29,10 @@ use std::time::{Duration, Instant};
 use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
 use crate::platform::interruption::{self, Interruption};
 use sidevoice_mobile_plugin::{
-    call_activates_audio, call_replaces_media_controls, clear_stills, forget_stills,
-    refresh_call_service, request_call_focus, save_still, start_call_service, stop_call_service,
-    update_call_service, CallDetails, CallEvent, CallSurface, StopReason, SurfaceAction,
+    call_activates_audio, call_replaces_media_controls, clear_stills, end_surface_now,
+    forget_stills, refresh_call_service, request_call_focus, save_still, start_call_service,
+    stop_call_service, update_call_service, CallDetails, CallEvent, CallSurface, StopReason,
+    SurfaceAction,
 };
 use sidevoice_shared::app::{AppHost, CallActivity};
 use sidevoice_shared::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
@@ -541,14 +542,18 @@ impl RoomCall {
         });
     }
 
-    /// Quitting: the service stops, waited for up to `limit`.
+    /// Quitting (on iOS also the person swiping the app away, `applicationWillTerminate`): the service stops, waited for
+    /// up to `limit`. The main thread is held until the process goes, so what the service hands to the main queue (the
+    /// Live Activity's end) would never run: the surface is ended here, waited for too.
     pub fn end(&self, limit: std::time::Duration) {
+        log::info!("call: quitting: ending the call");
         let (done, finished) = mpsc::channel();
         self.then(move |room| {
             room.hold(false, None);
             let _ = done.send(());
         });
         let _ = finished.recv_timeout(limit);
+        end_surface_now(limit);
     }
 }
 

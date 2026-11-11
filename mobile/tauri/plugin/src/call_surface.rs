@@ -406,6 +406,12 @@ pub(crate) fn end_surface() {
     platform::end();
 }
 
+/// Ends that surface as [`end_surface`] does, but done when this returns, or after `limit`: for the app quitting, where
+/// the main thread is held until the process goes.
+pub fn end_surface_now(limit: std::time::Duration) {
+    platform::end_now(limit);
+}
+
 /// Whether that surface is on the system's screens now, or on its way (see `platform::running`).
 pub(crate) fn surface_running() -> bool {
     platform::running()

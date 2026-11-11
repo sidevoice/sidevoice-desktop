@@ -30,6 +30,12 @@ trait Os {
     /// Ends it, and any an earlier run of the app left.
     fn end() {}
 
+    /// Ends it as `end` does, but done when this returns, or after `limit`: for the app's own end, when the main thread
+    /// is held until the process goes (iOS: the main queue `end` hands its work to never runs).
+    fn end_now(_limit: std::time::Duration) {
+        Self::end()
+    }
+
     /// A line for the system's log (iOS: the unified log, subsystem `ai.sidevoice`, public strings), where the app's own
     /// log file is not read by `log show`. Nothing elsewhere.
     fn os_log(_category: &str, _message: &str) {}
@@ -56,6 +62,10 @@ pub fn show(details: &str) {
 
 pub fn end() {
     Native::end()
+}
+
+pub fn end_now(limit: std::time::Duration) {
+    Native::end_now(limit)
 }
 
 pub fn running() -> bool {
