@@ -18,8 +18,8 @@ probe = []
 # builds first, uses flash attention, lists Supertonic's ten voices and classifies each build's accelerator. Its
 # sherpa-onnx backend links sherpa-onnx's static libraries
 # (SHERPA_ONNX_LIB_DIR), its whisper.cpp backend compiles whisper.cpp from source with CMake, with Metal on Apple
-# silicon and on iOS (0.12.0; docs/ENGINES.md).
-sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.12.0" }
+# silicon Macs and on the CPU on iOS (0.12.1, which drops Metal on iOS; docs/ENGINES.md).
+sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.12.1" }
 # The voice call itself: sidevoice-voice with its native microphone and speaker (cpal) and Sonora's pure-Rust echo
 # cancellation between them (no C++ to build), on the models the engine gives it (src/voice/models.rs). It depends on
 # no engine. The candidate source: a try's take (StartOptions, VoiceEvent::Take), the pause in the person's speech,
