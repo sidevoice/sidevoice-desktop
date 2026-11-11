@@ -28,6 +28,9 @@ use std::thread;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 
+/// The TCP port its record says it bound: the core's default (it listens on its local channel only; nothing is on this port).
+pub const PORT: u16 = 10829;
+
 const DESKTOP_ORIGINS: [&str; 3] = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
 
 #[derive(Default)]
@@ -96,7 +99,9 @@ impl FakeCore {
                 };
                 if let Err(error) = Files::write_private(
                     &serving.record,
-                    json!({"pid": std::process::id(), "endpoint": endpoint.to_string()}).to_string().as_bytes(),
+                    json!({"pid": std::process::id(), "port": PORT, "endpoint": endpoint.to_string()})
+                        .to_string()
+                        .as_bytes(),
                 ) {
                     let _ = ready.send(Err(error));
                     return;

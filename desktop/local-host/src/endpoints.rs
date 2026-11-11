@@ -24,10 +24,21 @@ const RECORD_LIMIT: u64 = 64 * 1024;
 /// The core's endpoint, from `C/core.json`: `C` private to this user, the record private too (it holds the core's
 /// token).
 pub fn core(dirs: &DataDirs) -> Result<Endpoint, Check> {
+    endpoint(&core_record(dirs)?, &dirs.core_record())
+}
+
+/// The TCP port the core listens on, as it wrote it in `C/core.json` once it bound it (`port`: what a requested port 0
+/// became, too). Not the port in the page's local pairing, which is the app's own proxy's, new at each launch. `None`
+/// with no record, an unsafe one, or a `port` that is not a port.
+pub fn core_port(dirs: &DataDirs) -> Option<u16> {
+    let port = core_record(dirs).ok()?.get("port")?.as_u64()?;
+    u16::try_from(port).ok().filter(|port| *port != 0)
+}
+
+fn core_record(dirs: &DataDirs) -> Result<Value, Check> {
     let dir = HeldDirectory::open(&dirs.core(), Access::Private)
         .map_err(|e| crate::checks::storage_error(&dirs.core(), "identity.unsafe-directory", e))?;
-    let record = read(&dir, &dirs.core_record(), Access::Private, "identity.unsafe-directory")?;
-    endpoint(&record, &dirs.core_record())
+    read(&dir, &dirs.core_record(), Access::Private, "identity.unsafe-directory")
 }
 
 /// The connector's endpoint, from `D/connector.json`, when its `pid` is alive (a live process, not a zombie, as
@@ -125,6 +136,31 @@ mod tests {
             write(&dirs.core_record(), bad);
             assert!(matches!(core(&dirs), Err(Check::Unsafe(r)) if r.key == "endpoint.record-invalid"), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_core_port_is_the_one_its_record_says_it_bound() {
+        let (_tmp, dirs) = dirs();
+        assert_eq!(core_port(&dirs), None, "no record");
+        for (record, port) in [
+            (r#"{"port":10829,"endpoint":"/run/user/1/x/local.sock"}"#, Some(10829)),
+            (r#"{"port":56446}"#, Some(56446)),
+            (r#"{"port":65535}"#, Some(65535)),
+            (r#"{"port":0}"#, None),
+            (r#"{"port":65536}"#, None),
+            (r#"{"port":-1}"#, None),
+            (r#"{"port":"10829"}"#, None),
+            (r#"{"port":10829.5}"#, None),
+            (r#"{"endpoint":"/run/user/1/x/local.sock"}"#, None),
+            ("nope", None),
+        ] {
+            write(&dirs.core_record(), record);
+            assert_eq!(core_port(&dirs), port, "{record}");
+        }
+        // The record is read as the endpoint's is: one others can read says nothing.
+        write(&dirs.core_record(), r#"{"port":10829}"#);
+        StorageFixtures::readable(&dirs.core_record());
+        assert_eq!(core_port(&dirs), None);
     }
 
     #[test]

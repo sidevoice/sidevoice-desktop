@@ -119,6 +119,23 @@ fn pairs_over_the_socket_and_the_page_gets_only_the_secret() {
 }
 
 #[test]
+fn the_state_names_the_cores_own_port_not_the_proxys() {
+    let world = World::new();
+    let core = world.core(1);
+    let host = world.host();
+    let (port, _) = running(&host);
+    let state = serde_json::to_value(host.state()).unwrap();
+    assert_eq!(state["core"]["port"], fake_core::PORT, "the port the core bound, from its record");
+    let urls = host.pairing().unwrap()["urls"].clone();
+    assert_eq!(urls, json!([format!("http://127.0.0.1:{port}")]), "the page's locator is the app's own proxy");
+    assert_ne!(port, fake_core::PORT, "which is another port, new at each launch");
+    // No core, no port: the record of a core that left says nothing of a service that is not there.
+    core.stop();
+    let state = serde_json::to_value(host.poll()).unwrap();
+    assert_eq!(state["core"], Value::Null);
+}
+
+#[test]
 fn the_proxy_forwards_with_the_token_and_answers_preflights_itself() {
     let world = World::new();
     let core = world.core(1);
