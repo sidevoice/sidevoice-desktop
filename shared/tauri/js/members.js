@@ -41,6 +41,11 @@
        *  family and builds). One that cannot list (a provider with no key) has `models: []` and says why in `status`.
        *  Rejects `{code}` only when the engine itself fails. */
       catalogs: () => coded(call("engine_catalogs")),
+      /** `{stt: {choice?, ranked}, tts: {choice?, ranked}}`, each pick `{model, build}`: what the engine recommends
+       *  here for a person whose transcription hears `languages.stt` and whose voice says `languages.tts` (BCP 47 tags;
+       *  absent or null, no language to prefer). The local catalogue's `recommend` on the web. */
+      recommend: (languages) =>
+        coded(call("engine_recommend", { stt: languages?.stt ?? null, tts: languages?.tts ?? null })),
       /** Keeps `key` for remote catalogue `provider` in the keychain, or removes it (`null` or blank); that provider is
        *  then listed again with it. */
       setCredential: (provider, key) =>

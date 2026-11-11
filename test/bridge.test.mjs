@@ -430,8 +430,8 @@ test("the engine is exactly the contract: its catalogues and keys, what runs her
   };
   const engine = install(win, ORIGIN).host.engine;
   assert.deepEqual(Object.keys(engine).sort(), [
-    "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "refresh", "setCredential",
-    "testCredential", "uninstall",
+    "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "recommend", "refresh",
+    "setCredential", "testCredential", "uninstall",
   ]);
   assert.ok(Object.isFrozen(engine));
 

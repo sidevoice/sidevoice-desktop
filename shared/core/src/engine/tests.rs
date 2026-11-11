@@ -5,7 +5,7 @@
 use super::*;
 use sidevoice_engine::{
     async_trait, Accelerator, Capabilities, CatalogFragment, Credentials, Download, Family, Fetcher, HttpClient,
-    HttpRequest, HttpResponse, Runs, Storage,
+    HttpRequest, HttpResponse, ListEntry, RecommendedLists, Runs, Storage,
 };
 use std::path::Path;
 
@@ -77,12 +77,18 @@ impl Host for TestHost {
 
 /// A catalogue of one Whisper model, `whisper-test`, whose sherpa-onnx build is three files served by the test host,
 /// and one Kokoro-like voice model whose build needs more memory than any machine has (and, `shared`, more: see
-/// `engines_with`).
+/// `engines_with`); each is the one model of its list of models to recommend.
 struct TestCatalog(Vec<Family>);
 
 impl CatalogSource for TestCatalog {
     fn load(&self) -> sidevoice_engine::Result<CatalogFragment> {
-        Ok(CatalogFragment { families: self.0.clone() })
+        let entry = |model: &str| ListEntry { model: model.to_string(), on: None };
+        let recommended = RecommendedLists {
+            basis: "test".to_string(),
+            stt: vec![entry("whisper-test")],
+            tts: vec![entry("kokoro-test")],
+        };
+        Ok(CatalogFragment { families: self.0.clone(), recommended })
     }
 }
 
@@ -208,6 +214,7 @@ fn capabilities_report_explicit_host_identity_and_memory() {
         accelerators: vec![Accelerator::Cpu],
         memory_mb: Some(2048),
         cores: Some(4),
+        gpu_stops_in_background: false,
     };
     let test = engines_with_capabilities("explicit-capabilities", false, false, Some(supplied));
     let json = serde_json::to_value(&test.engines.device).unwrap();
@@ -440,12 +447,25 @@ fn the_catalogues_are_the_local_one_then_each_provider_in_the_pages_shape() {
     }
     assert_eq!(build["accelerator"], "cpu");
     assert_eq!(build["acceleratorClass"], "cpu");
+    assert_eq!(build["stopsInBackground"], false, "on the CPU it keeps working in the background");
     for remote in &views[1..] {
         assert!(remote.name.is_some(), "a provider has a name");
         assert!(remote.models.is_empty(), "{} lists nothing without a key", remote.id);
         assert_eq!(remote.status.reason.as_ref().map(|r| r.code.as_str()), Some("credential-missing"));
     }
     assert_eq!(test.engines.refresh("no-such").unwrap_err().key, "catalog_not_found");
+}
+
+/// What the engine recommends reaches the page in `@sidevoice/engine`'s shape: the Whisper model of the speech-to-text
+/// list, with its recommended build; nothing for text to speech, whose one model does not fit here (no `choice`).
+#[test]
+fn the_recommendation_is_the_engines_in_the_pages_shape() {
+    let test = engines("recommend", false);
+    let view = test.engines.recommend(Some("es".to_string()), None).unwrap();
+    let json = serde_json::to_value(&view).unwrap();
+    let pick = serde_json::json!({"model": "whisper-test", "build": "whisper-test/sherpa-onnx-int8"});
+    assert_eq!(json["stt"], serde_json::json!({"choice": pick, "ranked": [pick]}));
+    assert_eq!(json["tts"], serde_json::json!({"ranked": []}));
 }
 
 /// The engine owns the classification; the bridge uses its stable ids and omits both fields when no accelerator is

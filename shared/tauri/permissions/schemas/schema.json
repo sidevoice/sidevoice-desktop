@@ -415,6 +415,18 @@
           "markdownDescription": "Denies the engine_progress command without any pre-configured scope."
         },
         {
+          "description": "Enables the engine_recommend command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-engine-recommend",
+          "markdownDescription": "Enables the engine_recommend command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the engine_recommend command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-engine-recommend",
+          "markdownDescription": "Denies the engine_recommend command without any pre-configured scope."
+        },
+        {
           "description": "Enables the engine_refresh command without any pre-configured scope.",
           "type": "string",
           "const": "allow-engine-refresh",

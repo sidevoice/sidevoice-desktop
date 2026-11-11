@@ -20,14 +20,14 @@ pub mod error;
 mod jobs;
 mod trial;
 
-pub use catalogs::{CatalogView, CredentialRefusal, ReasonView};
+pub use catalogs::{CatalogView, CredentialRefusal, ReasonView, RecommendationView};
 pub use error::Error;
 pub use jobs::{Jobs, Progress};
 /// The engine crate itself, for what the app hands it (`Credentials`) and the models it loads.
 pub use sidevoice_engine;
 use sidevoice_engine::{
-    Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, LocalModelInfo, MemoryObservation,
-    ModelBuild, NativeHost, LOCAL_CATALOG,
+    Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, Languages, LocalModelInfo,
+    MemoryObservation, ModelBuild, NativeHost, LOCAL_CATALOG,
 };
 use std::future::Future;
 use std::path::PathBuf;
@@ -221,6 +221,16 @@ impl NativeEngines {
     pub fn models(&self) -> Result<Vec<LocalModelInfo>, Error> {
         self.block_on(self.engine.local_catalog().models(None))
             .map_err(|e| error::internal(format!("the engine's models: {e}")))
+    }
+
+    /// What the engine recommends here for speech to text and text to speech (sidevoice-engine's
+    /// `LocalCatalog::recommend`), for a person whose transcription hears `stt` and whose voice says `tts` (BCP 47 tags;
+    /// `None`, no language to prefer): for each, the model to start with and its build, and its list as it stands here.
+    pub fn recommend(&self, stt: Option<String>, tts: Option<String>) -> Result<RecommendationView, Error> {
+        let languages = Languages { stt, tts };
+        self.block_on(self.engine.local_catalog().recommend(&languages))
+            .map(|recommendation| catalogs::recommendation(&recommendation))
+            .map_err(|e| error::internal(format!("the engine's recommendation: {e}")))
     }
 
     /// Every catalogue of the engine, the local one first, each with how it stands and every model it lists. One that

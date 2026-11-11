@@ -51,10 +51,14 @@ test("the engine's calls reach the app through the transport, and a refusal is c
   });
   const engine = makeMembers(fakeWindow().win, transport).engine();
   assert.deepEqual(plain(await engine.catalogs()), []);
+  await engine.recommend({ stt: "es-ES", tts: "es" });
+  await engine.recommend();
   await engine.setCredential("openai", "sk-1");
   await assert.rejects(engine.hasCredential("openai"), { key: "bad_request", code: "bad-request" });
   assert.deepEqual(calls, [
     ["engine_catalogs", undefined],
+    ["engine_recommend", { stt: "es-ES", tts: "es" }],
+    ["engine_recommend", { stt: null, tts: null }],
     ["engine_set_credential", { provider: "openai", key: "sk-1" }],
     ["engine_has_credential", { provider: "openai" }],
   ]);

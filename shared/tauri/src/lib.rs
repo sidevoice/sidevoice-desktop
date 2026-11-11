@@ -70,6 +70,7 @@ pub fn init<R: Runtime>(
             engine::engine_uninstall,
             engine::engine_memory,
             engine::engine_catalogs,
+            engine::engine_recommend,
             engine::engine_set_credential,
             engine::engine_has_credential,
             engine::engine_test_credential,

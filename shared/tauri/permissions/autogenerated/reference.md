@@ -270,6 +270,32 @@ Denies the engine_progress command without any pre-configured scope.
 <tr>
 <td>
 
+`sidevoice-shared-tauri:allow-engine-recommend`
+
+</td>
+<td>
+
+Enables the engine_recommend command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:deny-engine-recommend`
+
+</td>
+<td>
+
+Denies the engine_recommend command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `sidevoice-shared-tauri:allow-engine-refresh`
 
 </td>

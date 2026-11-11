@@ -34,6 +34,7 @@ card's window none, no other window any).
 | `engine_uninstall` | `sidevoice-shared-tauri:allow-engine-uninstall` | room | room page | `model` | nothing | no |
 | `engine_memory` | `sidevoice-shared-tauri:allow-engine-memory` | room | room page | none | nothing | no |
 | `engine_catalogs` | `sidevoice-shared-tauri:allow-engine-catalogs` | room | room page | none | nothing | no |
+| `engine_recommend` | `sidevoice-shared-tauri:allow-engine-recommend` | room | room page | `stt?`, `tts?` | nothing | no |
 | `engine_set_credential` | `sidevoice-shared-tauri:allow-engine-set-credential` | room | room page | `provider`, `key?` | nothing (the key is never returned or logged) | no |
 | `engine_has_credential` | `sidevoice-shared-tauri:allow-engine-has-credential` | room | room page | `provider` | nothing | no |
 | `engine_test_credential` | `sidevoice-shared-tauri:allow-engine-test-credential` | room | room page | `provider`, `key` | nothing (the key is never kept or logged) | no |
