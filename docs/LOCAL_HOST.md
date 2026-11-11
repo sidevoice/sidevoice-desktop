@@ -285,9 +285,12 @@ nothing of the registry and updates nothing, and `version()` says `update: "unkn
   person stopped meanwhile (`update.stopped-by-person`) or one removed meanwhile (`update.not-installed`) stops the
   update there, nothing changed and not a failure.
 - **What the person does comes first.** A service action (`start`, `stop`, `restart`, install and uninstall of the
-  service, start at sign-in) while the app's own update runs cancels it if its installer has not started (it waits for
-  the update to end, then runs; nothing was changed), and is refused `install.busy` once it has (the installer restarts
-  the service: a stop would be undone).
+  service, start at sign-in) is counted from before it runs until the state after it has been read, and for that long
+  no update of the app's own begins, goes on to its installer or is waited on by `update()` (the connector is still
+  stopping or removing the service, and the state an update reads is not yet the person's). An update under way whose
+  installer has not started is cancelled by the action, which goes on at once: a cancelled update can no longer reach
+  its installer, wherever it is in its download or unpacking, and ends on its own. Once its installer has started the
+  action is refused `install.busy` (the installer restarts the service: a stop would be undone).
 - **Never a newer minor.** An installed service of a newer minor than the pin (`0.21` by hand, an app on `0.20`) is never
   touched: `update: "newer-installed"`.
 - **A service the person stopped** (`stopped-by-person`) is left as it is: the installer would start it. It stays
@@ -296,12 +299,15 @@ nothing of the registry and updates nothing, and `version()` says `update: "unkn
   and the person's own `update()` always tries. One that failed before its installer ran and changed nothing here (the
   registry, the download, a cancel) is tried again after 15 min; one whose installer ran (it was rolled back, did not
   start, or said ok and the installed version did not change: `update.unchanged`) after 6 h, since each try restarts the
-  service. The app shows no failure of its own (`version()` keeps saying `available`); it is in the app's log.
+  service. One the last check held (a call, a stop, a removal; not a failure, and not logged as one) is tried again after
+  1 min, so that a cached poll that disagrees with the fresh check does not download the release at every pass, while the
+  update still runs soon after a call ends. The app shows no failure of its own (`version()` keeps saying `available`);
+  it is in the app's log.
 - **A data reset** under way keeps it out (it holds the same admission every action does), and the install the person
-  asks for (`install()`) installs the pinned minor's newest patch too, not the registry's latest — unless something is
-  installed that it could downgrade: a newer minor, or an install whose version cannot be told; then it is the latest, as
-  before the pin. Quitting the app while an update runs does not stop it (as with an install): its installer ends it or
-  rolls it back on its own.
+  asks for (`install()`) installs the pinned minor's newest patch too, not the registry's latest — or, when what is
+  installed is of a newer minor, that minor's newest patch (never a downgrade, and never a move to another minor: with
+  none in the registry it is `install.no-bundle`); a version that cannot be read does not leave the pin. Quitting the
+  app while an update runs does not stop it (as with an install): its installer ends it or rolls it back on its own.
 
 **`version()`**: `{bridge, bundled, installed, core_api, update, latest, progress}` (docs/BRIDGE.md). `update` is decided
 in this order: an install or update running → `updating`; no pin or no installed version → `unknown`; installed minor

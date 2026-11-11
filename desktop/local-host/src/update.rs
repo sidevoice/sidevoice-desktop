@@ -27,6 +27,10 @@ pub const RETRY_AFTER: Duration = Duration::from_secs(6 * 3600);
 /// How long one that failed before its installer ran — the registry or the download, or a cancel — waits: nothing was
 /// changed on this computer, so it is tried again soon.
 pub const RETRY_SOON: Duration = Duration::from_secs(15 * 60);
+/// How long one that the last check before its installer held (a call, a stop, a removal) waits: it changed nothing, and
+/// must run soon after the call ends, but a cached poll that disagrees with that fresh check must not download the
+/// release again at every pass.
+pub const RETRY_GATE: Duration = Duration::from_secs(60);
 
 /// The minor the bundled page pins: its `service.pin.json`, `{"minor": "X.Y"}`. Anything else — a file that is not
 /// JSON (the bundle answers a missing file with its index page), no `minor`, a minor that is not `X.Y` — is no pin.
@@ -365,6 +369,8 @@ mod tests {
         updates.checked(start, Some(Some("0.20.3".into())));
         updates.update_failed(start, RETRY_SOON);
         assert_eq!(RETRY_SOON, Duration::from_secs(900));
+        assert_eq!(RETRY_GATE, Duration::from_secs(60));
+        assert!(RETRY_GATE < RETRY_SOON && RETRY_SOON < RETRY_AFTER);
         assert!(updates.holding_off(start + RETRY_SOON - Duration::from_secs(1)));
         assert!(!updates.holding_off(start + RETRY_SOON));
         updates.update_failed(start, RETRY_AFTER);

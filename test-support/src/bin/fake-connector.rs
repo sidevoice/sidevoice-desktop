@@ -115,6 +115,14 @@ fn main() {
                     );
                     std::process::exit(1);
                 }
+                // A stop the test holds half-done (`D/hold-stop`): leaves `D/stop-running`, and answers once the hold is gone.
+                "service stop" if data.join("hold-stop").exists() => {
+                    fs::write(data.join("stop-running"), "").unwrap();
+                    while data.join("hold-stop").exists() {
+                        sleep(20);
+                    }
+                    emit(&json!({"ok":true,"state":"stopped-by-person","service":"launchd"}));
+                }
                 "service start" => {
                     emit(&json!({"ok":false,"error":{"key":"service.not-loaded","message":"m"}}));
                     std::process::exit(1);

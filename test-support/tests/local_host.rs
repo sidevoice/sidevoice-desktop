@@ -1080,13 +1080,18 @@ impl Drop for StopsHost<'_> {
 }
 
 /// Runs the background update (`keep_current`) beside `body`, polling as the app does, and stops it after.
-fn keeping_current(host: &Arc<LocalHost>, registry: &FakeRegistry, options: &install::Options, body: impl FnOnce()) {
+fn keeping_current<T>(
+    host: &Arc<LocalHost>,
+    registry: &FakeRegistry,
+    options: &install::Options,
+    body: impl FnOnce() -> T,
+) -> T {
     host.watch();
     std::thread::scope(|scope| {
         let _stops = StopsHost(host);
         scope.spawn(|| host.keep_current(registry, options, || Some(())));
-        body();
-    });
+        body()
+    })
 }
 
 #[test]
@@ -1448,20 +1453,132 @@ fn an_installer_that_says_ok_and_changes_nothing_is_not_asked_again_at_every_pas
 }
 
 #[test]
-fn the_install_never_downgrades_a_newer_minor_or_one_it_cannot_read() {
-    for (version, why) in [(json!("0.21.0"), "a newer minor"), (json!("unknown"), "a version that cannot be told")] {
+fn the_install_takes_the_pin_or_the_installed_minor_and_never_another() {
+    let registry_at = |world: &World, version: &str| {
+        let registry = fixture::release(
+            Path::new(env!("CARGO_BIN_EXE_fake-connector")),
+            version,
+            PLATFORM,
+            &json!({"ran": world.installer_ran(), "response": {"ok": true, "action": "updated", "version": version}}),
+        );
+        registry.list(&["0.19.9", "0.20.2", "0.21.0", "0.21.1"]);
+        registry
+    };
+    let installs = |installed: Value, registry_version: &str| {
         let world = World::new();
-        installed(&world, "0.0.0");
-        set_version(&world.dirs, version);
+        installed_core(&world, installed);
         let host = world.host_pinning(Some(PINNED));
         host.poll();
-        let registry = world.registry_at_0_20_2(0.0);
-        host.begin_install("again").unwrap().run(&registry, &install_options(&world)).unwrap();
-        let asked = registry.asked();
-        assert!(
-            asked.iter().any(|url| url.ends_with("/sidevoice/latest")),
-            "{why}: the latest, not the pin: {asked:?}"
-        );
-        assert!(!asked.contains(&"https://registry.npmjs.org/sidevoice".to_string()), "{why}: {asked:?}");
-    }
+        let registry = registry_at(&world, registry_version);
+        let outcome = host.begin_install("again").unwrap().run(&registry, &install_options(&world));
+        (outcome, registry.asked())
+    };
+    let url = |path: &str| format!("https://registry.npmjs.org/{path}");
+
+    // A newer minor stays on its own minor, at its newest patch: not on the pin (a downgrade), not on the latest.
+    let (outcome, asked) = installs(json!("0.21.0"), "0.21.1");
+    outcome.expect("installed");
+    assert!(asked.contains(&url("sidevoice/0.21.1")), "{asked:?}");
+    assert!(
+        !asked.iter().any(|asked| asked.ends_with("/sidevoice/latest") || asked.ends_with("/sidevoice/0.20.2")),
+        "{asked:?}"
+    );
+
+    // A pre-release of a minor the registry has no release of is no reason to install another: it is refused, nothing
+    // downloaded.
+    let (outcome, asked) = installs(json!("0.22.0-next.1"), "0.20.2");
+    assert_eq!(outcome.unwrap_err().key, "install.no-bundle");
+    assert_eq!(asked, [url("sidevoice")], "{asked:?}");
+
+    // A version that cannot be read is no reason to leave the pin: not the latest either.
+    let (outcome, asked) = installs(json!("unknown"), "0.20.2");
+    outcome.expect("installed");
+    assert!(asked.contains(&url("sidevoice/0.20.2")), "{asked:?}");
+    assert!(!asked.iter().any(|asked| asked.ends_with("/sidevoice/latest")), "{asked:?}");
+
+    // The pinned minor itself, at an older patch, is the ordinary case.
+    let (outcome, asked) = installs(json!("0.20.0"), "0.20.2");
+    outcome.expect("installed");
+    assert!(asked.contains(&url("sidevoice/0.20.2")), "{asked:?}");
+}
+
+/// An installed service of `version` (as its program says), with its core up.
+fn installed_core(world: &World, version: Value) -> Arc<FakeCore> {
+    let core = world.core(1);
+    install_fake_cli(&world.dirs, STATUS_RUNNING);
+    set_version(&world.dirs, version);
+    core
+}
+
+#[test]
+fn a_service_action_under_way_keeps_every_update_out_until_it_is_done() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    let registry = world.registry_at_0_20_2(0.0);
+    let hold = world.dirs.data.join("hold-stop");
+    std::fs::write(&hold, "").unwrap();
+    let options = install_options(&world);
+    let (acted, asked_to_update) = std::thread::scope(|scope| {
+        // The person stops it; the connector's `service stop` is still running, so the state still says it runs.
+        let stopping = scope.spawn(|| host.act(Action::Stop));
+        wait_for("the stop is under way", || world.dirs.data.join("stop-running").exists());
+        assert_eq!(host.state().state, State::Running, "the last poll still has the service up");
+        // The person's own update asked meanwhile waits for the action, and then finds the service stopped.
+        let updating = scope.spawn(|| host.update(&registry, &options));
+        // The background loop, which would find the service behind and up, begins nothing for as long as the stop runs.
+        let acted = keeping_current(&host, &registry, &options, || {
+            wait_for("the registry is asked", || host.version()["latest"] == "0.20.2");
+            std::thread::sleep(Duration::from_millis(4500));
+            assert_eq!(tarball_fetches(&registry), 0, "nothing downloaded while the stop runs");
+            assert!(!world.installer_ran().exists());
+            // The stop ends: the service is stopped from now on.
+            fixture::configure(
+                &fake_cli(&world.dirs),
+                &json!({"mode": "host", "status": {"ok": true, "state": "stopped-by-person", "service": "launchd"}}),
+            )
+            .unwrap();
+            std::fs::remove_file(&hold).unwrap();
+            let acted = stopping.join().unwrap();
+            let asked_to_update = updating.join().unwrap();
+            // And stays so: the loop leaves a stopped service alone.
+            std::thread::sleep(Duration::from_millis(2500));
+            (acted, asked_to_update)
+        });
+        acted
+    });
+    assert_eq!(acted.expect("the stop ran").state, State::StoppedByPerson);
+    assert_eq!(asked_to_update.unwrap_err().key, install::STOPPED);
+    assert!(!world.installer_ran().exists(), "the stop was never undone by an installer");
+    assert_eq!(tarball_fetches(&registry), 0);
+    assert_eq!(host.state().state, State::StoppedByPerson);
+}
+
+#[test]
+fn what_the_last_check_held_is_not_downloaded_again_at_every_pass() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    let (port, secret) = running(&host);
+    let registry = world.registry_at_0_20_2(0.0);
+    let (call, status, _) = ws_handshake(port, &format!("sidevoice, sidevoice.token.{secret}"), "tauri://localhost");
+    assert_eq!(status, 101);
+    // The host does not know of the call yet: the update downloads, and the last check holds it.
+    assert_eq!(host.state().calls, Some(0));
+    host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(tarball_fetches(&registry), 1);
+    // The call ends at once; the poll that disagreed with the fresh check agrees with it now. The background update is
+    // not run again for a minute (it is the hold-off, not the poll, that keeps it out here).
+    drop(call);
+    wait_for("the host sees the call end", || host.poll().calls == Some(0));
+    keeping_current(&host, &registry, &install_options(&world), || {
+        wait_for("the registry is asked", || host.version()["latest"] == "0.20.2");
+        std::thread::sleep(Duration::from_millis(4500));
+    });
+    assert_eq!(tarball_fetches(&registry), 1, "held off for a short while after the last check said no");
+    assert!(!world.installer_ran().exists());
+    // The person's own update is never held off.
+    let report = host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(report.product_version.as_deref(), Some("0.20.2"), "{report:?}");
 }
