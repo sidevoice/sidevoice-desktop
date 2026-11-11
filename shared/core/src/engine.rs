@@ -227,6 +227,8 @@ impl NativeEngines {
     /// `LocalCatalog::recommend`), for a person whose transcription hears `stt` and whose voice says `tts` (BCP 47 tags;
     /// `None`, no language to prefer): for each, the model to start with and its build, and its list as it stands here.
     pub fn recommend(&self, stt: Option<String>, tts: Option<String>) -> Result<RecommendationView, Error> {
+        // The rest defaulted, so a language the engine adds later (another capability's) needs no change here.
+        #[allow(clippy::needless_update, reason = "every field is set today; the base keeps a later field defaulted")]
         let languages = Languages { stt, tts, ..Default::default() };
         self.block_on(self.engine.local_catalog().recommend(&languages))
             .map(|recommendation| catalogs::recommendation(&recommendation))
