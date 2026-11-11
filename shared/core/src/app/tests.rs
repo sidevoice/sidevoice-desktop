@@ -90,6 +90,7 @@ fn work_that_loads_models_keeps_its_lease_when_the_caller_gives_up_waiting() {
         keys: Arc::new(Nowhere),
         calls: Arc::new(NoCallActivity),
         downloads: Arc::new(NoDownloadActivity),
+        inputs: Arc::new(NoInputRoute),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },
@@ -136,6 +137,7 @@ fn host_on(runtime: &tokio::runtime::Runtime, name: &str) -> (AppHost<Silent>, A
         keys: Arc::new(Nowhere),
         calls: Arc::new(NoCallActivity),
         downloads: Arc::new(NoDownloadActivity),
+        inputs: Arc::new(NoInputRoute),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },
@@ -261,6 +263,7 @@ fn what_a_call_of_an_old_page_says_is_dropped_once_the_next_page_is_current() {
         keys: Arc::new(Nowhere),
         calls: Arc::new(NoCallActivity),
         downloads: Arc::new(NoDownloadActivity),
+        inputs: Arc::new(NoInputRoute),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },

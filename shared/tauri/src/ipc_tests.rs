@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 use sidevoice_shared::app::{
-    AlwaysAdmit, AppHost, EventSink, Hooks, HostConfig, KeyError, NoCallActivity, NoDownloadActivity, PageGeneration,
-    ProviderKeys,
+    AlwaysAdmit, AppHost, EventSink, Hooks, HostConfig, KeyError, NoCallActivity, NoDownloadActivity, NoInputRoute,
+    PageGeneration, ProviderKeys,
 };
 use tauri::ipc::{CallbackFn, InvokeBody, RuntimeAuthority};
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
@@ -116,6 +116,7 @@ fn fixture_where(name: &str, windows: &[&str], own: &'static str) -> Fixture {
         keys: Arc::new(Nowhere),
         calls: Arc::new(NoCallActivity),
         downloads: Arc::new(NoDownloadActivity),
+        inputs: Arc::new(NoInputRoute),
     };
     app.manage(AppHost::new(
         HostConfig { model_root: root.clone() },
