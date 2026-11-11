@@ -152,7 +152,7 @@ extension Fixture {
     }
 
     /// Every fixture the harness shoots (`dark`: in dark appearance too): each state; mic off; English for the states with words; long texts in both
-    /// languages; stills missing; 6 and 9 conversations.
+    /// languages; stills missing; 0, 1, 2, 3 and 7 other conversations.
     static var all: [Fixture] {
         var all: [Fixture] = []
         for phase in phases {
@@ -177,8 +177,12 @@ extension Fixture {
         for phase in ["working", "listening"] {
             all.append(Fixture(name: "\(phase)-no-still", details: details(phase, stills: false), dark: true))
         }
-        for count in [1, 6, 9] {
-            all.append(Fixture(name: "working-conversations-\(count)", details: details("working", conversations: count)))
+        // 0, 1, 2, 3 and 7 other conversations (the count includes the call's own): no stack, 1 to 3 faces, and three
+        // faces of seven; in both appearances.
+        for others in [0, 1, 2, 3, 7] {
+            all.append(
+                Fixture(
+                    name: "working-others-\(others)", details: details("working", conversations: others + 1), dark: true))
         }
         return all
     }
