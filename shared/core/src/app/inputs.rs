@@ -112,6 +112,7 @@ mod tests {
             outputs: vec![input("out")],
             input: None,
             output: None,
+            output_selectable: false,
             lost: None,
         }
     }
