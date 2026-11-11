@@ -506,11 +506,7 @@ fn the_bundled_supertonic_voices_reach_the_page() {
     let engines = NativeEngines::new(&root, sidevoice_engine::NoCredentials, runtime.handle().clone()).unwrap();
     let models = serde_json::to_value(&engines.catalogs().unwrap()[0].models).unwrap();
     for (model_id, ids, languages) in [
-        (
-            "supertonic-2",
-            (0..10).map(|i| i.to_string()).collect::<Vec<_>>(),
-            vec!["en", "ko", "es", "pt", "fr"],
-        ),
+        ("supertonic-2", (0..10).map(|i| i.to_string()).collect::<Vec<_>>(), vec!["en", "ko", "es", "pt", "fr"]),
         (
             "supertonic-3",
             (0..10).map(|i| i.to_string()).collect::<Vec<_>>(),
