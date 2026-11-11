@@ -170,6 +170,8 @@ struct Inner {
     force_pair: bool,
     /// The registry's newest patch of the pinned minor, and how the app's own updates went.
     updates: Updates,
+    /// Whether a core answered at the last pass: with none, there is no call to count.
+    core_up: bool,
 }
 
 pub struct LocalHost {
@@ -207,6 +209,7 @@ impl LocalHost {
                 product: None,
                 force_pair: false,
                 updates: Updates::default(),
+                core_up: false,
             }),
             passes: Mutex::new(()),
             install: Mutex::new(None),
@@ -226,7 +229,8 @@ impl LocalHost {
         });
     }
 
-    /// Stops the poll and the proxy; every tunnel closes.
+    /// Stops the poll and the proxy; every tunnel closes. An install or an update already running is not stopped: it
+    /// ends on its own (its installer rolls back what it did not finish verifying), as it would with the app killed.
     pub fn shutdown(&self) {
         self.stopped.store(true, Ordering::SeqCst);
         self.proxy.stop();
@@ -305,6 +309,7 @@ impl LocalHost {
             (self.log)(&format!("local-host state {}", json!(report.state).as_str().unwrap_or("?")));
         }
         inner.report = report.clone();
+        inner.core_up = health.is_ok();
         report
     }
 
@@ -477,6 +482,7 @@ impl LocalHost {
     /// Runs a service action, then a fresh pass (the CLI's view and the installed version refreshed too): the state
     /// after it.
     pub fn act(&self, action: Action) -> Result<Report, Refusal> {
+        self.make_way()?;
         let result = self.cli()?.run(&action.argv(), action.timeout());
         let pass = self.invalidate();
         result.map_err(|refusal| action.refusal(refusal))?;
@@ -561,13 +567,23 @@ impl LocalHost {
         })
     }
 
+    /// How many calls are on, as the last pass saw: `None` is not known — a core answers and does not say — and is
+    /// never taken for none. With no core answering there is no call to count.
+    fn calls_of(inner: &Inner) -> Option<u64> {
+        match inner.report.calls {
+            Some(calls) => Some(calls),
+            None if inner.core_up => None,
+            None => Some(0),
+        }
+    }
+
     fn update_state(&self, inner: &Inner, working: bool) -> Update {
         update::state(Facts {
             pinned: self.config.pinned_minor,
             installed: inner.report.product_version.as_deref(),
             latest: inner.updates.latest.as_deref(),
             incompatible: inner.report.state == State::Incompatible,
-            calls: inner.report.calls.unwrap_or(0),
+            calls: Self::calls_of(inner),
             working,
         })
     }
@@ -586,8 +602,8 @@ impl LocalHost {
     }
 
     /// Whether the app is to update the service by itself now: it is behind the pinned minor's newest patch the registry
-    /// named, nothing is installing, no call is on, the person has not stopped it (the installer would start it), and
-    /// an earlier try at this release did not just fail.
+    /// named, nothing is installing, no call is on (and the count is known), the person has not stopped it (the
+    /// installer would start it), and an earlier try at this release did not just fail.
     fn update_due(&self) -> bool {
         let working = self.install.lock().unwrap().is_some();
         let inner = self.inner.lock().unwrap();
@@ -597,10 +613,27 @@ impl LocalHost {
             && !inner.updates.holding_off(Instant::now())
     }
 
-    /// Whether no call is on right now: a fresh pass, not the last poll's answer, since a call may have begun during the
-    /// download. Unknown (no core answering) is none.
-    fn no_call_now(&self) -> bool {
-        self.poll().calls.unwrap_or(0) == 0
+    /// The last check before an update's installer restarts the service, on a fresh pass (the CLI's view and the installed
+    /// version asked again, not the last poll's answer: a call may have begun, or the person stopped or removed the
+    /// service, during the download): `None` to go on, or why not — a call is on or the count is not known
+    /// ([`install::WAITING_CALL`]), the person stopped it ([`install::STOPPED`]), it is no longer installed
+    /// ([`install::GONE`]). Nothing is changed by an update stopped here, and it is not a failure.
+    pub fn update_hold(&self) -> Option<Failure> {
+        let report = {
+            let pass = self.invalidate();
+            self.pass(&pass)
+        };
+        let held = |key: &str, message: &str| Some(Failure::new(key, Step::Staging, message));
+        if report.state == State::StoppedByPerson {
+            return held(install::STOPPED, "The service was stopped; the update leaves it so.");
+        }
+        if report.product_version.is_none() {
+            return held(install::GONE, "Sidevoice is no longer installed; there is nothing to update.");
+        }
+        if Self::calls_of(&self.inner.lock().unwrap()) != Some(0) {
+            return held(install::WAITING_CALL, "A call is on, or may be; the update waits for it to end.");
+        }
+        None
     }
 
     /// Keeps the service current, on the caller's thread until [`Self::shutdown`]: the registry asked at launch and every
@@ -614,38 +647,93 @@ impl LocalHost {
             self.refresh_latest(fetch, false);
             if self.update_due() {
                 if let Some(_admitted) = admit() {
-                    self.update_by_itself(fetch, base);
+                    if let Err(failed) = self.run_update(fetch, base) {
+                        if failed.hold_off().is_some() {
+                            (self.log)(&format!("local-host service update failed: {}", failed.failure.log_report()));
+                        }
+                    }
                 }
             }
             std::thread::sleep(POLL_EVERY);
         }
     }
 
-    fn update_by_itself(self: &Arc<Self>, fetch: &dyn Fetch, base: &Options) {
-        match self.run_update(fetch, base) {
-            Ok(_) => {}
-            // A call began meanwhile, or the person's own install holds the slot: not a failure; it is tried again.
-            Err(failure) if failure.key == install::WAITING_CALL || failure.key == install::BUSY => {}
-            Err(failure) => {
-                (self.log)(&format!("local-host service update failed: {}", failure.log_report()));
-                self.inner.lock().unwrap().updates.update_failed(Instant::now());
+    /// The update as a background install of the pinned minor's newest patch, with the last check
+    /// ([`Self::update_hold`]) right before its installer restarts the service. The state after it, or why it did not
+    /// happen. A failure (not a hold, not a busy slot) is remembered, so that the same release is not tried again at
+    /// once ([`Failed::hold_off`]), by whoever asked.
+    fn run_update(self: &Arc<Self>, fetch: &dyn Fetch, base: &Options) -> Result<Report, Failed> {
+        let installing = self.begin(Job::background(UPDATE_JOB)).map_err(Failed::before_installer)?;
+        let job = installing.job.clone();
+        let host = self.clone();
+        let options = Options { gate: Some(Gate::new(move || host.update_hold())), ..base.clone() };
+        let outcome = installing
+            .run(fetch, &options)
+            .map_err(|failure| Failed { failure, installer_ran: !job.progress().cancellable })
+            .and_then(|report| {
+                // The installer said it did what it was asked: the service must say so too, or it would be asked again
+                // at every pass for ever.
+                let behind =
+                    self.config.pinned_minor.zip(report.product_version.as_deref()).is_some_and(|(pinned, v)| {
+                        update::is_behind(v, pinned, self.inner.lock().unwrap().updates.latest.as_deref())
+                    });
+                if behind {
+                    let failure = Failure::new(
+                        "update.unchanged",
+                        None,
+                        "The installer finished, but the installed Sidevoice is still the older version.",
+                    );
+                    return Err(Failed { failure, installer_ran: true });
+                }
+                Ok(report)
+            });
+        if let Err(failed) = &outcome {
+            if let Some(hold) = failed.hold_off() {
+                self.inner.lock().unwrap().updates.update_failed(Instant::now(), hold);
             }
+        }
+        outcome
+    }
+
+    /// Whether an install or an update holds the slot.
+    fn installing(&self) -> bool {
+        self.install.lock().unwrap().is_some()
+    }
+
+    /// Waits until the slot is free (or the host stops).
+    fn wait_for_slot(&self) {
+        while self.installing() && !self.stopped.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(250));
         }
     }
 
-    /// The update as a background install of the pinned minor's newest patch, gated on no call being on right before
-    /// its installer restarts the service. The state after it, or why it failed ([`install::WAITING_CALL`]: a call began).
-    fn run_update(self: &Arc<Self>, fetch: &dyn Fetch, base: &Options) -> Result<Report, Failure> {
-        let installing = self.begin(Job::background(UPDATE_JOB))?;
-        let host = self.clone();
-        let options = Options { gate: Some(Gate::new(move || host.no_call_now())), ..base.clone() };
-        installing.run(fetch, &options)
+    /// What the person does to the service (a service action) comes before the app's own update: that is cancelled while
+    /// that is honoured — before its installer, nothing changed — and waited for; once its installer runs (it restarts
+    /// the service: a stop or an uninstall would be undone by it) the action is refused as an install is
+    /// ([`install::BUSY`]).
+    fn make_way(&self) -> Result<(), Refusal> {
+        let Some(job) = self.install.lock().unwrap().clone().filter(|job| job.is_background()) else { return Ok(()) };
+        let busy = || Refusal::new(install::BUSY, "Sidevoice is being updated; try again when that is done.");
+        if !job.cancel() {
+            return Err(busy());
+        }
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while self.install.lock().unwrap().as_ref().is_some_and(|running| Arc::ptr_eq(running, &job)) {
+            if Instant::now() >= deadline {
+                return Err(busy());
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        Ok(())
     }
 
     /// `localHost.update()`: the registry asked now, and, if the service is behind, the update run to its end as the app's
-    /// own would (an update of its own already under way is waited for instead). The state after it; while a call is on
-    /// it changes nothing and says so (`version()`'s `update` is `waiting-call`: it runs once the call ends). Refused
-    /// `update.unknown` with no pin or no installed version, `update.newer-installed` for a newer minor than the pin.
+    /// own would, and the state after it. Whatever else holds the install's slot (the app's own update, another call of
+    /// this, the person's install) is waited for first and the state read again, never refused as busy. While a call is on
+    /// (or the count is not known) it changes nothing and says so (`version()`'s `update` is `waiting-call`: it runs once
+    /// the call ends). Refused `update.unknown` with no pin or no installed version, `update.newer-installed` for a newer
+    /// minor than the pin, [`install::STOPPED`] for a service the person stopped, [`install::GONE`] for one removed
+    /// meanwhile, and `update.unchanged` when the installer said it was done and the version did not change.
     pub fn update(self: &Arc<Self>, fetch: &dyn Fetch, base: &Options) -> Result<Report, Failure> {
         if self.config.pinned_minor.is_none() {
             return Err(Failure::new(
@@ -654,27 +742,46 @@ impl LocalHost {
                 "This app does not say which Sidevoice version it works with.",
             ));
         }
-        let own = || self.install.lock().unwrap().as_ref().is_some_and(|job| job.is_background());
-        while own() && !self.stopped.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(250));
-        }
         self.refresh_latest(fetch, true);
-        let working = self.install.lock().unwrap().is_some();
-        let state = self.update_state(&self.inner.lock().unwrap(), working);
-        match state {
-            Update::Unknown => {
-                Err(Failure::new("update.unknown", None, "No Sidevoice version is installed to update."))
+        loop {
+            self.wait_for_slot();
+            let working = self.installing();
+            if working && self.stopped.load(Ordering::SeqCst) {
+                return Ok(self.state());
             }
-            Update::NewerInstalled => Err(Failure::new(
-                "update.newer-installed",
-                None,
-                "The installed Sidevoice is newer than the version this app works with; it is left as it is.",
-            )),
-            Update::Available => match self.run_update(fetch, base) {
-                Err(failure) if failure.key == install::WAITING_CALL => Ok(self.state()),
-                done => done,
-            },
-            Update::Current | Update::WaitingCall | Update::Updating | Update::Incompatible => Ok(self.state()),
+            let state = self.update_state(&self.inner.lock().unwrap(), working);
+            match state {
+                Update::Unknown => {
+                    return Err(Failure::new("update.unknown", None, "No Sidevoice version is installed to update."))
+                }
+                Update::NewerInstalled => {
+                    return Err(Failure::new(
+                        "update.newer-installed",
+                        None,
+                        "The installed Sidevoice is newer than the version this app works with; it is left as it is.",
+                    ))
+                }
+                // Something took the slot since it was free: wait for it and look again.
+                Update::Updating => continue,
+                Update::Available => match self.run_update(fetch, base) {
+                    Err(failed) if failed.failure.key == install::BUSY && !self.stopped.load(Ordering::SeqCst) => {
+                        continue
+                    }
+                    Err(failed) if failed.failure.key == install::WAITING_CALL => return Ok(self.state()),
+                    done => return done.map_err(|failed| failed.failure),
+                },
+                Update::Current | Update::WaitingCall | Update::Incompatible => return Ok(self.state()),
+            }
+        }
+    }
+
+    /// The minor an install is to take: the pinned one, unless something is installed that it could downgrade — a
+    /// newer minor, or a version that cannot be told (an install is there and does not say what it is).
+    fn pin_for_install(&self) -> Option<Minor> {
+        let pinned = self.config.pinned_minor?;
+        match self.inner.lock().unwrap().report.product_version.as_deref() {
+            Some(installed) => (!update::is_newer(installed, pinned)).then_some(pinned),
+            None => Cli::installed(&self.config.dirs).is_err().then_some(pinned),
         }
     }
 
@@ -683,7 +790,7 @@ impl LocalHost {
     fn run_install(&self, job: &Arc<Job>, fetch: &dyn Fetch, options: &Options) -> Result<Report, Failure> {
         // The app works with one minor of the service: what it installs, for the person or by itself, is that minor's
         // newest patch.
-        let options = Options { minor: options.minor.or(self.config.pinned_minor), ..options.clone() };
+        let options = Options { minor: options.minor.or(self.pin_for_install()), ..options.clone() };
         let outcome = install::prepare(job, fetch, &self.config.dirs.data, &options);
         // A failure is logged in full, at error level, by the app (`run_install` in `src/local_host.rs`).
         if let Ok(answer) = &outcome {
@@ -718,6 +825,33 @@ impl LocalHost {
         let deadline = Instant::now() + limit;
         while !self.poll().reachable && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(250).min(limit));
+        }
+    }
+}
+
+/// An update that did not happen, and whether its installer had started (it restarts the service: it changed things).
+struct Failed {
+    failure: Failure,
+    installer_ran: bool,
+}
+
+impl Failed {
+    /// One that stopped before anything started.
+    fn before_installer(failure: Failure) -> Failed {
+        Failed { failure, installer_ran: false }
+    }
+
+    /// How long the same release is left alone after it: none for what is not a failure (a hold, a slot another install
+    /// has), [`update::RETRY_SOON`] for one before the installer — the registry or the download, a cancel — that changed
+    /// nothing here, and [`update::RETRY_AFTER`] for anything else, since each try restarts the service.
+    fn hold_off(&self) -> Option<Duration> {
+        let key = self.failure.key.as_str();
+        if install::is_held(key) || key == install::BUSY {
+            None
+        } else if !self.installer_ran && matches!(key, "install.network" | "install.no-bundle" | install::CANCELLED) {
+            Some(update::RETRY_SOON)
+        } else {
+            Some(update::RETRY_AFTER)
         }
     }
 }
@@ -824,6 +958,29 @@ mod tests {
             assert_eq!(action.refusal(other.clone()), other, "any other refusal as it is");
         }
         assert_eq!(Action::Start.refusal(usage()), usage(), "only start at sign-in is renamed");
+    }
+
+    #[test]
+    fn what_is_not_a_failure_is_not_held_off_and_the_rest_by_how_much_it_changed() {
+        let failed = |key: &str, installer_ran| Failed { failure: Failure::new(key, None, "m"), installer_ran };
+        for held in [install::WAITING_CALL, install::STOPPED, install::GONE, install::BUSY] {
+            assert_eq!(failed(held, false).hold_off(), None, "{held}");
+        }
+        // Before the installer ran, nothing changed here: the registry, the download, a cancel are tried again soon.
+        for soon in ["install.network", "install.no-bundle", install::CANCELLED] {
+            assert_eq!(failed(soon, false).hold_off(), Some(update::RETRY_SOON), "{soon}");
+        }
+        // A tarball that is not the registry's, an unsafe directory, the installer's own failures: much later.
+        for later in
+            ["install.checksum", "install.authenticity", "install.unsafe", "install.failed", "install.rollback"]
+        {
+            assert_eq!(failed(later, false).hold_off(), Some(update::RETRY_AFTER), "{later}");
+        }
+        // The installer ran: it restarted the service, whatever the key says.
+        for key in ["install.network", install::CANCELLED, "service.start.failed", "update.unchanged"] {
+            assert_eq!(failed(key, true).hold_off(), Some(update::RETRY_AFTER), "{key}");
+        }
+        assert!(update::RETRY_SOON < update::RETRY_AFTER);
     }
 
     #[test]

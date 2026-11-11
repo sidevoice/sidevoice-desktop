@@ -41,6 +41,8 @@ struct State {
     requests: Vec<String>,
     /// Calls (open sockets) per device.
     sockets: HashMap<String, Vec<watch::Sender<bool>>>,
+    /// Health does not say how many calls are on (a core that predates the count).
+    calls_hidden: bool,
 }
 
 pub struct FakeCore {
@@ -145,6 +147,11 @@ impl FakeCore {
         self.state.lock().unwrap().api = api;
     }
 
+    /// As if this were a core that does not say how many calls are on: its health has no `calls`.
+    pub fn hide_calls(&self, hidden: bool) {
+        self.state.lock().unwrap().calls_hidden = hidden;
+    }
+
     /// As if the core were restarted: a new launch id, its registry kept.
     pub fn relaunch(&self) {
         self.state.lock().unwrap().launch += 1;
@@ -235,11 +242,15 @@ impl FakeCore {
                 let health = {
                     let state = self.state.lock().unwrap();
                     let calls: usize = state.sockets.values().map(Vec::len).sum();
-                    json!({
+                    let mut health = json!({
                         "launch_id": format!("launch-{}", state.launch), "pid": std::process::id(), "version": "0.0.0-fake",
                         "api": state.api, "fingerprint": self.fingerprint, "public_key": self.public_key,
                         "host": "fake-machine", "calls": calls,
-                    })
+                    });
+                    if state.calls_hidden {
+                        health.as_object_mut().expect("an object").remove("calls");
+                    }
+                    health
                 };
                 reply(&mut stream, &origin, 200, health).await
             }

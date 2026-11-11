@@ -439,13 +439,25 @@ fn an_update_a_call_holds_up_stops_before_its_installer_and_changes_nothing() {
     let registry =
         world.registry(&world.installer(json!({"response":{"ok":true,"action":"updated","version":"0.8.1"}})));
     let job = Job::new("j");
-    let held = Options { gate: Some(Gate::new(|| false)), ..world.options() };
+    let held = Options {
+        gate: Some(Gate::new(|| Some(Failure::new(WAITING_CALL, Step::Staging, "a call is on")))),
+        ..world.options()
+    };
     let failure = prepare(&job, &registry, &world.data, &held).unwrap_err();
     assert_eq!((failure.key.as_str(), failure.step), (WAITING_CALL, Some(Step::Staging)));
     assert_eq!(world.ran(), None, "the installer never ran: nothing was restarted");
     assert!(job.progress().cancellable, "and nothing was committed");
     assert_eq!(world.leftovers(), 0, "the download is cleaned up");
-    let open = Options { gate: Some(Gate::new(|| true)), ..world.options() };
+    for key in [STOPPED, GONE] {
+        let held =
+            Options { gate: Some(Gate::new(move || Some(Failure::new(key, Step::Staging, "m")))), ..world.options() };
+        let failure = prepare(&Job::new("h"), &registry, &world.data, &held).unwrap_err();
+        assert_eq!(failure.key, key);
+        assert!(is_held(&failure.key), "{key}: not a failure");
+        assert_eq!(world.ran(), None, "{key}: the installer never ran");
+    }
+    assert!(!is_held("install.network") && !is_held(BUSY) && !is_held(CANCELLED));
+    let open = Options { gate: Some(Gate::new(|| None)), ..world.options() };
     assert_eq!(prepare(&Job::new("k"), &registry, &world.data, &open).unwrap()["action"], "updated");
     assert!(world.ran().is_some());
 }

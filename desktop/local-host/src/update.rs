@@ -20,9 +20,13 @@ use std::time::{Duration, Instant};
 pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// How soon it is asked again when it did not answer.
 pub const CHECK_RETRY: Duration = Duration::from_secs(15 * 60);
-/// How long an automatic update that failed is not tried again for the same release: each try restarts the service (and
-/// rolls back), so a release that cannot start is not retried every few minutes. A newer release is tried at once.
+/// How long an automatic update whose installer ran and failed is not tried again for the same release: each try
+/// restarts the service (and rolls back), so a release that cannot start is not retried every few minutes. A newer
+/// release is tried at once.
 pub const RETRY_AFTER: Duration = Duration::from_secs(6 * 3600);
+/// How long one that failed before its installer ran — the registry or the download, or a cancel — waits: nothing was
+/// changed on this computer, so it is tried again soon.
+pub const RETRY_SOON: Duration = Duration::from_secs(15 * 60);
 
 /// The minor the bundled page pins: its `service.pin.json`, `{"minor": "X.Y"}`. Anything else — a file that is not
 /// JSON (the bundle answers a missing file with its index page), no `minor`, a minor that is not `X.Y` — is no pin.
@@ -62,20 +66,27 @@ pub struct Facts<'a> {
     pub latest: Option<&'a str>,
     /// The core's API is outside what this app speaks.
     pub incompatible: bool,
-    /// Calls on now.
-    pub calls: u64,
+    /// Calls on now; `None` when that is not known (a core answers and does not say): nothing is updated then, as with a
+    /// call on.
+    pub calls: Option<u64>,
     /// An install or an update is running.
     pub working: bool,
 }
 
 /// Whether the installed service is older than what the app is to run: of an older minor than the pin, or of the pinned
-/// one at an older patch than `latest` (when the registry has said).
-fn behind(installed: &Version, pinned: Minor, latest: Option<&str>) -> bool {
+/// one at an older patch than `latest` (when the registry has said). Not for a version that is not one.
+pub fn is_behind(installed: &str, pinned: Minor, latest: Option<&str>) -> bool {
+    let Ok(installed) = Version::parse(installed) else { return false };
     let mine = Minor { major: installed.major, minor: installed.minor };
     if mine != pinned {
         return mine < pinned;
     }
-    latest.and_then(|latest| Version::parse(latest).ok()).is_some_and(|latest| installed < &latest)
+    latest.and_then(|latest| Version::parse(latest).ok()).is_some_and(|latest| installed < latest)
+}
+
+/// Whether the installed service is of a newer minor than the pin: never touched, never installed over.
+pub fn is_newer(installed: &str, pinned: Minor) -> bool {
+    Minor::of(installed).is_some_and(|mine| mine > pinned)
 }
 
 /// `update` as `localHost.version()` says it.
@@ -83,16 +94,14 @@ pub fn state(facts: Facts<'_>) -> Update {
     if facts.working {
         return Update::Updating;
     }
-    let (Some(pinned), Some(installed)) =
-        (facts.pinned, facts.installed.and_then(|installed| Version::parse(installed).ok()))
-    else {
+    let (Some(pinned), Some(installed)) = (facts.pinned, facts.installed.filter(|v| Version::parse(v).is_ok())) else {
         return Update::Unknown;
     };
-    if (installed.major, installed.minor) > (pinned.major, pinned.minor) {
+    if is_newer(installed, pinned) {
         return Update::NewerInstalled;
     }
-    match (behind(&installed, pinned, facts.latest), facts.calls) {
-        (true, 0) => Update::Available,
+    match (is_behind(installed, pinned, facts.latest), facts.calls) {
+        (true, Some(0)) => Update::Available,
         (true, _) => Update::WaitingCall,
         (false, _) if facts.incompatible => Update::Incompatible,
         (false, _) => Update::Current,
@@ -122,8 +131,8 @@ pub struct Updates {
     pub latest: Option<String>,
     /// When the registry was last asked, and whether it answered.
     checked: Option<(Instant, bool)>,
-    /// The last automatic update that failed: which release was the newest then, and when.
-    failed: Option<(Option<String>, Instant)>,
+    /// The last update that failed: which release was the newest then, when, and how long it is left alone.
+    failed: Option<(Option<String>, Instant, Duration)>,
 }
 
 impl Updates {
@@ -145,17 +154,18 @@ impl Updates {
         }
     }
 
-    /// An automatic update to the newest patch known failed at `now`.
-    pub fn update_failed(&mut self, now: Instant) {
-        self.failed = Some((self.latest.clone(), now));
+    /// An update to the newest patch known failed at `now`, and is left alone for `hold` ([`RETRY_AFTER`] when its
+    /// installer ran, [`RETRY_SOON`] when it did not).
+    pub fn update_failed(&mut self, now: Instant, hold: Duration) {
+        self.failed = Some((self.latest.clone(), now, hold));
     }
 
-    /// Whether the failed update is to be left alone for now: the same release is the newest, and [`RETRY_AFTER`] has
-    /// not passed.
+    /// Whether the failed update is to be left alone for now: the same release is the newest, and its hold has not
+    /// passed.
     pub fn holding_off(&self, now: Instant) -> bool {
         self.failed
             .as_ref()
-            .is_some_and(|(latest, at)| *latest == self.latest && now.saturating_duration_since(*at) < RETRY_AFTER)
+            .is_some_and(|(latest, at, hold)| *latest == self.latest && now.saturating_duration_since(*at) < *hold)
     }
 }
 
@@ -166,7 +176,7 @@ mod tests {
     const PINNED: Minor = Minor { major: 0, minor: 20 };
 
     fn facts<'a>(installed: Option<&'a str>, latest: Option<&'a str>) -> Facts<'a> {
-        Facts { pinned: Some(PINNED), installed, latest, incompatible: false, calls: 0, working: false }
+        Facts { pinned: Some(PINNED), installed, latest, incompatible: false, calls: Some(0), working: false }
     }
 
     #[test]
@@ -220,21 +230,46 @@ mod tests {
             assert_eq!(state(facts(Some(installed), None)), Update::NewerInstalled, "{installed}");
         }
         let mut busy = facts(Some("0.21.0"), Some("0.20.3"));
-        busy.calls = 2;
+        busy.calls = Some(2);
         assert_eq!(state(busy), Update::NewerInstalled, "not even waiting for a call");
     }
 
     #[test]
     fn behind_with_a_call_on_waits_for_it() {
         let mut behind = facts(Some("0.20.0"), Some("0.20.3"));
-        behind.calls = 1;
+        behind.calls = Some(1);
         assert_eq!(state(behind), Update::WaitingCall);
         let mut older_minor = facts(Some("0.19.0"), None);
-        older_minor.calls = 3;
+        older_minor.calls = Some(3);
         assert_eq!(state(older_minor), Update::WaitingCall);
         let mut current = facts(Some("0.20.3"), Some("0.20.3"));
-        current.calls = 3;
+        current.calls = Some(3);
         assert_eq!(state(current), Update::Current, "a call is no reason to say anything when there is nothing to do");
+    }
+
+    #[test]
+    fn an_unknown_count_of_calls_is_never_taken_for_none() {
+        let mut behind = facts(Some("0.20.0"), Some("0.20.3"));
+        behind.calls = None;
+        assert_eq!(state(behind), Update::WaitingCall, "behind, and a call may be on: it waits");
+        let mut older_minor = facts(Some("0.19.0"), None);
+        older_minor.calls = None;
+        assert_eq!(state(older_minor), Update::WaitingCall);
+        let mut current = facts(Some("0.20.3"), Some("0.20.3"));
+        current.calls = None;
+        assert_eq!(state(current), Update::Current, "nothing to do is nothing to wait for");
+        let mut newer = facts(Some("0.21.0"), None);
+        newer.calls = None;
+        assert_eq!(state(newer), Update::NewerInstalled);
+    }
+
+    #[test]
+    fn newer_and_behind_are_read_from_the_minor_and_the_patch() {
+        assert!(is_newer("0.21.0", PINNED) && is_newer("1.0.0", PINNED) && is_newer("0.100.1", PINNED));
+        assert!(!is_newer("0.20.9", PINNED) && !is_newer("0.19.9", PINNED) && !is_newer("nope", PINNED));
+        assert!(is_behind("0.20.0", PINNED, Some("0.20.1")) && is_behind("0.19.0", PINNED, None));
+        assert!(!is_behind("0.20.1", PINNED, Some("0.20.1")) && !is_behind("0.20.0", PINNED, None));
+        assert!(!is_behind("0.21.0", PINNED, Some("0.20.1")) && !is_behind("nope", PINNED, Some("0.20.1")));
     }
 
     #[test]
@@ -315,11 +350,24 @@ mod tests {
         let mut updates = Updates::default();
         updates.checked(start, Some(Some("0.20.3".into())));
         assert!(!updates.holding_off(start), "nothing failed");
-        updates.update_failed(start);
+        updates.update_failed(start, RETRY_AFTER);
         assert!(updates.holding_off(start + Duration::from_secs(60)));
         assert!(updates.holding_off(start + RETRY_AFTER - Duration::from_secs(1)));
         assert!(!updates.holding_off(start + RETRY_AFTER), "tried again after the wait");
         updates.checked(start + Duration::from_secs(60), Some(Some("0.20.4".into())));
         assert!(!updates.holding_off(start + Duration::from_secs(61)), "a newer release is another try");
+    }
+
+    #[test]
+    fn a_failure_before_the_installer_ran_is_tried_again_in_fifteen_minutes() {
+        let start = Instant::now();
+        let mut updates = Updates::default();
+        updates.checked(start, Some(Some("0.20.3".into())));
+        updates.update_failed(start, RETRY_SOON);
+        assert_eq!(RETRY_SOON, Duration::from_secs(900));
+        assert!(updates.holding_off(start + RETRY_SOON - Duration::from_secs(1)));
+        assert!(!updates.holding_off(start + RETRY_SOON));
+        updates.update_failed(start, RETRY_AFTER);
+        assert!(updates.holding_off(start + RETRY_SOON), "an installer's failure is held for much longer");
     }
 }

@@ -278,18 +278,30 @@ nothing of the registry and updates nothing, and `version()` says `update: "unkn
   (`service-update`) that leaves `state` as the service has it (no `installing`) and pairs again nothing the person
   refused. One install or update at a time (`install.busy`).
 - **Never during a call.** With a call on (`calls` > 0) the update waits (`update: "waiting-call"`) and runs once the
-  call ends. The installer restarts the service, so the question is asked again, on a fresh pass, right before the
-  installer starts (after the download): a call that began meanwhile stops the update there (`update.waiting-call`),
-  nothing changed and not a failure.
+  call ends. A core that answers and does not say how many calls are on (`calls` absent) is not "none": it waits too,
+  and says `waiting-call` (with no core answering there is no call to count). The installer restarts the service, so the
+  last check is made again, on a fresh pass (the connector's status and the installed version asked again), right
+  before the installer starts (after the download): a call that began meanwhile (`update.waiting-call`), a service the
+  person stopped meanwhile (`update.stopped-by-person`) or one removed meanwhile (`update.not-installed`) stops the
+  update there, nothing changed and not a failure.
+- **What the person does comes first.** A service action (`start`, `stop`, `restart`, install and uninstall of the
+  service, start at sign-in) while the app's own update runs cancels it if its installer has not started (it waits for
+  the update to end, then runs; nothing was changed), and is refused `install.busy` once it has (the installer restarts
+  the service: a stop would be undone).
 - **Never a newer minor.** An installed service of a newer minor than the pin (`0.21` by hand, an app on `0.20`) is never
   touched: `update: "newer-installed"`.
 - **A service the person stopped** (`stopped-by-person`) is left as it is: the installer would start it. It stays
   `available`.
-- **A failed update** (it was rolled back, the registry or the download failed) is logged and not tried again for the same
-  release for 6 h (each try restarts the service); a newer release is tried at once, and the person's own `update()`
-  always tries.
-- **A data reset** under way keeps it out (it holds the same admission every action does), and the first install the
-  person asks for (`install()`) installs the pinned minor's newest patch too, not the registry's latest.
+- **A failed update** is logged and not tried again for the same release for a while; a newer release is tried at once,
+  and the person's own `update()` always tries. One that failed before its installer ran and changed nothing here (the
+  registry, the download, a cancel) is tried again after 15 min; one whose installer ran (it was rolled back, did not
+  start, or said ok and the installed version did not change: `update.unchanged`) after 6 h, since each try restarts the
+  service. The app shows no failure of its own (`version()` keeps saying `available`); it is in the app's log.
+- **A data reset** under way keeps it out (it holds the same admission every action does), and the install the person
+  asks for (`install()`) installs the pinned minor's newest patch too, not the registry's latest — unless something is
+  installed that it could downgrade: a newer minor, or an install whose version cannot be told; then it is the latest, as
+  before the pin. Quitting the app while an update runs does not stop it (as with an install): its installer ends it or
+  rolls it back on its own.
 
 **`version()`**: `{bridge, bundled, installed, core_api, update, latest, progress}` (docs/BRIDGE.md). `update` is decided
 in this order: an install or update running → `updating`; no pin or no installed version → `unknown`; installed minor
@@ -299,8 +311,9 @@ the app speaks (`incompatible`, state above) → `incompatible`; else `current`.
 The page asks every 2 s while `updating` or `waiting-call`, otherwise every 60 s and on focus.
 
 **`update()`** asks the registry now and, if behind and no call is on, runs the update to its end and answers the state
-after it (an update of the app's own under way is waited for instead); it rejects `update.unknown`,
-`update.newer-installed` and the install's keys.
+after it. Whatever holds the install's slot (the app's own update, another `update()`, the person's install) is waited
+for and the state read again, never refused as busy. It rejects `update.unknown`, `update.newer-installed`,
+`update.stopped-by-person`, `update.not-installed`, `update.unchanged` and the install's keys.
 
 ## The proxy
 

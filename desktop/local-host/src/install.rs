@@ -39,9 +39,20 @@ use std::time::{Duration, Instant, SystemTime};
 pub const BUSY: &str = "install.busy";
 /// What an install the person cancelled rejects with.
 pub const CANCELLED: &str = "install.cancelled";
-/// What an update is stopped with, before its installer runs, when [`Options::gate`] says a call is on: nothing was
-/// changed, and it is not a failure (the update runs again once the call ends).
+/// What an update is stopped with, before its installer runs, when [`Options::gate`] says a call is on (or that the
+/// count of calls is not known): nothing was changed, and it is not a failure (the update runs again once the call ends).
 pub const WAITING_CALL: &str = "update.waiting-call";
+/// What an update is stopped with, likewise, when the person has stopped the service meanwhile (the installer would
+/// start it).
+pub const STOPPED: &str = "update.stopped-by-person";
+/// What an update is stopped with, likewise, when the service was uninstalled meanwhile (nothing is left to update).
+pub const GONE: &str = "update.not-installed";
+
+/// Whether `key` is one of those an update is stopped with before its installer, by [`Options::gate`]: nothing changed,
+/// not a failure.
+pub fn is_held(key: &str) -> bool {
+    matches!(key, WAITING_CALL | STOPPED | GONE)
+}
 /// The installer inside the package, where the installer itself expects to be (`<package>/bin/`), named as this OS
 /// names a program (`bin/sidevoice-connector.exe` on Windows).
 pub fn bundled_installer() -> String {
@@ -513,17 +524,17 @@ pub struct Options {
     /// newer minor, one the app does not speak). `None`: the latest.
     pub minor: Option<Minor>,
     /// Asked once the release is verified and unpacked, right before its installer would restart the service: an
-    /// update that says `false` (a call is on) stops there with [`WAITING_CALL`], nothing changed.
+    /// update that is told why not ([`WAITING_CALL`], [`STOPPED`], [`GONE`]) stops there with that, nothing changed.
     pub gate: Option<Gate>,
 }
 
-/// A question asked right before the installer runs, `true` to go on ([`Options::gate`]).
+/// A question asked right before the installer runs: `None` to go on, or why not ([`Options::gate`]).
 #[derive(Clone)]
-pub struct Gate(std::sync::Arc<dyn Fn() -> bool + Send + Sync>);
+pub struct Gate(std::sync::Arc<dyn Fn() -> Option<Failure> + Send + Sync>);
 
 impl Gate {
-    pub fn new(open: impl Fn() -> bool + Send + Sync + 'static) -> Gate {
-        Gate(std::sync::Arc::new(open))
+    pub fn new(ask: impl Fn() -> Option<Failure> + Send + Sync + 'static) -> Gate {
+        Gate(std::sync::Arc::new(ask))
     }
 }
 
@@ -730,8 +741,8 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     // Unpacked as a program (`tarball::extract`); what runs is the path checked here.
     let installer = Files::trusted_program(&installer)
         .map_err(|e| Failure::io(&e, Step::Staging, Where::Installer, "The installer cannot be run"))?;
-    if options.gate.as_ref().is_some_and(|gate| !(gate.0)()) {
-        return Err(Failure::new(WAITING_CALL, Step::Staging, "A call is on; the update waits for it to end."));
+    if let Some(held) = options.gate.as_ref().and_then(|gate| (gate.0)()) {
+        return Err(held);
     }
     job.commit()?;
     run_installer(job, &installer, data, options.installer_time)
