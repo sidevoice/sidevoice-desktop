@@ -272,8 +272,12 @@ impl LocalHost {
             // No core to carry requests to; a core that comes back is checked again before the token goes out.
             self.proxy.set_token(None);
         }
-        // The port the core that answered bound, from its record: asked only while one answers, and before `inner` is held.
-        let core_port = health.as_ref().ok().and_then(|_| endpoints::core_port(&self.config.dirs));
+        // The port the core that answered bound, from its record, if the record is that launch's: asked only while one
+        // answers, and before `inner` is held.
+        let core_port = health
+            .as_ref()
+            .ok()
+            .and_then(|health| endpoints::core_port(&self.config.dirs, health.launch_id.as_deref()));
         let product_version = self.product_version();
         let installing = self.install.lock().unwrap().is_some();
         let mut inner = self.inner.lock().unwrap();

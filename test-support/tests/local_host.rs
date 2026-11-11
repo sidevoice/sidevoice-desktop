@@ -129,6 +129,21 @@ fn the_state_names_the_cores_own_port_not_the_proxys() {
     let urls = host.pairing().unwrap()["urls"].clone();
     assert_eq!(urls, json!([format!("http://127.0.0.1:{port}")]), "the page's locator is the app's own proxy");
     assert_ne!(port, fake_core::PORT, "which is another port, new at each launch");
+    // A restart is a new launch and a new record: the port is still said.
+    core.relaunch();
+    assert_eq!(serde_json::to_value(host.poll()).unwrap()["core"]["port"], fake_core::PORT);
+    // A record of another launch than the core that answers (a crashed core's, left behind, or one not yet replaced by a
+    // core that is starting) says nothing of this core's port.
+    let record = world.dirs.core().join("core.json");
+    let mut stale: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+    stale["launch_id"] = json!("launch-from-before");
+    stale["port"] = json!(4000);
+    std::fs::remove_file(&record).unwrap();
+    std::fs::write(&record, stale.to_string()).unwrap();
+    StorageFixtures::private(&record);
+    let state = serde_json::to_value(host.poll()).unwrap();
+    assert_eq!(state["core"]["launch_id"], "launch-2", "the core that answers");
+    assert_eq!(state["core"].get("port"), None, "no port from another launch's record");
     // No core, no port: the record of a core that left says nothing of a service that is not there.
     core.stop();
     let state = serde_json::to_value(host.poll()).unwrap();

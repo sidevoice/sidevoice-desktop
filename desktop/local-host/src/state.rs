@@ -15,7 +15,7 @@
 //! | no core, no connector, no install | `absent` |
 //!
 //! `core` (while one answers) is `{pid, version, api, launch_id, port?}`: `port` is the TCP port the core bound, from its record
-//! (`endpoints::core_port`), `10829` unless the installation names another — the port of the service, not the one in the
+//! (`endpoints::core_port`, only when the record is of the launch that answers), `10829` unless the installation names another — the port of the service, not the one in the
 //! local pairing's `urls`, which is the app's own proxy's and new at each launch. Absent when the record does not say.
 //!
 //! `reachable` (always present) is whether a core answers and the app's pairing with it works — then the page can use
