@@ -4,4 +4,7 @@ use super::Os;
 /// draws the call.
 pub struct Native;
 
-impl Os for Native {}
+impl Os for Native {
+    /// Nothing to end here: the call's service ends the notification itself, and quitting stops the service.
+    fn end_now(_limit: std::time::Duration) {}
+}

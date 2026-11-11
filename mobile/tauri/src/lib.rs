@@ -44,8 +44,9 @@ const PROVIDER_KEYS: &str = "ai.sidevoice.mobile.providers";
 /// the device backup (they are downloaded again).
 const MODELS: &str = "models";
 
-/// How long quitting waits for the calls to stop and the models to be released (as the desktop).
-const RELEASE_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long quitting waits, in all, for the call's surface to end, the calls to stop and the models to be released. iOS gives
+/// `applicationWillTerminate` about 5 s before the process is killed, so the whole exit path stays under it.
+const RELEASE_LIMIT: std::time::Duration = std::time::Duration::from_secs(4);
 
 const BUNDLED_INTERFACE: &str = "voice/index.html";
 
@@ -627,11 +628,14 @@ fn run_app() {
             }
             // Quitting: the calls stop and every model and audio device is let go, bounded.
             if let tauri::RunEvent::Exit = event {
+                let deadline = std::time::Instant::now() + RELEASE_LIMIT;
                 if let Some(room) = app.try_state::<call::RoomCall>() {
-                    room.end(RELEASE_LIMIT);
+                    room.end(deadline);
                 }
                 if let Some(host) = app.try_state::<AppHost>() {
-                    tauri::async_runtime::block_on(host.close(RELEASE_LIMIT));
+                    tauri::async_runtime::block_on(host.close(
+                        deadline.saturating_duration_since(std::time::Instant::now()),
+                    ));
                 }
             }
         });

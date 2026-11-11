@@ -31,10 +31,8 @@ trait Os {
     fn end() {}
 
     /// Ends it as `end` does, but done when this returns, or after `limit`: for the app's own end, when the main thread
-    /// is held until the process goes (iOS: the main queue `end` hands its work to never runs).
-    fn end_now(_limit: std::time::Duration) {
-        Self::end()
-    }
+    /// is held until the process goes (iOS: the main queue `end` hands its work to never runs). Each OS says what it does.
+    fn end_now(limit: std::time::Duration);
 
     /// A line for the system's log (iOS: the unified log, subsystem `ai.sidevoice`, public strings), where the app's own
     /// log file is not read by `log show`. Nothing elsewhere.
