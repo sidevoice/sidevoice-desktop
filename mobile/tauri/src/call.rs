@@ -29,9 +29,10 @@ use std::time::{Duration, Instant};
 use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
 use crate::platform::interruption::{self, Interruption};
 use sidevoice_mobile_plugin::{
-    call_activates_audio, call_replaces_media_controls, clear_stills, forget_stills,
-    refresh_call_service, request_call_focus, save_still, start_call_service, stop_call_service,
-    update_call_service, CallDetails, CallEvent, CallSurface, StopReason, SurfaceAction,
+    call_activates_audio, call_replaces_media_controls, clear_stills, end_surface_now,
+    forget_stills, refresh_call_service, request_call_focus, save_still, start_call_service,
+    stop_call_service, update_call_service, CallDetails, CallEvent, CallSurface, StopReason,
+    SurfaceAction,
 };
 use sidevoice_shared::app::{AppHost, CallActivity};
 use sidevoice_shared::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
@@ -60,6 +61,11 @@ pub fn configure() -> Result<(), String> {
 /// call is refused (`audio-session-activate-failed`): the session is CallKit's to activate while its call lasts, never the
 /// app's.
 const SYSTEM_AUDIO_LIMIT: Duration = Duration::from_secs(5);
+
+/// What quitting gives the call's surface to end, then the call's service to stop (`RoomCall::end`); the rest of the exit
+/// budget (`RELEASE_LIMIT`) is the voice host's.
+const QUIT_SURFACE_LIMIT: Duration = Duration::from_millis(1000);
+const QUIT_SERVICE_LIMIT: Duration = Duration::from_millis(1500);
 
 /// The phone's side of the host's voice calls: the audio session while any of them has audio open.
 #[derive(Default)]
@@ -541,14 +547,21 @@ impl RoomCall {
         });
     }
 
-    /// Quitting: the service stops, waited for up to `limit`.
-    pub fn end(&self, limit: std::time::Duration) {
+    /// Quitting (on iOS also the person swiping the app away, `applicationWillTerminate`): the surface ends first, then the
+    /// service stops, all before `deadline`. The main thread is held until the process goes, so what the service hands to
+    /// the main queue (the Live Activity's end) would never run: the surface is ended here, first and with its own
+    /// budget, so a stuck room thread (a start waiting on the main thread) cannot keep it from ending. Each wait is
+    /// capped, leaving the rest of the budget to the voice host's release after this.
+    pub fn end(&self, deadline: Instant) {
+        log::info!("call: quitting: ending the call");
+        let left = || deadline.saturating_duration_since(Instant::now());
+        end_surface_now(left().min(QUIT_SURFACE_LIMIT));
         let (done, finished) = mpsc::channel();
         self.then(move |room| {
             room.hold(false, None);
             let _ = done.send(());
         });
-        let _ = finished.recv_timeout(limit);
+        let _ = finished.recv_timeout(left().min(QUIT_SERVICE_LIMIT));
     }
 }
 
