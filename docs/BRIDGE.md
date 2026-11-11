@@ -338,8 +338,10 @@ interface AudioRoute {
   `audio-route-picker-unavailable` (no such sheet on this phone).
 - The app's command `audio_route` (`action`: `available` or `open`) is granted to the app's window alone. On iOS the sheet is
   AVKit's `AVRoutePickerView`, which has no call to open it: the app keeps one, hidden and without size, in the page's window and
-  sends its button the tap (`mobile/tauri/src/platform/audio_route_picker/ios.rs`). AVKit's bundle is loaded when the page first
-  asks. The audio session's category, mode and options are not touched.
+  sends its button the tap (`mobile/tauri/src/platform/audio_route_picker/ios.rs`; AVKit is linked by the project). The view does not
+  say whether its sheet came up, so the app looks at the window before and after (the controllers presented over it, the key
+  window) and rejects `audio-route-picker-failed` when nothing came over it. The audio session's category, mode and options are not
+  touched.
 
 ## The cues
 
@@ -843,9 +845,9 @@ What is this app's own:
 - On a phone whose system routes the microphone (iOS), the microphones are the audio session's own: `inputs` lists
   `AVAudioSession.availableInputs` (id: the port's `UID`, label: its `portName`: the phone's microphone, a car's hands-free,
   AirPods), `input` is the session's preferred input, and choosing one is `setPreferredInput` (`""`/`null`: no preference, the
-  system's). A choice of an input the session does not offer is `audio-device-unknown`. The preferred input is dropped by the
-  system when the device goes away (or by the app, once it sees it gone): it is then said once as `lost.input`, as for any
-  device. Nothing of the session's category, mode or options changes (the call stays a call: desktop#466). The speakers stay the
+  system's). A choice of an input the session does not offer is `audio-device-unknown`. An input that goes away while chosen is said once as
+  `lost.input`, as for any device, and the preference is cleared; a preference the system drops while the input is still offered
+  is simply not reported (no `lost`). Nothing of the session's category, mode or options changes (the call stays a call: desktop#466). The speakers stay the
   voice's list, `outputSelectable` is still the voice's report (`false` on iOS): see `host.audioRoute` for the output.
 - A page that loads anew has no old calls or lanes: each is stopped and, like any stopped call, keeps its models for its
   idle period.

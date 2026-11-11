@@ -303,6 +303,27 @@ fn cue(
     Ok(true)
 }
 
+/// How long the system's picker is given to come up before the window is looked at (it animates in).
+const AUDIO_ROUTE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// `work` on the main thread with the platform's web view, and its answer: UIKit's objects are the main thread's.
+async fn on_main<T: Send + 'static>(
+    webview: &Webview,
+    work: impl FnOnce(&tauri::webview::PlatformWebview) -> T + Send + 'static,
+) -> Result<T, String> {
+    let (done, answer) = std::sync::mpsc::channel();
+    webview
+        .with_webview(move |platform| {
+            let _ = done.send(work(&platform));
+        })
+        .map_err(|error| error.to_string())?;
+    // The main thread answers; waiting is on a blocking thread, never on the main one.
+    tauri::async_runtime::spawn_blocking(move || answer.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
 /// `host.audioRoute` (docs/BRIDGE.md -> "The audio route"): `action` `available` (whether this phone has a system picker for where
 /// the call's audio plays, which the app can open) or `open` (opens it over the app's window; the person's choice is the system's,
 /// and the page is told of nothing). The picker's view belongs to the main thread, where `with_webview` runs it.
@@ -317,20 +338,30 @@ async fn audio_route(
     match action.as_str() {
         "available" => Ok(platform::audio_route_picker::available()),
         "open" => {
-            let (opened, answer) = std::sync::mpsc::channel();
-            webview
-                .with_webview(move |webview| {
-                    let _ = opened.send(platform::audio_route_picker::open(&webview));
-                })
-                .map_err(|error| refusal(&error.to_string()))?;
-            // The main thread answers; waiting is on a blocking thread, never on the main one.
-            match tauri::async_runtime::spawn_blocking(move || answer.recv()).await {
-                Ok(Ok(Ok(()))) => Ok(true),
-                Ok(Ok(Err(code))) => {
-                    Err(serde_json::json!({ "key": "audio_route", "code": code, "message": code }))
-                }
-                _ => Err(refusal("the picker was not opened")),
+            use platform::audio_route_picker::{open, presentation};
+            let before = on_main(&webview, |webview| presentation(webview))
+                .await
+                .map_err(|why| refusal(&why))?;
+            on_main(&webview, |webview| open(webview))
+                .await
+                .map_err(|why| refusal(&why))?
+                .map_err(|code| serde_json::json!({ "key": "audio_route", "code": code, "message": code }))?;
+            // The view does not say that its sheet came up: the window does. Given a moment, it shows something over the page
+            // or the open failed, which the page is told (not a button that does nothing).
+            tauri::async_runtime::spawn_blocking(|| std::thread::sleep(AUDIO_ROUTE_SETTLE))
+                .await
+                .ok();
+            let after = on_main(&webview, |webview| presentation(webview))
+                .await
+                .map_err(|why| refusal(&why))?;
+            if after == before {
+                log::warn!("the output route picker did not open: nothing came over the window");
+                let code = "audio-route-picker-failed";
+                return Err(
+                    serde_json::json!({ "key": "audio_route", "code": code, "message": code }),
+                );
             }
+            Ok(true)
         }
         _ => Err(refusal("audio_route takes available or open")),
     }

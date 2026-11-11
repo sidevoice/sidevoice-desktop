@@ -105,6 +105,7 @@ targets:
       - sdk: UIKit.framework
       - sdk: AVFoundation.framework
       - sdk: AVFAudio.framework
+      - sdk: AVKit.framework
       - sdk: AudioToolbox.framework
       - sdk: MediaPlayer.framework
       - sdk: Accelerate.framework

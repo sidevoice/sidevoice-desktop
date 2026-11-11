@@ -82,10 +82,13 @@ impl Inputs {
         match &chosen {
             Some(id) => *asked = Some(id.clone()),
             None => {
-                if let Some(gone) = asked.take() {
-                    // The input asked for went away: the system's choice from now on, said once.
-                    let _ = self.route.choose(None);
-                    devices.lost.get_or_insert_with(LostDevices::default).input = Some(gone);
+                if let Some(id) = asked.take() {
+                    // The system no longer prefers it. Said (once) only when the input itself went away; while it is still
+                    // offered, the system just dropped the preference and the list tells it as it is.
+                    if !system.inputs.iter().any(|input| input.id == id) {
+                        let _ = self.route.choose(None);
+                        devices.lost.get_or_insert_with(LostDevices::default).input = Some(id);
+                    }
                 }
             }
         }
@@ -185,14 +188,15 @@ mod tests {
     }
 
     #[test]
-    fn a_choice_the_system_took_back_is_reported_as_it_is() {
-        // iOS may drop the preference by itself while the input is still there: the list says what the system does.
+    fn a_preference_the_system_dropped_while_the_input_is_there_is_reported_as_it_is_and_not_as_lost() {
+        // iOS may drop the preference by itself while the input is still offered: the list says what the system does.
         let route = Fake::offering(&["phone", "car"]);
         let inputs = Inputs::new(route.clone());
         inputs.take(Some(Some("car".into()))).unwrap();
         *route.chosen.lock().unwrap() = None;
         let listed = inputs.apply(voice());
         assert_eq!(listed.input, None);
-        assert_eq!(listed.lost, Some(LostDevices { input: Some("car".into()), output: None }));
+        assert_eq!(listed.lost, None, "the car is still there: nothing is lost");
+        assert_eq!(inputs.apply(voice()).lost, None);
     }
 }
