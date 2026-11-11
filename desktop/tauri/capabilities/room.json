@@ -15,6 +15,7 @@
     "sidevoice-shared-tauri:allow-engine-uninstall",
     "sidevoice-shared-tauri:allow-engine-memory",
     "sidevoice-shared-tauri:allow-engine-catalogs",
+    "sidevoice-shared-tauri:allow-engine-recommend",
     "sidevoice-shared-tauri:allow-engine-set-credential",
     "sidevoice-shared-tauri:allow-engine-has-credential",
     "sidevoice-shared-tauri:allow-engine-test-credential",

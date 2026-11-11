@@ -9,6 +9,7 @@ pub const COMMANDS: &[&str] = &[
     "engine_uninstall",
     "engine_memory",
     "engine_catalogs",
+    "engine_recommend",
     "engine_set_credential",
     "engine_has_credential",
     "engine_test_credential",

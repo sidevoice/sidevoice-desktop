@@ -9,7 +9,9 @@
 
 use sidevoice_shared::app::AppHost;
 use sidevoice_shared::engine::error::bad_request;
-use sidevoice_shared::engine::{CatalogView, CredentialRefusal, Device, Error, Installed, Memory, Progress};
+use sidevoice_shared::engine::{
+    CatalogView, CredentialRefusal, Device, Error, Installed, Memory, Progress, RecommendationView,
+};
 use tauri::{Runtime, State, Webview};
 
 use crate::Callers;
@@ -117,6 +119,21 @@ pub async fn engine_catalogs<R: Runtime>(
 ) -> Result<Vec<CatalogView>, Error> {
     allowed(&callers, &webview)?;
     host.catalogs().await
+}
+
+/// `{stt: {choice?, ranked}, tts: {choice?, ranked}}`: what the engine recommends here for speech to text and text to
+/// speech, for a person whose transcription hears `stt` and whose voice says `tts` (BCP 47 tags, or null): the model to
+/// start with and its build, and each list as it stands here.
+#[tauri::command]
+pub async fn engine_recommend<R: Runtime>(
+    webview: Webview<R>,
+    callers: State<'_, Callers<R>>,
+    host: State<'_, AppHost>,
+    stt: Option<String>,
+    tts: Option<String>,
+) -> Result<RecommendationView, Error> {
+    allowed(&callers, &webview)?;
+    host.recommend(stt, tts).await
 }
 
 /// Keeps `key` for `provider` in the keychain, or removes it (`null` or blank), then reads that provider's catalogue

@@ -181,6 +181,7 @@ fn engine_calls() -> Vec<(&'static str, Value)> {
         ("engine_uninstall", json!({"model": "m"})),
         ("engine_memory", json!({})),
         ("engine_catalogs", json!({})),
+        ("engine_recommend", json!({"stt": "es", "tts": null})),
         ("engine_set_credential", json!({"provider": "openai", "key": "k"})),
         ("engine_has_credential", json!({"provider": "openai"})),
         ("engine_test_credential", json!({"provider": "openai", "key": "k"})),

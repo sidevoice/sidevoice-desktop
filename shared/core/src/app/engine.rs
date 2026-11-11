@@ -11,7 +11,8 @@ use tokio::runtime::Handle;
 use super::{AppHost, KeyError, Lease, ProviderKeys};
 use crate::engine::error::{self, internal};
 use crate::engine::{
-    CatalogView, CredentialRefusal, Device, Error, Installed, Memory, NativeEngines, Progress, Wanted,
+    CatalogView, CredentialRefusal, Device, Error, Installed, Memory, NativeEngines, Progress, RecommendationView,
+    Wanted,
 };
 use crate::voice::host::LaneAudio;
 
@@ -154,6 +155,13 @@ impl<A: LaneAudio> AppHost<A> {
     pub async fn catalogs(&self) -> Result<Vec<CatalogView>, Error> {
         let engines = self.engines()?;
         self.blocking(move || engines.catalogs()).await
+    }
+
+    /// `{stt: {choice?, ranked}, tts: {choice?, ranked}}`: what the engine recommends here for a person whose
+    /// transcription hears `stt` and whose voice says `tts` (BCP 47 tags, or `None`).
+    pub async fn recommend(&self, stt: Option<String>, tts: Option<String>) -> Result<RecommendationView, Error> {
+        let engines = self.engines()?;
+        self.blocking(move || engines.recommend(stt, tts)).await
     }
 
     /// Keeps `key` for `provider` in the store, or removes it (`None` or blank), then reads that provider's catalogue

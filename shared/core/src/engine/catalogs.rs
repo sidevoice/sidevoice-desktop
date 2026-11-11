@@ -4,8 +4,8 @@
 
 use serde::Serialize;
 use sidevoice_engine::{
-    AcceleratorClass, Capability, CatalogStatus, Gender, LocalModelInfo, ModelBuild, ModelInfo, Reason, SpeedRange,
-    Voice,
+    AcceleratorClass, Capability, CatalogStatus, Gender, LocalModelInfo, ModelBuild, ModelInfo, Pick, Reason,
+    Recommendation, Recommended, SpeedRange, Voice,
 };
 
 use super::accelerator_name;
@@ -170,7 +170,8 @@ pub struct LocalView {
     pub recommended_build: Option<String>,
 }
 
-/// `{id, backend, accelerator?, acceleratorClass?, precision, downloadBytes, memoryMb, available, reasons, installed}`.
+/// `{id, backend, accelerator?, acceleratorClass?, precision, downloadBytes, memoryMb, available, reasons, installed,
+/// stopsInBackground}`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildView {
@@ -186,6 +187,9 @@ pub struct BuildView {
     pub available: bool,
     pub reasons: Vec<ReasonView>,
     pub installed: bool,
+    /// It runs here on a GPU the system stops serving to the app in the background (iOS): it works only while the app
+    /// is in the foreground.
+    pub stops_in_background: bool,
 }
 
 /// `{id, name?, languages, gender?}`.
@@ -204,6 +208,39 @@ pub struct VoiceView {
 pub struct SpeedView {
     pub min: f32,
     pub max: f32,
+}
+
+/// `{stt: {choice?, ranked}, tts: {choice?, ranked}}`: what the engine recommends here (`host.engine.recommend`), in
+/// the shape `@sidevoice/engine`'s `LocalCatalog.recommend` gives the page on the web.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecommendationView {
+    pub stt: RecommendedView,
+    pub tts: RecommendedView,
+}
+
+/// One capability's: the model to start with and its build (`choice`, absent when nothing of its list runs here), and
+/// its list as it stands here, best first (`ranked`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecommendedView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice: Option<PickView>,
+    pub ranked: Vec<PickView>,
+}
+
+/// `{model, build}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PickView {
+    pub model: String,
+    pub build: String,
+}
+
+pub(crate) fn recommendation(recommendation: &Recommendation) -> RecommendationView {
+    let pick = |pick: &Pick| PickView { model: pick.model.clone(), build: pick.build.clone() };
+    let recommended = |r: &Recommended| RecommendedView {
+        choice: r.choice.as_ref().map(pick),
+        ranked: r.ranked.iter().map(pick).collect(),
+    };
+    RecommendationView { stt: recommended(&recommendation.stt), tts: recommended(&recommendation.tts) }
 }
 
 /// A capability by the catalogue's id for it.
@@ -254,6 +291,7 @@ fn build(build: &ModelBuild) -> BuildView {
         available: build.available,
         reasons: build.reasons.iter().map(reason).collect(),
         installed: build.installed,
+        stops_in_background: build.stops_in_background,
     }
 }
 
