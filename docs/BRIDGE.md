@@ -300,7 +300,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `textScale` | the Android app | `{ get(), subscribe(listener) }`: the phone's text size as a multiple of its default (the page applies it to its type only; it clamps it to 0.8–2). Offered only where the webview does not follow the system's font scale itself: Android's does not (its `textZoom` stays 100, set by `MobilePlugin.load`), so the app answers through `window.SidevoiceTextScale` and says it may have changed with the window's `sidevoice-text-scale` event. iOS offers none: its webview follows Dynamic Type and the page measures it. |
 | `codeScanner` | the mobile app | `{ permission(), request(), scan(), cancel(), openSettings() }`: the camera that scans the pairing QR code. `scan()` never rejects: `{status: "scanned", text}` (the code as printed), `{status: "cancelled"}`, `{status: "denied"}`, `{status: "unavailable"}`; the page draws the viewfinder over the camera (docs/MOBILE.md → "Scanning the pairing code"). |
 | `cue` | the iOS app | `{ start(name, options?), stop(name), options }`: the app plays the page's cue itself, the sound the person chose (below, "The cues"). `null` until the app says it has a player. |
-| `audioRoute` | the iOS app | `{ open() }`: opens the system's own output picker (iOS's route sheet: speaker, car, AirPods, AirPlay) over the app, from a button of the page's own (below, "The audio route"). `null` until the app says it has one, and on a phone with none (Android today). |
+| `audioRoute` | the iOS app | `{ open(), current(), subscribe(listener) }`: opens the system's own output picker (iOS's route sheet: speaker, car, AirPods, AirPlay) over the app, from a button of the page's own, which is labelled with the name of the output now (below, "The audio route"). `null` until the app says it has one, and on a phone with none (Android today). |
 | `callSurface` | the mobile app | `{ active(), still({id, png, px}), forget(ids) }`: the app draws the call's own surfaces from the room's `callSurface`, relayed in its call report with the stills by id; the page hands each still's PNG over once, before the report that names it, and forgets the ones it shows no more (docs/MOBILE.md → "The call surface"). |
 
 `presence` is independent of `host.voice`: where the app does not own the media (Windows and Linux), it says nothing, and
@@ -321,19 +321,26 @@ name given in Settings (`Settings.Global` `device_name`), else the Bluetooth nam
 `host.audioRoute` is the system's own picker for where the call's audio plays, offered where the app can open one (iOS). An
 app cannot choose an arbitrary output on iOS: only the system can (the speaker, a car, AirPods, AirPlay), so the page does not
 list outputs there (`audioDevices.outputSelectable` is `false`); it shows a button of its own that asks the app to open the
-sheet.
+sheet. The button says where the audio plays now, by the name the system gives that output.
 
 ```ts
 interface AudioRoute {
   open(): Promise<void>;   // shows the system's sheet over the page; rejects `{key: "audio_route", code}` when it cannot
+  current(): Promise<string | null>;   // the name of the output now ("AirPods de Rubén", "iPhone"); never rejects, `null` when there is none
+  subscribe(listener: (name: string | null) => void): () => void;   // each new name as the route changes; returns the unsubscribe
 }
 ```
 
 - `host.audioRoute` is `null` until the app has answered `audio_route` `{action: "available"}` (once, as the page loads), and
   stays `null` where there is no such sheet (Android). The page reads it when it draws the control, never caches the absence.
-- `open()` resolves once the sheet is asked for. What the person picks is the system's: the page is told of nothing, and the
-  call's audio simply follows the route (the page hears of it as it hears of any route change). The sheet keeps the system's
+- `open()` resolves once the sheet is asked for. What the person picks is the system's, and the call's audio simply follows the
+  route (the page hears of it as it hears of any route change, and from `subscribe` as the new name). The sheet keeps the system's
   look and cannot be restyled.
+- `current()` is `AVAudioSession.currentRoute`'s first output's `portName`, trimmed; `null` when it has none or is empty (the page then
+  keeps its own label for the control). `subscribe` is told by the app's own observer of `AVAudioSessionRouteChangeNotification`: it
+  dispatches the window's `sidevoice-audio-route` event (as Android's text scale does) and the member answers each with `current()`;
+  nothing is told on subscribing, the page reads `current()` first. The name is the system's: the page shows it as it is, translates
+  nothing and keeps no list. The app's command takes `action` `current` besides `available` and `open`.
 - Codes: `audio-route-picker-failed` (the view the system offers for it did not take the tap) and
   `audio-route-picker-unavailable` (no such sheet on this phone).
 - The app's command `audio_route` (`action`: `available` or `open`) is granted to the app's window alone. On iOS the sheet is

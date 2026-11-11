@@ -325,18 +325,19 @@ async fn on_main<T: Send + 'static>(
 }
 
 /// `host.audioRoute` (docs/BRIDGE.md -> "The audio route"): `action` `available` (whether this phone has a system picker for where
-/// the call's audio plays, which the app can open) or `open` (opens it over the app's window; the person's choice is the system's,
+/// the call's audio plays, which the app can open), `current` (the name of the output it plays through now, or null) or `open` (opens it over the app's window; the person's choice is the system's,
 /// and the page is told of nothing). The picker's view belongs to the main thread, where `with_webview` runs it.
 #[tauri::command]
 async fn audio_route(
     app: AppHandle,
     webview: Webview,
     action: String,
-) -> Result<bool, serde_json::Value> {
+) -> Result<serde_json::Value, serde_json::Value> {
     let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
     match action.as_str() {
-        "available" => Ok(platform::audio_route_picker::available()),
+        "available" => Ok(platform::audio_route_picker::available().into()),
+        "current" => Ok(platform::audio_route_picker::current().into()),
         "open" => {
             use platform::audio_route_picker::{open, presentation};
             let before = on_main(&webview, presentation)
@@ -361,9 +362,9 @@ async fn audio_route(
                     serde_json::json!({ "key": "audio_route", "code": code, "message": code }),
                 );
             }
-            Ok(true)
+            Ok(true.into())
         }
-        _ => Err(refusal("audio_route takes available or open")),
+        _ => Err(refusal("audio_route takes available, current or open")),
     }
 }
 
@@ -571,6 +572,16 @@ fn run_app() {
                     MediaCommand::NextTrack => headset::pressed(&media_app, sidevoice_shared_headset::Presses::Double),
                 }),
             );
+            // A change of the audio route (AirPods in, the car's Bluetooth out) is told to the page, which asks `audio_route`
+            // `current` for the name (`host.audioRoute.subscribe`).
+            let route_app = handle.clone();
+            if let Err(error) = platform::audio_route_picker::observe(Arc::new(move || {
+                if let Some(window) = route_app.get_webview_window(WINDOW) {
+                    let _ = window.eval("window.dispatchEvent(new Event('sidevoice-audio-route'));");
+                }
+            })) {
+                log::warn!("audio route: {error}");
+            }
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
             if let Err(error) = platform::tls::init() {
                 log::error!("tls: {error}");

@@ -317,11 +317,24 @@
   /** The system's own picker for where the call's audio plays (`host.audioRoute`, docs/BRIDGE.md -> "The audio route"), where the
    *  phone has one the app can open (iOS's route picker sheet). Whether this phone has it is asked once (`audio_route`,
    *  `available`); until it answers, and where it does not, the member is not offered and the page shows what it shows without it.
-   *  `open()` shows the system's sheet over the page; the choice is the system's and the page is told nothing of it. */
+   *  `open()` shows the system's sheet over the page; the choice is the system's. `current()` is the name of the output the audio plays
+   *  through now (the system's: "AirPods de Rubén", "iPhone"; `null` when it names none), and `subscribe(listener)` tells each new name
+   *  as the route changes (the app says so with the window's `sidevoice-audio-route` event, as Android's text scale does). */
   let audioRouteMember = null;
+  const routeName = () => transport.own.call("audio_route", { action: "current" }).then(
+    (name) => (typeof name === "string" && name ? name : null),
+    () => null,
+  );
   transport.own.call("audio_route", { action: "available" }).then((offered) => {
     if (offered === true) audioRouteMember = Object.freeze({
       open: () => transport.own.call("audio_route", { action: "open" }).then(() => {}),
+      current: routeName,
+      subscribe: (listener) => {
+        if (typeof listener !== "function") return () => {};
+        const changed = () => routeName().then(listener);
+        win.addEventListener("sidevoice-audio-route", changed);
+        return () => win.removeEventListener("sidevoice-audio-route", changed);
+      },
     });
   }, () => {});
 

@@ -8,15 +8,19 @@
 //! presented controllers and whether it is the key window): no change is a failure it reports. If a later iOS changes the
 //! view's inner button, that is what shows.
 use std::cell::RefCell;
+use std::ptr::NonNull;
 
+use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{extern_class, msg_send, sel, MainThreadMarker};
+use objc2_avf_audio::{AVAudioSession, AVAudioSessionRouteChangeNotification};
 use objc2_core_foundation::CGRect;
+use objc2_foundation::{NSNotification, NSNotificationCenter};
 use objc2_ui_kit::{UIResponder, UIView};
 use tauri::webview::PlatformWebview;
 
-use super::{Os, Presentation};
+use super::{Changed, Os, Presentation};
 
 pub struct Native;
 
@@ -112,5 +116,35 @@ impl Os for Native {
             }
             Err(failed("the picker has no button"))
         })
+    }
+
+    fn current() -> Option<String> {
+        // SAFETY: read-only messages to the shared session, which answers from any thread.
+        let outputs = unsafe { AVAudioSession::sharedInstance().currentRoute().outputs() };
+        // SAFETY: a read of a live port description.
+        let name = unsafe { outputs.iter().next()?.portName().to_string() };
+        let name = name.trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    }
+
+    fn observe(changed: Changed) -> Result<(), String> {
+        // SAFETY: a constant of AVFAudio, linked by the app.
+        let Some(name) = (unsafe { AVAudioSessionRouteChangeNotification }) else {
+            return Err("audio-route-changes-unavailable".into());
+        };
+        let block = RcBlock::new(move |_: NonNull<NSNotification>| changed());
+        // SAFETY: no object to filter by, no queue (the block runs on the thread that posts, and only hands the event on); the
+        // block is Send + Sync (`Changed` is) and the center retains it.
+        let observer = unsafe {
+            NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+                Some(name),
+                None,
+                None,
+                &block,
+            )
+        };
+        // The center keeps the observer until it is removed, and it is not removed: it lives as long as the process.
+        std::mem::forget(observer);
+        Ok(())
     }
 }

@@ -31,6 +31,9 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
     setInterval: (fn) => (intervals.push(fn), 1),
     clearInterval: () => {},
     setTimeout: (fn) => setTimeout(fn, 0),
+    heard: new Map(),
+    addEventListener(type, fn) { (this.heard.get(type) ?? this.heard.set(type, new Set()).get(type)).add(fn); },
+    removeEventListener(type, fn) { this.heard.get(type)?.delete(fn); },
   };
   const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables, deviceName, build, debugState);
   return { api, win, invoked, intervals };
@@ -64,16 +67,28 @@ test("the system's output picker is offered only where the app says it can open 
   assert.equal(JSON.stringify(none.invoked.find(([command]) => command === "audio_route")[1]), JSON.stringify({ action: "available" }));
   assert.equal(none.api.host.audioRoute, null, "no picker: the page offers none");
 
-  live.plugin.audio_route = () => true;
+  let output = "AirPods de Rubén";
+  live.plugin.audio_route = (args) => (args.action === "current" ? output : true);
   try {
-    const { api, invoked } = install("tauri://localhost");
+    const { api, win, invoked } = install("tauri://localhost");
     assert.equal(api.host.audioRoute, null, "until the app answers");
     await settled();
     const { audioRoute } = api.host;
-    assert.deepEqual(Object.keys(audioRoute), ["open"]);
+    assert.deepEqual(Object.keys(audioRoute), ["open", "current", "subscribe"]);
     assert.equal(await audioRoute.open(), undefined);
+    assert.equal(await audioRoute.current(), "AirPods de Rubén", "the output's name, as the system gives it");
+    const told = [];
+    const stop = audioRoute.subscribe((name) => told.push(name));
+    output = "iPhone";
+    for (const fn of win.heard.get("sidevoice-audio-route")) fn();
+    await settled();
+    assert.deepEqual(told, ["iPhone"], "a change of the route tells the new name");
+    stop();
+    assert.equal(win.heard.get("sidevoice-audio-route").size, 0, "unsubscribed");
+    output = null;
+    assert.equal(await audioRoute.current(), null, "no name: null, the page keeps its own label");
     assert.equal(JSON.stringify(invoked.filter(([command]) => command === "audio_route").map(([, args]) => args)),
-      JSON.stringify([{ action: "available" }, { action: "open" }]));
+      JSON.stringify([{ action: "available" }, { action: "open" }, { action: "current" }, { action: "current" }, { action: "current" }]));
   } finally { delete live.plugin.audio_route; }
 
   live.plugin.audio_route = (args) => { if (args.action === "available") return true; throw { key: "audio_route", code: "audio-route-picker-failed" }; };
