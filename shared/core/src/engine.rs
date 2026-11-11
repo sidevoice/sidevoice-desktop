@@ -227,7 +227,7 @@ impl NativeEngines {
     /// `LocalCatalog::recommend`), for a person whose transcription hears `stt` and whose voice says `tts` (BCP 47 tags;
     /// `None`, no language to prefer): for each, the model to start with and its build, and its list as it stands here.
     pub fn recommend(&self, stt: Option<String>, tts: Option<String>) -> Result<RecommendationView, Error> {
-        let languages = Languages { stt, tts };
+        let languages = Languages { stt, tts, ..Default::default() };
         self.block_on(self.engine.local_catalog().recommend(&languages))
             .map(|recommendation| catalogs::recommendation(&recommendation))
             .map_err(|e| error::internal(format!("the engine's recommendation: {e}")))
