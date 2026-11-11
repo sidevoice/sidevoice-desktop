@@ -300,6 +300,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `textScale` | the Android app | `{ get(), subscribe(listener) }`: the phone's text size as a multiple of its default (the page applies it to its type only; it clamps it to 0.8–2). Offered only where the webview does not follow the system's font scale itself: Android's does not (its `textZoom` stays 100, set by `MobilePlugin.load`), so the app answers through `window.SidevoiceTextScale` and says it may have changed with the window's `sidevoice-text-scale` event. iOS offers none: its webview follows Dynamic Type and the page measures it. |
 | `codeScanner` | the mobile app | `{ permission(), request(), scan(), cancel(), openSettings() }`: the camera that scans the pairing QR code. `scan()` never rejects: `{status: "scanned", text}` (the code as printed), `{status: "cancelled"}`, `{status: "denied"}`, `{status: "unavailable"}`; the page draws the viewfinder over the camera (docs/MOBILE.md → "Scanning the pairing code"). |
 | `cue` | the iOS app | `{ start(name, options?), stop(name), options }`: the app plays the page's cue itself, the sound the person chose (below, "The cues"). `null` until the app says it has a player. |
+| `audioRoute` | the iOS app | `{ open() }`: opens the system's own output picker (iOS's route sheet: speaker, car, AirPods, AirPlay) over the app, from a button of the page's own (below, "The audio route"). `null` until the app says it has one, and on a phone with none (Android today). |
 | `callSurface` | the mobile app | `{ active(), still({id, png, px}), forget(ids) }`: the app draws the call's own surfaces from the room's `callSurface`, relayed in its call report with the stills by id; the page hands each still's PNG over once, before the report that names it, and forgets the ones it shows no more (docs/MOBILE.md → "The call surface"). |
 
 `presence` is independent of `host.voice`: where the app does not own the media (Windows and Linux), it says nothing, and
@@ -314,6 +315,31 @@ the hostname. A non-empty string, trimmed; absent when the system has none, and 
 itself (the page's, in a browser's words: "Chrome on Mac"). Read each time the room window opens (`desktop/tauri/src/platform/host.rs`,
 core `computer_name`). The mobile app supplies it too, read when its window is made (`mobile/tauri/src/platform/device_name`): on Android the
 name given in Settings (`Settings.Global` `device_name`), else the Bluetooth name, else the model's human name; on iOS `UIDevice.current.name`.
+
+## The audio route
+
+`host.audioRoute` is the system's own picker for where the call's audio plays, offered where the app can open one (iOS). An
+app cannot choose an arbitrary output on iOS: only the system can (the speaker, a car, AirPods, AirPlay), so the page does not
+list outputs there (`audioDevices.outputSelectable` is `false`); it shows a button of its own that asks the app to open the
+sheet.
+
+```ts
+interface AudioRoute {
+  open(): Promise<void>;   // shows the system's sheet over the page; rejects `{key: "audio_route", code}` when it cannot
+}
+```
+
+- `host.audioRoute` is `null` until the app has answered `audio_route` `{action: "available"}` (once, as the page loads), and
+  stays `null` where there is no such sheet (Android). The page reads it when it draws the control, never caches the absence.
+- `open()` resolves once the sheet is asked for. What the person picks is the system's: the page is told of nothing, and the
+  call's audio simply follows the route (the page hears of it as it hears of any route change). The sheet keeps the system's
+  look and cannot be restyled.
+- Codes: `audio-route-picker-failed` (the view the system offers for it did not take the tap) and
+  `audio-route-picker-unavailable` (no such sheet on this phone).
+- The app's command `audio_route` (`action`: `available` or `open`) is granted to the app's window alone. On iOS the sheet is
+  AVKit's `AVRoutePickerView`, which has no call to open it: the app keeps one, hidden and without size, in the page's window and
+  sends its button the tap (`mobile/tauri/src/platform/audio_route_picker/ios.rs`). AVKit's bundle is loaded when the page first
+  asks. The audio session's category, mode and options are not touched.
 
 ## The cues
 
@@ -814,6 +840,13 @@ What is this app's own:
   system tells of no change, so from the first `audioDevices` or `setAudioDevices` the app lists the devices every 2 s
   and tells `onAudioDevices` each change (other devices, another choice, or a chosen one that went away, said once as
   `lost` and replaced by the default).
+- On a phone whose system routes the microphone (iOS), the microphones are the audio session's own: `inputs` lists
+  `AVAudioSession.availableInputs` (id: the port's `UID`, label: its `portName`: the phone's microphone, a car's hands-free,
+  AirPods), `input` is the session's preferred input, and choosing one is `setPreferredInput` (`""`/`null`: no preference, the
+  system's). A choice of an input the session does not offer is `audio-device-unknown`. The preferred input is dropped by the
+  system when the device goes away (or by the app, once it sees it gone): it is then said once as `lost.input`, as for any
+  device. Nothing of the session's category, mode or options changes (the call stays a call: desktop#466). The speakers stay the
+  voice's list, `outputSelectable` is still the voice's report (`false` on iOS): see `host.audioRoute` for the output.
 - A page that loads anew has no old calls or lanes: each is stopped and, like any stopped call, keeps its models for its
   idle period.
 

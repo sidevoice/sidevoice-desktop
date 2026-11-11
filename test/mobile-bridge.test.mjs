@@ -45,7 +45,7 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.equal(typeof api.snapshot, "function");
     assert.equal(typeof api.run, "function");
     const host = api.host;
-    assert.deepEqual(Object.keys(host).sort(), ["build", "callSurface", "codeScanner", "cue", "engine", "microphone", "pairings", "presence", "reach", "screen", "shortcuts", "voice"]);
+    assert.deepEqual(Object.keys(host).sort(), ["audioRoute", "build", "callSurface", "codeScanner", "cue", "engine", "microphone", "pairings", "presence", "reach", "screen", "shortcuts", "voice"]);
     assert.equal(host.callSurface.active(), true, "the app draws the call's surfaces");
     for (const fn of ["still", "forget"]) assert.equal(typeof host.callSurface[fn], "function", fn);
     assert.equal(JSON.stringify(host.presence), JSON.stringify({ media: "app" }));
@@ -56,6 +56,33 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.ok(Object.isFrozen(host));
   });
 }
+
+test("the system's output picker is offered only where the app says it can open one, and opens it on the page's ask", async () => {
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const none = install("tauri://localhost");
+  await settled();
+  assert.equal(JSON.stringify(none.invoked.find(([command]) => command === "audio_route")[1]), JSON.stringify({ action: "available" }));
+  assert.equal(none.api.host.audioRoute, null, "no picker: the page offers none");
+
+  live.plugin.audio_route = () => true;
+  try {
+    const { api, invoked } = install("tauri://localhost");
+    assert.equal(api.host.audioRoute, null, "until the app answers");
+    await settled();
+    const { audioRoute } = api.host;
+    assert.deepEqual(Object.keys(audioRoute), ["open"]);
+    assert.equal(await audioRoute.open(), undefined);
+    assert.equal(JSON.stringify(invoked.filter(([command]) => command === "audio_route").map(([, args]) => args)),
+      JSON.stringify([{ action: "available" }, { action: "open" }]));
+  } finally { delete live.plugin.audio_route; }
+
+  live.plugin.audio_route = (args) => { if (args.action === "available") return true; throw { key: "audio_route", code: "audio-route-picker-failed" }; };
+  try {
+    const { api } = install("tauri://localhost");
+    await settled();
+    await assert.rejects(api.host.audioRoute.open(), (error) => error.code === "audio-route-picker-failed", "a refusal reaches the page");
+  } finally { delete live.plugin.audio_route; }
+});
 
 test("the phone's own cue is offered only where the app says it has a player, and plays the sound the page chose", async () => {
   const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -155,7 +182,7 @@ test("the call is reported to the app, and the app's commands run on the room", 
   const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
   await settled();
   // Before the room is up: reported once, not ready, with the page's number (asked once).
-  assert.deepEqual(invoked.map(([command]) => command).filter((command) => command !== "cue"), ["call_page", "call_state"]);
+  assert.deepEqual(invoked.map(([command]) => command).filter((command) => command !== "cue" && command !== "audio_route"), ["call_page", "call_state"]);
   const [report] = invoked.filter(([command]) => command === "call_state");
   assert.equal(report[1].page, 7);
   assert.equal(report[1].snapshot.ready, false);

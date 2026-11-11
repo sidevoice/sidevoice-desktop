@@ -1,5 +1,7 @@
 //! The only place the mobile app tells one OS from another.
 pub mod app_files;
+pub mod audio_input;
+pub mod audio_route_picker;
 pub mod backup;
 pub mod device_name;
 pub mod entry;

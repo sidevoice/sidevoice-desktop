@@ -314,6 +314,17 @@
     });
   }, () => {});
 
+  /** The system's own picker for where the call's audio plays (`host.audioRoute`, docs/BRIDGE.md -> "The audio route"), where the
+   *  phone has one the app can open (iOS's route picker sheet). Whether this phone has it is asked once (`audio_route`,
+   *  `available`); until it answers, and where it does not, the member is not offered and the page shows what it shows without it.
+   *  `open()` shows the system's sheet over the page; the choice is the system's and the page is told nothing of it. */
+  let audioRouteMember = null;
+  transport.own.call("audio_route", { action: "available" }).then((offered) => {
+    if (offered === true) audioRouteMember = Object.freeze({
+      open: () => transport.own.call("audio_route", { action: "open" }).then(() => {}),
+    });
+  }, () => {});
+
   const headset = shortcuts();
 
   const api = {
@@ -359,6 +370,10 @@
       /** The cues the page decides on, played by the app (only where the phone has a player). */
       get cue() {
         return cueMember;
+      },
+      /** The system's output picker, opened from the page's own button (only where the phone has one; `null` otherwise). */
+      get audioRoute() {
+        return audioRouteMember;
       },
       /** Whether the person's screen is locked now (`screen_locked`), the desktop's contract: the page's "only with the screen
        *  off", which the app in the background with the screen on is not. A screen that is off counts as locked; `false` where

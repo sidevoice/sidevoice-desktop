@@ -303,6 +303,39 @@ fn cue(
     Ok(true)
 }
 
+/// `host.audioRoute` (docs/BRIDGE.md -> "The audio route"): `action` `available` (whether this phone has a system picker for where
+/// the call's audio plays, which the app can open) or `open` (opens it over the app's window; the person's choice is the system's,
+/// and the page is told of nothing). The picker's view belongs to the main thread, where `with_webview` runs it.
+#[tauri::command]
+async fn audio_route(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+) -> Result<bool, serde_json::Value> {
+    let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
+    the_page(&app, &webview).map_err(|why| refusal(&why))?;
+    match action.as_str() {
+        "available" => Ok(platform::audio_route_picker::available()),
+        "open" => {
+            let (opened, answer) = std::sync::mpsc::channel();
+            webview
+                .with_webview(move |webview| {
+                    let _ = opened.send(platform::audio_route_picker::open(&webview));
+                })
+                .map_err(|error| refusal(&error.to_string()))?;
+            // The main thread answers; waiting is on a blocking thread, never on the main one.
+            match tauri::async_runtime::spawn_blocking(move || answer.recv()).await {
+                Ok(Ok(Ok(()))) => Ok(true),
+                Ok(Ok(Err(code))) => {
+                    Err(serde_json::json!({ "key": "audio_route", "code": code, "message": code }))
+                }
+                _ => Err(refusal("the picker was not opened")),
+            }
+        }
+        _ => Err(refusal("audio_route takes available or open")),
+    }
+}
+
 /// `host.screen.locked()` (docs/BRIDGE.md -> "The screen"), the desktop's contract: whether the person's screen is locked now, a
 /// screen that is off counting as locked (iOS: its protected data gone, which needs a passcode and comes some seconds after the
 /// lock; Android: the keyguard, or the screen off), for the page's "only with the screen off" thinking sound: the app in the
@@ -477,6 +510,7 @@ fn run_app() {
         .plugin(sidevoice_shared_tauri::init(the_page, pages))
         .manage(LastReport::default())
         .invoke_handler(tauri::generate_handler![
+            audio_route,
             call_page,
             call_state,
             call_still,
@@ -541,6 +575,8 @@ fn run_app() {
                     calls: phone.clone(),
                     // The screen stays on while a model download runs: the system suspends the app soon after it turns off.
                     downloads: Arc::new(downloads::KeepScreenOn::new(handle.clone())),
+                    // The microphone is the audio session's route on iOS (its available and preferred inputs).
+                    inputs: platform::audio_input::route(),
                 },
             ));
             // The room's call holds the call's service (Android), for the host's current page.
