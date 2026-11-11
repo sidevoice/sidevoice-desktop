@@ -32,6 +32,7 @@
 use crate::cli::Cli;
 use crate::connector;
 use crate::core_socket::{CoreError, CoreSocket, Health, Paired};
+use crate::endpoints;
 use crate::identity;
 use crate::install::{self, Failure, Job, Step};
 use crate::npm::Fetch;
@@ -271,6 +272,12 @@ impl LocalHost {
             // No core to carry requests to; a core that comes back is checked again before the token goes out.
             self.proxy.set_token(None);
         }
+        // The port the core that answered bound, from its record, if the record is that launch's: asked only while one
+        // answers, and before `inner` is held.
+        let core_port = health
+            .as_ref()
+            .ok()
+            .and_then(|health| endpoints::core_port(&self.config.dirs, health.launch_id.as_deref()));
         let product_version = self.product_version();
         let installing = self.install.lock().unwrap().is_some();
         let mut inner = self.inner.lock().unwrap();
@@ -279,6 +286,7 @@ impl LocalHost {
             core: health.as_ref(),
             link: &inner.link,
             product_version: product_version.as_deref(),
+            core_port,
         });
         if installing {
             // What the service passes through meanwhile is the install's, not a condition to act on.

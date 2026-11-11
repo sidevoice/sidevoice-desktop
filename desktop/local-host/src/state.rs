@@ -14,6 +14,10 @@
 //! | no core: the service's state | `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `failed`, `service-failed` as reported; `running` → `starting` (the app cannot reach that core yet; the next poll tells) |
 //! | no core, no connector, no install | `absent` |
 //!
+//! `core` (while one answers) is `{pid, version, api, launch_id, port?}`: `port` is the TCP port the core bound, from its record
+//! (`endpoints::core_port`, only when the record is of the launch that answers), `10829` unless the installation names another — the port of the service, not the one in the
+//! local pairing's `urls`, which is the app's own proxy's and new at each launch. Absent when the record does not say.
+//!
 //! `reachable` (always present) is whether a core answers and the app's pairing with it works — then the page can use
 //! the host (`pairing()` is non-null) whatever `state` says, as SEAMS §5 pins.
 //!
@@ -120,14 +124,21 @@ pub struct Observed<'a> {
     pub link: &'a Link,
     /// What the installation's program says its version is, when known.
     pub product_version: Option<&'a str>,
+    /// The TCP port the answering core bound, from its record (`endpoints::core_port`).
+    pub core_port: Option<u16>,
 }
 
 fn compatible(api: Option<i64>) -> bool {
     api.is_some_and(|api| API.contains(&api))
 }
 
-fn health_core(health: &Health) -> Value {
-    json!({ "pid": health.pid, "version": health.version, "api": health.api, "launch_id": health.launch_id })
+fn health_core(health: &Health, port: Option<u16>) -> Value {
+    let mut core =
+        json!({ "pid": health.pid, "version": health.version, "api": health.api, "launch_id": health.launch_id });
+    if let Some(port) = port {
+        core["port"] = json!(port);
+    }
+    core
 }
 
 pub fn report(observed: Observed<'_>) -> Report {
@@ -148,7 +159,7 @@ pub fn report(observed: Observed<'_>) -> Report {
             report.failure = Some(json!(refusal));
         }
         Ok(health) => {
-            report.core = Some(health_core(health));
+            report.core = Some(health_core(health, observed.core_port));
             report.calls = health.calls.or(report.calls);
             report.state = match observed.link {
                 _ if !compatible(health.api) => State::Incompatible,
@@ -223,7 +234,7 @@ mod tests {
     }
 
     fn state(status: Option<Value>, core: Result<&Health, &CoreError>, link: &Link) -> Report {
-        report(Observed { status: status.as_ref(), core, link, product_version: None })
+        report(Observed { status: status.as_ref(), core, link, product_version: None, core_port: None })
     }
 
     #[test]
@@ -240,6 +251,20 @@ mod tests {
         assert_eq!(running.service.as_deref(), Some("launchd"));
         assert_eq!(running.calls, Some(1), "the core's own count wins");
         assert_eq!(running.core.unwrap()["launch_id"], "L1");
+    }
+
+    #[test]
+    fn the_core_says_the_port_it_bound_when_its_record_does() {
+        let h = health(Some(1));
+        let with = |core_port| {
+            let observed =
+                Observed { status: None, core: Ok(&h), link: &Link::Paired, product_version: None, core_port };
+            report(observed).core.unwrap()
+        };
+        assert_eq!(with(Some(10829))["port"], 10829);
+        assert_eq!(with(Some(56446))["port"], 56446, "what it bound, whatever that is");
+        assert_eq!(with(None).get("port"), None, "absent, not null, when the record does not say");
+        assert_eq!(with(Some(10829))["launch_id"], "L1");
     }
 
     #[test]
@@ -347,7 +372,13 @@ mod tests {
             (None, Err(&unsafe_dir), Link::Unpaired),
         ];
         for (status, core, link) in cases {
-            let got = report(Observed { status: status.as_ref(), core, link: &link, product_version: Some("0.8.1") });
+            let got = report(Observed {
+                status: status.as_ref(),
+                core,
+                link: &link,
+                product_version: Some("0.8.1"),
+                core_port: None,
+            });
             assert_eq!(json!(got)["product_version"], "0.8.1", "{:?}", got.state);
         }
         let running = state(None, Ok(&h), &Link::Paired);

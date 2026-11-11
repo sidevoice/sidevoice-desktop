@@ -28,6 +28,9 @@ use std::thread;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 
+/// The TCP port its record says it bound: the core's default (it listens on its local channel only; nothing is on this port).
+pub const PORT: u16 = 10829;
+
 const DESKTOP_ORIGINS: [&str; 3] = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
 
 #[derive(Default)]
@@ -53,6 +56,8 @@ pub struct FakeCore {
     worker: Mutex<Option<thread::JoinHandle<()>>>,
     socket: std::path::PathBuf,
     record: std::path::PathBuf,
+    /// What its record names as its endpoint.
+    endpoint: String,
     print: bool,
 }
 
@@ -80,6 +85,7 @@ impl FakeCore {
             worker: Mutex::new(None),
             socket,
             record,
+            endpoint: endpoint.to_string(),
             print,
         });
         let serving = core.clone();
@@ -94,10 +100,7 @@ impl FakeCore {
                         return;
                     }
                 };
-                if let Err(error) = Files::write_private(
-                    &serving.record,
-                    json!({"pid": std::process::id(), "endpoint": endpoint.to_string()}).to_string().as_bytes(),
-                ) {
+                if let Err(error) = serving.write_record(1) {
                     let _ = ready.send(Err(error));
                     return;
                 }
@@ -147,7 +150,20 @@ impl FakeCore {
 
     /// As if the core were restarted: a new launch id, its registry kept.
     pub fn relaunch(&self) {
-        self.state.lock().unwrap().launch += 1;
+        let launch = {
+            let mut state = self.state.lock().unwrap();
+            state.launch += 1;
+            state.launch
+        };
+        self.write_record(launch).expect("the record is written again");
+    }
+
+    /// The core's record `C/core.json`, as a core of launch `launch` writes it once it is ready.
+    fn write_record(&self, launch: u32) -> io::Result<()> {
+        let record = json!({
+            "pid": std::process::id(), "port": PORT, "launch_id": format!("launch-{launch}"), "endpoint": self.endpoint,
+        });
+        Files::write_private(&self.record, record.to_string().as_bytes())
     }
 
     /// As if another device revoked every device (or the list was lost): each token refused, each call ended.

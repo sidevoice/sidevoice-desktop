@@ -125,7 +125,7 @@ whatever `state` says — the page uses the host when `pairing()` is non-null (S
 
 `state()` → `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}`: `failure`
 as the service reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid,
-version, api, launch_id}` (the core's own version); `product_version` the installed Sidevoice's version — the
+version, api, launch_id, port?}` (the core's own version; `port` the TCP port it bound, from its record `C/core.json` when that record is of the launch that answers (its `launch_id` is the one health says; a record a crashed core left says nothing), `10829` unless the installation names another — the service's port, which the page must not read from `pairing().urls`: that is the app's own proxy, on a port new at each launch); `product_version` the installed Sidevoice's version — the
 `sidevoice` package, which bundles the core — as the person knows it («Sidevoice 0.8.1»), `null` when unknown or
 nothing is installed; `calls` absent when unknown (the service says `null` with no core answering); `attempts` the
 manager's restarts so far and `limit` its limit when it has one (systemd; launchd has none) — «(2 de 5)» only with
