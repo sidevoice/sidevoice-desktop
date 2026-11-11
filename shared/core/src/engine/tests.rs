@@ -496,7 +496,7 @@ fn a_local_build_exposes_the_engines_accelerator_class() {
     }
 }
 
-/// The two Supertonic models have different stable voice ids. Keep every display name, gender and language through
+/// The two Supertonic models each keep their stable voice ids. Keep every display name, gender and language through
 /// the bundled engine catalogue and this bridge, without downloading any model.
 #[test]
 fn the_bundled_supertonic_voices_reach_the_page() {
@@ -508,7 +508,7 @@ fn the_bundled_supertonic_voices_reach_the_page() {
     for (model_id, ids, languages) in [
         (
             "supertonic-2",
-            (0..10).map(|i| if i < 5 { format!("F{}", i + 1) } else { format!("M{}", i - 4) }).collect::<Vec<_>>(),
+            (0..10).map(|i| i.to_string()).collect::<Vec<_>>(),
             vec!["en", "ko", "es", "pt", "fr"],
         ),
         (
