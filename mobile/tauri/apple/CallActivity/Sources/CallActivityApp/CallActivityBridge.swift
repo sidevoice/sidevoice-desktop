@@ -35,6 +35,27 @@ public final class CallActivityBridge: NSObject {
         }
     }
 
+    /// Ends every Live Activity of the app and returns once they are gone, or after `seconds`: for the app's own end
+    /// (`applicationWillTerminate`, the person swiping the app away), which runs on the main thread and blocks it until the
+    /// process is let go. `end` hands its work to the main queue, which would never run it then, and the activity would stay
+    /// on the Lock Screen with nothing behind it. This one waits on a task that does not need the main queue.
+    @objc public static func endNow(_ seconds: Double) {
+        Coming.now.set(false)
+        guard #available(iOS 16.1, *) else { return }
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            for activity in Activity<CallActivityAttributes>.activities {
+                if #available(iOS 16.2, *) {
+                    await activity.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    await activity.end(using: nil, dismissalPolicy: .immediate)
+                }
+            }
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + max(0, seconds))
+    }
+
     /// Whether the call's Live Activity is on the screens now (requested and not over), or on its way: from `start` until
     /// it is requested, when one can come (`Coming`). False before iOS 16.1, with Live Activities off (from the call's
     /// first report), and once a request has failed. Any thread: the media controls ask on every report, and give way to

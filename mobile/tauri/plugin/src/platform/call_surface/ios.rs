@@ -62,6 +62,17 @@ impl Os for Native {
         }
     }
 
+    fn end_now(limit: std::time::Duration) {
+        if let Ok(mut current) = ON_ACTION.lock() {
+            *current = None;
+        }
+        let Some(bridge) = bridge() else { return };
+        // SAFETY: `+[SidevoiceCallActivity endNow:]` takes a double (seconds) and returns nothing, from any thread.
+        unsafe {
+            let _: () = msg_send![bridge, endNow: limit.as_secs_f64()];
+        }
+    }
+
     fn os_log(category: &str, message: &str) {
         // Not `bridge()`: a build without the Swift side has no log to write to, and says nothing.
         let Some(log) = AnyClass::get(c"SidevoiceLog") else {

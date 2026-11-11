@@ -31,9 +31,9 @@ pub use call_service::{
     CallServiceError, FocusState, StopReason,
 };
 pub use call_surface::{
-    clear_stills, forget_stills, os_log, save_still, stills_dir, CallSurface, Other, Phase,
-    SpokenPage, Still, StillError, SurfaceAction, SurfaceWords, STILLS_CAP, STILL_ID_LIMIT,
-    STILL_LIMIT, STILL_MAX_PX, URL_SCHEME,
+    clear_stills, end_surface_now, forget_stills, os_log, save_still, stills_dir, CallSurface,
+    Other, Phase, SpokenPage, Still, StillError, SurfaceAction, SurfaceWords, STILLS_CAP,
+    STILL_ID_LIMIT, STILL_LIMIT, STILL_MAX_PX, URL_SCHEME,
 };
 pub use cue::{
     cue_available, cue_current, cue_ticket, end_cues, gain_db, interval_scale, prepare_cue,
