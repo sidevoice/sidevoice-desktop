@@ -214,6 +214,7 @@ fn capabilities_report_explicit_host_identity_and_memory() {
         accelerators: vec![Accelerator::Cpu],
         memory_mb: Some(2048),
         cores: Some(4),
+        accelerator_memory: Vec::new(),
         gpu_stops_in_background: false,
     };
     let test = engines_with_capabilities("explicit-capabilities", false, false, Some(supplied));
