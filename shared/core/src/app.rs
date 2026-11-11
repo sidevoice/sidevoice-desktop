@@ -22,6 +22,7 @@
 
 mod downloads;
 mod engine;
+mod inputs;
 mod keychain;
 #[cfg(test)]
 mod tests;
@@ -68,10 +69,13 @@ pub struct Hooks {
     pub calls: Arc<dyn CallActivity>,
     /// What the app does while a model download runs; [`NoDownloadActivity`] for nothing.
     pub downloads: Arc<dyn DownloadActivity>,
+    /// Where the system's route chooses the microphone (a phone's audio session); [`NoInputRoute`] where the voice's own list is it.
+    pub inputs: Arc<dyn InputRoute>,
 }
 
 pub use crate::voice::host::{CallActivity, NoCallActivity};
 pub use downloads::{DownloadActivity, NoDownloadActivity};
+pub use inputs::{InputRoute, NoInputRoute, SystemInputs};
 
 /// Lets work use the app's data, or refuses it while the data is being changed.
 pub trait Admission: Send + Sync + 'static {
@@ -153,6 +157,8 @@ struct Inner<A: LaneAudio> {
     jobs: Arc<Jobs>,
     /// The model downloads that run, for the app's [`DownloadActivity`].
     downloads: Arc<downloads::Downloads>,
+    /// The system's route for the microphone, and what the person asked of it.
+    inputs: Arc<inputs::Inputs>,
     /// The current page's generation (the call host's own counter, shared with the sinks of the calls, which drop what is
     /// for another).
     generation: Arc<AtomicU64>,
@@ -199,6 +205,7 @@ impl<A: LaneAudio> AppHost<A> {
         let generation = Arc::clone(&voice.page);
         voice.active.observe(Arc::clone(&hooks.calls));
         let downloads = downloads::Downloads::new(Arc::clone(&hooks.downloads));
+        let inputs = Arc::new(inputs::Inputs::new(Arc::clone(&hooks.inputs)));
         let inner = Inner {
             runtime,
             hooks,
@@ -206,6 +213,7 @@ impl<A: LaneAudio> AppHost<A> {
             engines,
             jobs: Arc::default(),
             downloads,
+            inputs,
             generation,
             closing: AtomicBool::new(false),
             loads: Mutex::default(),
@@ -370,12 +378,15 @@ impl<A: LaneAudio> AppHost<A> {
             return;
         }
         let (events, devices) = (Arc::clone(&self.inner.hooks.events), state.devices.clone());
+        let inputs = Arc::clone(&self.inner.inputs);
         let current = Arc::clone(&self.inner.generation);
         let watcher = self.inner.runtime.spawn(async move {
             let mut last: Option<AudioDevices> = None;
             loop {
-                let listing = devices.clone();
-                let Ok(Ok(now)) = tokio::task::spawn_blocking(move || listing.list()).await else {
+                let (listing, route) = (devices.clone(), Arc::clone(&inputs));
+                let Ok(Ok(now)) =
+                    tokio::task::spawn_blocking(move || listing.list().map(|list| route.apply(list))).await
+                else {
                     tokio::time::sleep(DEVICES_EVERY).await;
                     continue;
                 };

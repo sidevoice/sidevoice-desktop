@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use sidevoice_shared::app::{
     Admission, AlwaysAdmit, AppHost, EventSink, Hooks, HostConfig, KeyError, Lease, NoCallActivity, NoDownloadActivity,
-    PageGeneration, ProviderKeys,
+    NoInputRoute, PageGeneration, ProviderKeys,
 };
 use sidevoice_shared::sidevoice_voice::{AudioIo, IoSink, NativeDevices};
 use sidevoice_shared::voice::host::LaneAudio;
@@ -179,6 +179,7 @@ impl Shell {
             keys: Arc::clone(&store) as Arc<dyn ProviderKeys>,
             calls: Arc::new(NoCallActivity),
             downloads: Arc::new(NoDownloadActivity),
+            inputs: Arc::new(NoInputRoute),
         };
         let host = AppHost::with_audio(
             HostConfig { model_root: root.clone() },

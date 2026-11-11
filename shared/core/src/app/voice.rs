@@ -247,8 +247,8 @@ impl<A: LaneAudio> AppHost<A> {
     pub async fn audio_devices(&self, page: PageGeneration) -> Result<Value, Refusal> {
         self.current(page)?;
         self.watch_devices();
-        let devices = self.inner.voice.devices.clone();
-        listed(self.inner.runtime.spawn_blocking(move || devices.list()).await)
+        let (devices, inputs) = (self.inner.voice.devices.clone(), Arc::clone(&self.inner.inputs));
+        listed(self.inner.runtime.spawn_blocking(move || devices.list().map(|list| inputs.apply(list))).await)
     }
 
     /// Chooses the microphone, the speaker or both, at any time: a call that runs switches its microphone at once and
@@ -258,8 +258,13 @@ impl<A: LaneAudio> AppHost<A> {
     pub async fn set_audio_devices(&self, page: PageGeneration, choice: AudioChoice) -> Result<Value, Refusal> {
         self.current(page)?;
         self.watch_devices();
-        let devices = self.inner.voice.devices.clone();
-        listed(self.inner.runtime.spawn_blocking(move || devices.choose(choice.input, choice.output)).await)
+        let (devices, inputs) = (self.inner.voice.devices.clone(), Arc::clone(&self.inner.inputs));
+        let chosen = move || {
+            // The microphone is the system route's where the app has one; the voice takes what is left of the choice.
+            let input = inputs.take(choice.input)?;
+            devices.choose(input, choice.output).map(|list| inputs.apply(list))
+        };
+        listed(self.inner.runtime.spawn_blocking(chosen).await)
     }
 }
 

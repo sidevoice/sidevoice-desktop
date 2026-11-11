@@ -303,6 +303,71 @@ fn cue(
     Ok(true)
 }
 
+/// How long the system's picker is given to come up before the window is looked at (it animates in).
+const AUDIO_ROUTE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// `work` on the main thread with the platform's web view, and its answer: UIKit's objects are the main thread's.
+async fn on_main<T: Send + 'static>(
+    webview: &Webview,
+    work: impl FnOnce(&tauri::webview::PlatformWebview) -> T + Send + 'static,
+) -> Result<T, String> {
+    let (done, answer) = std::sync::mpsc::channel();
+    webview
+        .with_webview(move |platform| {
+            let _ = done.send(work(&platform));
+        })
+        .map_err(|error| error.to_string())?;
+    // The main thread answers; waiting is on a blocking thread, never on the main one.
+    tauri::async_runtime::spawn_blocking(move || answer.recv())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+/// `host.audioRoute` (docs/BRIDGE.md -> "The audio route"): `action` `available` (whether this phone has a system picker for where
+/// the call's audio plays, which the app can open), `current` (the name of the output it plays through now, or null) or `open` (opens it over the app's window; the person's choice is the system's,
+/// and the page is told of nothing). The picker's view belongs to the main thread, where `with_webview` runs it.
+#[tauri::command]
+async fn audio_route(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+) -> Result<serde_json::Value, serde_json::Value> {
+    let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
+    the_page(&app, &webview).map_err(|why| refusal(&why))?;
+    match action.as_str() {
+        "available" => Ok(platform::audio_route_picker::available().into()),
+        "current" => Ok(platform::audio_route_picker::current().into()),
+        "open" => {
+            use platform::audio_route_picker::{open, presentation};
+            let before = on_main(&webview, presentation)
+                .await
+                .map_err(|why| refusal(&why))?;
+            on_main(&webview, open)
+                .await
+                .map_err(|why| refusal(&why))?
+                .map_err(|code| serde_json::json!({ "key": "audio_route", "code": code, "message": code }))?;
+            // The view does not say that its sheet came up: the window does. Given a moment, it shows something over the page
+            // or the open failed, which the page is told (not a button that does nothing).
+            tauri::async_runtime::spawn_blocking(|| std::thread::sleep(AUDIO_ROUTE_SETTLE))
+                .await
+                .ok();
+            let after = on_main(&webview, presentation)
+                .await
+                .map_err(|why| refusal(&why))?;
+            if after == before {
+                log::warn!("the output route picker did not open: nothing came over the window");
+                let code = "audio-route-picker-failed";
+                return Err(
+                    serde_json::json!({ "key": "audio_route", "code": code, "message": code }),
+                );
+            }
+            Ok(true.into())
+        }
+        _ => Err(refusal("audio_route takes available, current or open")),
+    }
+}
+
 /// `host.screen.locked()` (docs/BRIDGE.md -> "The screen"), the desktop's contract: whether the person's screen is locked now, a
 /// screen that is off counting as locked (iOS: its protected data gone, which needs a passcode and comes some seconds after the
 /// lock; Android: the keyguard, or the screen off), for the page's "only with the screen off" thinking sound: the app in the
@@ -477,6 +542,7 @@ fn run_app() {
         .plugin(sidevoice_shared_tauri::init(the_page, pages))
         .manage(LastReport::default())
         .invoke_handler(tauri::generate_handler![
+            audio_route,
             call_page,
             call_state,
             call_still,
@@ -506,6 +572,16 @@ fn run_app() {
                     MediaCommand::NextTrack => headset::pressed(&media_app, sidevoice_shared_headset::Presses::Double),
                 }),
             );
+            // A change of the audio route (AirPods in, the car's Bluetooth out) is told to the page, which asks `audio_route`
+            // `current` for the name (`host.audioRoute.subscribe`).
+            let route_app = handle.clone();
+            if let Err(error) = platform::audio_route_picker::observe(Arc::new(move || {
+                if let Some(window) = route_app.get_webview_window(WINDOW) {
+                    let _ = window.eval("window.dispatchEvent(new Event('sidevoice-audio-route'));");
+                }
+            })) {
+                log::warn!("audio route: {error}");
+            }
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
             if let Err(error) = platform::tls::init() {
                 log::error!("tls: {error}");
@@ -541,6 +617,8 @@ fn run_app() {
                     calls: phone.clone(),
                     // The screen stays on while a model download runs: the system suspends the app soon after it turns off.
                     downloads: Arc::new(downloads::KeepScreenOn::new(handle.clone())),
+                    // The microphone is the audio session's route on iOS (its available and preferred inputs).
+                    inputs: platform::audio_input::route(),
                 },
             ));
             // The room's call holds the call's service (Android), for the host's current page.

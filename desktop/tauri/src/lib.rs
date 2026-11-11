@@ -42,7 +42,7 @@ use sidevoice_desktop_core::build_info::BuildInfo;
 use sidevoice_desktop_core::settings::Settings;
 use sidevoice_desktop_core::shortcuts::Action;
 use sidevoice_desktop_core::{media, settings};
-use sidevoice_shared::app::{AppHost, Hooks, HostConfig, NoCallActivity, NoDownloadActivity};
+use sidevoice_shared::app::{AppHost, Hooks, HostConfig, NoCallActivity, NoDownloadActivity, NoInputRoute};
 use sidevoice_shared_tauri::platform::media_controls::{self, CallState, MediaCommand};
 use sidevoice_shared_tauri::platform::origin::APP_ORIGIN;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -525,6 +525,7 @@ pub fn run() {
                     keys: Arc::new(app_hooks::keychain()),
                     calls: Arc::new(NoCallActivity),
                     downloads: Arc::new(NoDownloadActivity),
+                    inputs: Arc::new(NoInputRoute),
                 },
             ));
             // What the shared plugin's commands hand to the app: the levels to the card, the pairings to the private file.
