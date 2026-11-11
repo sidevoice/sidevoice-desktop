@@ -154,7 +154,8 @@ struct RoundFace: View {
     }
 }
 
-/// The other conversations: up to three faces of 26 overlapping by 8, enlarged by their `k` (overflow), then the count;
+/// The other conversations: up to three faces of 26 overlapping by 8, each ringed apart from the next, enlarged by their
+/// `k` (overflow), then the count of conversations (the call's own included, as the list it opens shows them);
 /// nothing at all when the call has no other conversation.
 /// One link to the app's conversation list (D-LA-SIMPLE).
 @available(iOS 16.1, *)
@@ -171,12 +172,7 @@ struct OthersStack: View {
     private var stack: some View {
         Link(destination: CallLinks.conversations) {
             HStack(spacing: 0) {
-                HStack(spacing: -8) {
-                    ForEach(Array(state.others.prefix(3).enumerated()), id: \.offset) { _, other in
-                        Still(creature: other, ground: .disc, overflow: true, side: 26)
-                            .frame(width: 26, height: 26)
-                    }
-                }
+                faces
                 if state.conversationCount > 0 {
                     Text("\(state.conversationCount)")
                         .font(DMSans.font(13, 650))
@@ -189,6 +185,37 @@ struct OthersStack: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(state.words.conversations)
+    }
+
+    private static let face: CGFloat = 26
+    private static let step: CGFloat = 18
+    /// The gap between a face and the one over it.
+    private static let ring: CGFloat = 2
+
+    /// The faces, each over the one before it, which has a ring-wide gap cut out of it around the newer face: whatever is
+    /// behind the card (the Lock Screen's material, the island's black) shows through, as the mic badge's ring does, in
+    /// light and dark alike. The first of `others` underneath, on the left.
+    private var faces: some View {
+        let shown = Array(state.others.prefix(3).enumerated())
+        return ZStack(alignment: .leading) {
+            ForEach(shown, id: \.offset) { index, other in
+                Still(creature: other, ground: .disc, overflow: true, side: Self.face)
+                    .frame(width: Self.face, height: Self.face)
+                    .mask {
+                        ZStack {
+                            Rectangle().padding(-Self.face)
+                            ForEach(Array((index + 1)..<shown.count), id: \.self) { over in
+                                Circle().frame(width: Self.face + 2 * Self.ring, height: Self.face + 2 * Self.ring)
+                                    .offset(x: CGFloat(over - index) * Self.step)
+                                    .blendMode(.destinationOut)
+                            }
+                        }
+                        .compositingGroup()
+                    }
+                    .offset(x: CGFloat(index) * Self.step)
+            }
+        }
+        .frame(width: Self.face + CGFloat(max(shown.count - 1, 0)) * Self.step, height: Self.face, alignment: .leading)
     }
 }
 
