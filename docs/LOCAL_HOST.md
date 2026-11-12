@@ -192,7 +192,7 @@ time (`install.busy`), and while it runs the state is `installing`.
 
 | Step | What | Cancellable |
 |---|---|---|
-| `download` | `GET https://registry.npmjs.org/sidevoice/latest` → its `version`, and in its `optionalDependencies` this computer's platform package, `@sidevoice/sidevoice-<os>-<cpu>` in npm's names (`darwin-arm64` here), which must be listed at that same version; `GET https://registry.npmjs.org/<package>/<version>` → `dist.tarball` and `dist.integrity`; the tarball into a fresh private directory, its bytes as progress | yes |
+| `download` | `GET https://registry.npmjs.org/sidevoice/latest` (with a pinned minor, Updates below: the newest patch of it, from `GET https://registry.npmjs.org/sidevoice`, then that version's own document) → its `version`, and in its `optionalDependencies` this computer's platform package, `@sidevoice/sidevoice-<os>-<cpu>` in npm's names (`darwin-arm64` here), which must be listed at that same version; `GET https://registry.npmjs.org/<package>/<version>` → `dist.tarball` and `dist.integrity`; the tarball into a fresh private directory, its bytes as progress | yes |
 | `verification` | the tarball's SHA-512, computed as it came, against the integrity's `sha512-…` | yes |
 | `staging` | the tarball unpacked (rules below), then `package/bin/sidevoice-connector install --json` run from it, with `SIDEVOICE_DATA_DIR` = `D`: it stages the release under its own root with its core, writes `install.json`, defines and starts the service jobs, verifies them within 60 s (an update that does not start is rolled back) and registers the agents | until the installer starts |
 | `service-start` | from when the installer has written `install.json` (its staging done; seen as the file changing) until it answers | no |
@@ -256,6 +256,71 @@ params, its message and its last 20 lines of error output (`log_tail`; none when
 it pairs again, as `reconnect()` does: the person asked for this computer. A core the app cannot reach within 30 s
 does not fail the install; the state says what is there.
 
+## Updates
+
+The app works with one **minor** of the Sidevoice service, `X.Y`: the sidevoice-web release the app bundles declares it in
+`service.pin.json` (`{ "minor": "0.20" }`, served from `voice/` beside the page; sidevoice-web owns the file, the app reads
+it from its bundle through Tauri's asset resolver at launch). Service releases follow semver mechanically (`feat` → minor,
+`fix` → patch), so a patch of the pinned minor keeps the contract and a new minor can change it: a new minor arrives with
+a new app release, which moves the pin. A file that is missing (a web release before the pin: the bundle answers a missing
+file with its index page, which is no pin), not JSON, or whose `minor` is not `X.Y` is no pin; with none the app asks
+nothing of the registry and updates nothing, and `version()` says `update: "unknown"`.
+
+**What the app does** (`LocalHost::keep_current`, a thread of its own started with the app; the logic is
+`desktop/local-host/src/update.rs`):
+
+- **Discovery.** `GET https://registry.npmjs.org/sidevoice` (every version, the same client and rules as the install) at
+  launch and every 6 h, 15 min after a miss: the newest `X.Y.Z` of the pinned minor, never a pre-release. Kept as
+  `latest` (kept too when a later ask fails).
+- **Behind** is an installed service of an older minor than the pin, or of the pinned one at an older patch than `latest`.
+  It is updated **automatically, in the background**: the install's own path (download, SHA-512 check, unpacking, the
+  package's installer with its rollback; docs above) for the newest patch of the pinned minor, as a job of its own
+  (`service-update`) that leaves `state` as the service has it (no `installing`) and pairs again nothing the person
+  refused. One install or update at a time (`install.busy`).
+- **Never during a call.** With a call on (`calls` > 0) the update waits (`update: "waiting-call"`) and runs once the
+  call ends. A core that answers and does not say how many calls are on (`calls` absent) is not "none": it waits too,
+  and says `waiting-call` (with no core answering there is no call to count). The installer restarts the service, so the
+  last check is made again, on a fresh pass (the connector's status and the installed version asked again), right
+  before the installer starts (after the download): a call that began meanwhile (`update.waiting-call`), a service the
+  person stopped meanwhile (`update.stopped-by-person`) or one removed meanwhile (`update.not-installed`) stops the
+  update there, nothing changed and not a failure.
+- **What the person does comes first.** A service action (`start`, `stop`, `restart`, install and uninstall of the
+  service, start at sign-in) is counted from before it runs until the state after it has been read, and for that long
+  no update of the app's own begins, goes on to its installer or is waited on by `update()` (the connector is still
+  stopping or removing the service, and the state an update reads is not yet the person's). An update under way whose
+  installer has not started is cancelled by the action, which goes on at once: a cancelled update can no longer reach
+  its installer, wherever it is in its download or unpacking, and ends on its own. Once its installer has started the
+  action is refused `install.busy` (the installer restarts the service: a stop would be undone).
+- **Never a newer minor.** An installed service of a newer minor than the pin (`0.21` by hand, an app on `0.20`) is never
+  touched: `update: "newer-installed"`.
+- **A service the person stopped** (`stopped-by-person`) is left as it is: the installer would start it. It stays
+  `available`.
+- **A failed update** is logged and not tried again for the same release for a while; a newer release is tried at once,
+  and the person's own `update()` always tries. One that failed before its installer ran and changed nothing here (the
+  registry, the download, a cancel) is tried again after 15 min; one whose installer ran (it was rolled back, did not
+  start, or said ok and the installed version did not change: `update.unchanged`) after 6 h, since each try restarts the
+  service. One the last check held (a call, a stop, a removal; not a failure, and not logged as one) is tried again after
+  1 min, so that a cached poll that disagrees with the fresh check does not download the release at every pass, while the
+  update still runs soon after a call ends. The app shows no failure of its own (`version()` keeps saying `available`);
+  it is in the app's log.
+- **A data reset** under way keeps it out (it holds the same admission every action does), and the install the person
+  asks for (`install()`) installs the pinned minor's newest patch too, not the registry's latest — or, when what is
+  installed is of a newer minor, that minor's newest patch (never a downgrade, and never a move to another minor: with
+  none in the registry it is `install.no-bundle`); a version that cannot be read does not leave the pin. Quitting the
+  app while an update runs does not stop it (as with an install): its installer ends it or rolls it back on its own.
+
+**`version()`**: `{bridge, bundled, installed, core_api, update, latest, progress}` (docs/BRIDGE.md). `update` is decided
+in this order: an install or update running → `updating`; no pin or no installed version → `unknown`; installed minor
+above the pin → `newer-installed`; behind → `waiting-call` with a call on, else `available`; the core's API outside what
+the app speaks (`incompatible`, state above) → `incompatible`; else `current`. `progress` is 0 to 1 while `updating`
+(the download up to 0.6 by its bytes, then 0.65 verification, 0.7 staging, 0.85 service start, 0.95 pairing), else `null`.
+The page asks every 2 s while `updating` or `waiting-call`, otherwise every 60 s and on focus.
+
+**`update()`** asks the registry now and, if behind and no call is on, runs the update to its end and answers the state
+after it. Whatever holds the install's slot (the app's own update, another `update()`, the person's install) is waited
+for and the state read again, never refused as busy. It rejects `update.unknown`, `update.newer-installed`,
+`update.stopped-by-person`, `update.not-installed`, `update.unchanged` and the install's keys.
+
 ## The proxy
 
 `127.0.0.1:<ephemeral>` for the app's lifetime, with a 32-byte secret made per launch and kept in memory only. The
@@ -318,6 +383,11 @@ pairing the proxy answers 503; without a core, 502.
   time, `running` and the pairing after it, a refused pairing paired again, a failed install that frees the slot. By
   hand, over the network (`--features fetch -- --ignored the_real_registry`): the real latest release resolved,
   downloaded, verified and unpacked, its installer not run.
+- The updates, against the same stand-in registry (`FakeRegistry::list`: the document that lists every version): the newest patch of a pinned minor
+  picked by number (never a pre-release, never the latest), a registry with none in the minor, a version answered for another; `version()` on every
+  row of the table above; an older service updated in the background (not `installing`, progress forward, once), one of a newer minor never touched,
+  one the person stopped left alone, an update that waits for a call and runs after it, a call that begins during the download stopping it before the
+  installer, a failed update not retried every pass and tried by hand, the person's install taking the pinned minor.
 - CI, Linux (`test` job): `test-support/src/bin/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
   open the core's socket (so neither pair nor link as a connector), read the app's pairing, or use the proxy without the
   secret; the same attempts as the first user, as a control, do get through.

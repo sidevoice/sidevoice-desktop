@@ -12,9 +12,10 @@
 use serde_json::{json, Value};
 use sidevoice_local_host::host::{Action, Config, Installing, LocalHost};
 use sidevoice_local_host::install;
-use sidevoice_local_host::npm::Https;
+use sidevoice_local_host::npm::{Https, Minor};
 use sidevoice_local_host::paths::DataDirs;
 use sidevoice_local_host::platform::computer_name::{ComputerName, SystemComputerName};
+use sidevoice_local_host::update;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, Webview};
@@ -58,8 +59,17 @@ pub fn local_host_pairing(app: AppHandle, webview: Webview) -> Answer {
     Ok(hosted(&app)?.pairing().unwrap_or(Value::Null))
 }
 
-/// `start`, `stop`, `restart`, `service-install`, `service-uninstall`, `start-at-login-on`, `start-at-login-off` (the
-/// connector's CLI), `reconnect`, `reveal-log`: the state after it.
+/// `{bundled, installed, core_api, update, latest, progress}`: what the service is against the minor this app works
+/// with (docs/LOCAL_HOST.md → Updates). The page's bridge adds `bridge`.
+#[tauri::command]
+pub fn local_host_version(app: AppHandle, webview: Webview) -> Answer {
+    caller(&app, &webview)?;
+    Ok(hosted(&app)?.version())
+}
+
+/// `start`, `stop`, `restart`, `service-install`, `service-uninstall`, `service-update`, `start-at-login-on`,
+/// `start-at-login-off` (the connector's CLI, or for `service-update` the install's own path), `reconnect`,
+/// `reveal-log`: the state after it.
 #[tauri::command]
 pub async fn local_host_action(app: AppHandle, webview: Webview, action: String) -> Answer {
     caller(&app, &webview)?;
@@ -128,6 +138,7 @@ fn act(app: &AppHandle, name: &str) -> Answer {
     let host = hosted(app)?;
     let report = match name {
         "reconnect" => host.reconnect(),
+        "service-update" => run_update(&host)?,
         other => {
             let action = Action::parse(other).ok_or_else(|| refusal("bad_request", "Unknown action."))?;
             host.act(action).map_err(|r| json!(r))?
@@ -146,6 +157,19 @@ fn run_install(installing: Installing) -> Answer {
     let job = install::loggable_job(installing.id()).to_string();
     installing.run(&fetch, &install::Options::standard()).map(|report| json!(report)).map_err(|failure| {
         log::error!("local-host install {job} failed: {}", failure.log_report());
+        json!(failure)
+    })
+}
+
+/// `localHost.update()`: the registry asked now and the service updated if it is behind the minor this app works with (the
+/// same install the background update runs). Blocking, like the install; a failure is logged here in full.
+fn run_update(host: &Arc<LocalHost>) -> Result<sidevoice_local_host::state::Report, Value> {
+    let fetch = Https::new().map_err(|failure| {
+        log::error!("local-host update could not start: {}", failure.log_report());
+        json!(failure)
+    })?;
+    host.update(&fetch, &install::Options::standard()).map_err(|failure| {
+        log::error!("local-host update failed: {}", failure.log_report());
         json!(failure)
     })
 }
@@ -176,7 +200,18 @@ fn logs_to_show(app: Option<PathBuf>, connector: Option<PathBuf>) -> Vec<PathBuf
     app.into_iter().chain(connector).filter(is_file).collect()
 }
 
-/// At start: the proxy and the poll, for the app's lifetime.
+/// Where the bundled page declares the service minor it works with (sidevoice-web's `apps/web/public/service.pin.json`,
+/// `{"minor": "0.20"}`; the page is served from `voice/`).
+const SERVICE_PIN: &str = "voice/service.pin.json";
+
+/// The service minor the bundled page pins. `None` when the bundle has no such file (a web release before it: the
+/// bundle then answers with its index page, which is no pin) or it is not one.
+fn pinned_minor(app: &AppHandle) -> Option<Minor> {
+    update::pin(&app.asset_resolver().get(SERVICE_PIN.into())?.bytes)
+}
+
+/// At start: the proxy and the poll, for the app's lifetime, and the service kept at the newest patch of the minor the
+/// bundled page pins.
 pub fn setup(app: &AppHandle) {
     // `D`, by the rule every Sidevoice program shares (`SIDEVOICE_DATA_DIR`, else the OS standard place).
     let Some(dirs) = DataDirs::from_env() else {
@@ -184,13 +219,36 @@ pub fn setup(app: &AppHandle) {
         return;
     };
     let Ok(app_dir) = crate::data::desktop_dir(app) else { return };
-    let config = Config { dirs, app_dir, name: SystemComputerName::read() };
+    let pinned_minor = pinned_minor(app);
+    crate::debug(&format!(
+        "local-host service minor: {}",
+        pinned_minor.map_or("none pinned".into(), |minor| minor.to_string())
+    ));
+    let config = Config { dirs, app_dir, name: SystemComputerName::read(), pinned_minor };
     match LocalHost::start(config, crate::debug) {
         Ok(host) => {
             host.watch();
+            keep_current(app, &host);
             app.manage(Hosted(host));
         }
         Err(e) => crate::debug(&format!("local-host off: the proxy could not start: {e}")),
+    }
+}
+
+/// The background update (`LocalHost::keep_current`) on a thread of its own: the registry at launch and every 6 h, the
+/// service updated when it is behind, once no call is on. Not without a pin, and not while a data reset is under way (its
+/// permit is what an update holds, as every action does). The HTTPS client is made on that thread: it runs a runtime.
+fn keep_current(app: &AppHandle, host: &Arc<LocalHost>) {
+    if host.pinned_minor().is_none() {
+        return;
+    }
+    let (app, host) = (app.clone(), host.clone());
+    let started = std::thread::Builder::new().name("local-host-update".into()).spawn(move || match Https::new() {
+        Ok(fetch) => host.keep_current(&fetch, &install::Options::standard(), || crate::data::admit(&app)),
+        Err(failure) => log::error!("local-host updates could not start: {}", failure.log_report()),
+    });
+    if let Err(e) = started {
+        log::error!("local-host updates could not start: {e}");
     }
 }
 

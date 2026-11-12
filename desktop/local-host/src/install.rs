@@ -20,7 +20,7 @@
 //! ([`Where`]), why ([`Reason`]) and the OS's own code (`os_error`), so the app log says what failed without a path.
 
 use crate::cli::Cli;
-use crate::npm::{self, Fetch};
+use crate::npm::{self, Fetch, Minor};
 use crate::platform::target::current_package;
 use crate::tarball;
 use serde::Serialize;
@@ -39,6 +39,20 @@ use std::time::{Duration, Instant, SystemTime};
 pub const BUSY: &str = "install.busy";
 /// What an install the person cancelled rejects with.
 pub const CANCELLED: &str = "install.cancelled";
+/// What an update is stopped with, before its installer runs, when [`Options::gate`] says a call is on (or that the
+/// count of calls is not known): nothing was changed, and it is not a failure (the update runs again once the call ends).
+pub const WAITING_CALL: &str = "update.waiting-call";
+/// What an update is stopped with, likewise, when the person has stopped the service meanwhile (the installer would
+/// start it).
+pub const STOPPED: &str = "update.stopped-by-person";
+/// What an update is stopped with, likewise, when the service was uninstalled meanwhile (nothing is left to update).
+pub const GONE: &str = "update.not-installed";
+
+/// Whether `key` is one of those an update is stopped with before its installer, by [`Options::gate`]: nothing changed,
+/// not a failure.
+pub fn is_held(key: &str) -> bool {
+    matches!(key, WAITING_CALL | STOPPED | GONE)
+}
 /// The installer inside the package, where the installer itself expects to be (`<package>/bin/`), named as this OS
 /// names a program (`bin/sidevoice-connector.exe` on Windows).
 pub fn bundled_installer() -> String {
@@ -392,6 +406,9 @@ pub struct Progress {
 #[derive(Debug)]
 pub struct Job {
     id: String,
+    /// The app's own update of the service, not an install the person asked for: the service keeps its state meanwhile
+    /// (`installing` is for the person's), and nothing is paired again that the person has not asked for.
+    background: bool,
     state: Mutex<JobState>,
 }
 
@@ -403,12 +420,25 @@ struct JobState {
 
 impl Job {
     pub fn new(id: &str) -> Job {
+        Job::made(id, false)
+    }
+
+    /// The app's own update of the service (see the field).
+    pub fn background(id: &str) -> Job {
+        Job::made(id, true)
+    }
+
+    fn made(id: &str, background: bool) -> Job {
         let progress = Progress { step: Step::Download, done: None, total: None, cancellable: true };
-        Job { id: id.to_string(), state: Mutex::new(JobState { progress, cancelled: false }) }
+        Job { id: id.to_string(), background, state: Mutex::new(JobState { progress, cancelled: false }) }
     }
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    pub fn is_background(&self) -> bool {
+        self.background
     }
 
     fn lock(&self) -> MutexGuard<'_, JobState> {
@@ -490,6 +520,28 @@ pub struct Options {
     pub installer_time: Duration,
     /// How long the host waits for the new core to be reachable (paired) before it answers the state anyway.
     pub settle_time: Duration,
+    /// The minor the app works with: the release is the newest patch of it, not the latest `sidevoice` (which may be a
+    /// newer minor, one the app does not speak). `None`: the latest.
+    pub minor: Option<Minor>,
+    /// Asked once the release is verified and unpacked, right before its installer would restart the service: an
+    /// update that is told why not ([`WAITING_CALL`], [`STOPPED`], [`GONE`]) stops there with that, nothing changed.
+    pub gate: Option<Gate>,
+}
+
+/// A question asked right before the installer runs: `None` to go on, or why not ([`Options::gate`]).
+#[derive(Clone)]
+pub struct Gate(std::sync::Arc<dyn Fn() -> Option<Failure> + Send + Sync>);
+
+impl Gate {
+    pub fn new(ask: impl Fn() -> Option<Failure> + Send + Sync + 'static) -> Gate {
+        Gate(std::sync::Arc::new(ask))
+    }
+}
+
+impl std::fmt::Debug for Gate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Gate")
+    }
 }
 
 impl Options {
@@ -505,6 +557,8 @@ impl Options {
             unpack: tarball::LIMITS,
             installer_time: Duration::from_secs(180),
             settle_time: Duration::from_secs(30),
+            minor: None,
+            gate: None,
         }
     }
 }
@@ -652,7 +706,7 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
         Failure::new("install.no-bundle", Step::Download, "Sidevoice has no package for this computer's system.")
     })?;
     job.enter(Step::Download)?;
-    let (release, dist) = npm::resolve(fetch, package)?;
+    let (release, dist) = npm::resolve(fetch, package, options.minor)?;
     let staging = staging_root(options.temp_often_redirected, options.temp.clone(), data);
     let scratch = Scratch::create(&staging, options.stale_after)?;
     let archive = scratch.path().join("package.tgz");
@@ -687,6 +741,9 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     // Unpacked as a program (`tarball::extract`); what runs is the path checked here.
     let installer = Files::trusted_program(&installer)
         .map_err(|e| Failure::io(&e, Step::Staging, Where::Installer, "The installer cannot be run"))?;
+    if let Some(held) = options.gate.as_ref().and_then(|gate| (gate.0)()) {
+        return Err(held);
+    }
     job.commit()?;
     run_installer(job, &installer, data, options.installer_time)
 }
@@ -934,7 +991,7 @@ mod tests {
         let options = Options { package: current_package(), ..options };
         let fetch = npm::Https::new().unwrap();
         let job = Job::new("real");
-        let (release, dist) = npm::resolve(&fetch, options.package.as_deref().unwrap()).unwrap();
+        let (release, dist) = npm::resolve(&fetch, options.package.as_deref().unwrap(), options.minor).unwrap();
         let staging = StagingRoot { root: Root::Temp, path: options.temp.clone() };
         let scratch = Scratch::create(&staging, options.stale_after).unwrap();
         let archive = scratch.path().join("package.tgz");

@@ -67,6 +67,8 @@ pub struct FakeRegistry {
     pub(crate) served: Mutex<HashMap<String, Served>>,
     pub(crate) asked: Mutex<Vec<String>>,
     tarball_url: String,
+    /// The version of the release it was made with.
+    version: String,
 }
 
 impl FakeRegistry {
@@ -89,11 +91,29 @@ impl FakeRegistry {
             "name": platform, "version": version,
             "dist": {"tarball": tarball_url, "integrity": integrity, "shasum": "0"},
         });
-        let registry = FakeRegistry { served: Mutex::default(), asked: Mutex::default(), tarball_url };
+        let registry = FakeRegistry {
+            served: Mutex::default(),
+            asked: Mutex::default(),
+            tarball_url,
+            version: version.to_string(),
+        };
         registry.serve(&format!("{REGISTRY}/sidevoice/latest"), 200, latest.to_string().into_bytes());
         registry.serve(&format!("{REGISTRY}/{platform}/{version}"), 200, document.to_string().into_bytes());
         registry.serve(&registry.tarball_url.clone(), 200, archive);
         registry
+    }
+
+    /// `GET /sidevoice`, the document that lists every version, as listing `versions`; and the release it was made with at
+    /// `GET /sidevoice/<its version>`, the same document `latest` is (what a pinned minor resolves to).
+    pub fn list(&self, versions: &[&str]) {
+        let latest = self.served.lock().unwrap()[&format!("{REGISTRY}/sidevoice/latest")].body.clone();
+        self.serve(&format!("{REGISTRY}/sidevoice/{}", self.version), 200, latest);
+        let versions: serde_json::Map<String, serde_json::Value> = versions
+            .iter()
+            .map(|version| (version.to_string(), serde_json::json!({"name": "sidevoice", "version": version})))
+            .collect();
+        let listing = serde_json::json!({"name": "sidevoice", "versions": versions});
+        self.serve(&format!("{REGISTRY}/sidevoice"), 200, listing.to_string().into_bytes());
     }
 
     pub fn tarball_url(&self) -> String {
@@ -102,6 +122,11 @@ impl FakeRegistry {
 
     pub fn tarball_bytes(&self) -> Vec<u8> {
         self.served.lock().unwrap()[&self.tarball_url].body.clone()
+    }
+
+    /// What is served at `url` now.
+    pub fn served_body(&self, url: &str) -> Vec<u8> {
+        self.served.lock().unwrap()[url].body.clone()
     }
 
     pub fn serve(&self, url: &str, status: u16, body: Vec<u8>) {

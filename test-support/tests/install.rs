@@ -4,6 +4,7 @@ use sidevoice_desktop_test_support::fixture;
 use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_local_host::install::*;
+use sidevoice_local_host::npm::Minor;
 use sidevoice_platform::fs::{Files, Fs, TestFiles};
 use std::{
     path::{Path, PathBuf},
@@ -384,4 +385,79 @@ fn what_the_installer_answers_reaches_the_log_only_as_structured_fields() {
     assert!(report.contains("check=manifest") && report.contains("version=1.2.3"), "{report}");
     // The page still gets the failure whole.
     assert!(json!(failure).to_string().contains("sensitive-value"));
+}
+
+#[test]
+fn a_pinned_minor_installs_its_newest_patch_by_the_version_not_the_latest() {
+    let world = World::new();
+    let registry =
+        world.registry(&world.installer(json!({"response":{"ok":true,"action":"updated","version":"0.8.1"}})));
+    registry.list(&["0.7.9", "0.8.0", "0.8.1", "0.9.0"]);
+    let pinned = Options { minor: Minor::parse("0.8"), ..world.options() };
+    prepare(&Job::new("j"), &registry, &world.data, &pinned).unwrap();
+    assert_eq!(
+        registry.asked(),
+        [
+            "https://registry.npmjs.org/sidevoice".to_string(),
+            "https://registry.npmjs.org/sidevoice/0.8.1".to_string(),
+            format!("https://registry.npmjs.org/{PLATFORM}/0.8.1"),
+            registry.tarball_url(),
+        ]
+    );
+}
+
+#[test]
+fn a_pinned_minor_the_registry_has_no_release_in_downloads_nothing() {
+    let world = World::new();
+    let registry = world.registry(&world.installer(json!({"response":{"ok":true}})));
+    registry.list(&["0.8.1", "0.9.0"]);
+    let pinned = Options { minor: Minor::parse("0.10"), ..world.options() };
+    let failure = prepare(&Job::new("j"), &registry, &world.data, &pinned).unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.step), ("install.no-bundle", Some(Step::Download)));
+    assert_eq!(registry.asked(), ["https://registry.npmjs.org/sidevoice".to_string()]);
+    assert_eq!(world.ran(), None);
+    assert_eq!(world.leftovers(), 0);
+}
+
+#[test]
+fn a_version_the_registry_answers_for_another_is_refused() {
+    let world = World::new();
+    // The listing names 0.8.2, but that version's document is 0.8.1's.
+    let registry = world.registry(&world.installer(json!({"response":{"ok":true}})));
+    registry.list(&["0.8.1", "0.8.2"]);
+    let document = registry.served_body("https://registry.npmjs.org/sidevoice/0.8.1");
+    registry.serve("https://registry.npmjs.org/sidevoice/0.8.2", 200, document);
+    let pinned = Options { minor: Minor::parse("0.8"), ..world.options() };
+    let failure = prepare(&Job::new("j"), &registry, &world.data, &pinned).unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.params), ("install.authenticity", Some(json!({"check": "manifest"}))));
+    assert_eq!(world.ran(), None);
+}
+
+#[test]
+fn an_update_a_call_holds_up_stops_before_its_installer_and_changes_nothing() {
+    let world = World::new();
+    let registry =
+        world.registry(&world.installer(json!({"response":{"ok":true,"action":"updated","version":"0.8.1"}})));
+    let job = Job::new("j");
+    let held = Options {
+        gate: Some(Gate::new(|| Some(Failure::new(WAITING_CALL, Step::Staging, "a call is on")))),
+        ..world.options()
+    };
+    let failure = prepare(&job, &registry, &world.data, &held).unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.step), (WAITING_CALL, Some(Step::Staging)));
+    assert_eq!(world.ran(), None, "the installer never ran: nothing was restarted");
+    assert!(job.progress().cancellable, "and nothing was committed");
+    assert_eq!(world.leftovers(), 0, "the download is cleaned up");
+    for key in [STOPPED, GONE] {
+        let held =
+            Options { gate: Some(Gate::new(move || Some(Failure::new(key, Step::Staging, "m")))), ..world.options() };
+        let failure = prepare(&Job::new("h"), &registry, &world.data, &held).unwrap_err();
+        assert_eq!(failure.key, key);
+        assert!(is_held(&failure.key), "{key}: not a failure");
+        assert_eq!(world.ran(), None, "{key}: the installer never ran");
+    }
+    assert!(!is_held("install.network") && !is_held(BUSY) && !is_held(CANCELLED));
+    let open = Options { gate: Some(Gate::new(|| None)), ..world.options() };
+    assert_eq!(prepare(&Job::new("k"), &registry, &world.data, &open).unwrap()["action"], "updated");
+    assert!(world.ran().is_some());
 }

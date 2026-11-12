@@ -12,6 +12,7 @@ use sidevoice_desktop_test_support::{fake_registry::FakeRegistry, fixture};
 use sidevoice_local_host::host::{Action, Config, LocalHost};
 use sidevoice_local_host::http;
 use sidevoice_local_host::install;
+use sidevoice_local_host::npm::Minor;
 use sidevoice_local_host::paths::DataDirs;
 use sidevoice_local_host::state::State;
 use sidevoice_local_host::store;
@@ -48,7 +49,12 @@ impl World {
     }
 
     fn host(&self) -> Arc<LocalHost> {
-        let config = Config { dirs: self.dirs.clone(), app_dir: self.app_dir.clone(), name: "test-mac".into() };
+        let config = Config {
+            dirs: self.dirs.clone(),
+            app_dir: self.app_dir.clone(),
+            name: "test-mac".into(),
+            pinned_minor: None,
+        };
         let log = self.log.clone();
         LocalHost::start(config, move |line| log.lock().unwrap().push(line.to_string())).unwrap()
     }
@@ -1034,4 +1040,577 @@ fn a_cancel_is_honoured_by_id_until_the_installer_runs() {
     .unwrap_err();
     assert_eq!((failure.key.as_str(), failure.step), (install::CANCELLED, Some(install::Step::Download)));
     assert_ne!(host.state().state, State::Installing);
+}
+
+// ---- the service's version and its updates, within the minor the app pins ----
+
+/// The minor the stand-in bundled page pins.
+const PINNED: &str = "0.20";
+const STATUS_RUNNING: &str = r#"{"ok":true,"state":"running","service":"launchd"}"#;
+
+impl World {
+    /// A host for an app that pins [`PINNED`] (`None`: a web release that pins nothing).
+    fn host_pinning(&self, minor: Option<&str>) -> Arc<LocalHost> {
+        let pinned_minor = minor.map(|minor| Minor::parse(minor).unwrap());
+        let config =
+            Config { dirs: self.dirs.clone(), app_dir: self.app_dir.clone(), name: "test-mac".into(), pinned_minor };
+        let log = self.log.clone();
+        LocalHost::start(config, move |line| log.lock().unwrap().push(line.to_string())).unwrap()
+    }
+
+    /// Where the stand-in installer leaves its arguments when it runs.
+    fn installer_ran(&self) -> PathBuf {
+        self._tmp.path().join("installer-ran")
+    }
+
+    /// The registry after 0.20.2: it lists 0.19.9 to 0.21.0, and the installer of its release, once it runs, makes the
+    /// installed program say 0.20.2 (as the real one does by switching `R/current`), after `installer_seconds`.
+    fn registry_at_0_20_2(&self, installer_seconds: f64) -> FakeRegistry {
+        self.registry_whose_installer(installer_seconds, true)
+    }
+
+    /// The same, whose installer answers ok and, when `changes_version` is false, leaves the installed program as it was.
+    fn registry_whose_installer(&self, installer_seconds: f64, changes_version: bool) -> FakeRegistry {
+        let mut installer = json!({
+            "ran": self.installer_ran(), "delay_ms": (installer_seconds * 1000.0) as u64,
+            "response": {"ok": true, "action": "updated", "version": "0.20.2", "state": "running"},
+        });
+        if changes_version {
+            installer["set_version"] = json!("0.20.2");
+        }
+        let registry =
+            fixture::release(Path::new(env!("CARGO_BIN_EXE_fake-connector")), "0.20.2", PLATFORM, &installer);
+        registry.list(&["0.19.9", "0.20.0", "0.20.1", "0.20.2", "0.21.0"]);
+        registry
+    }
+}
+
+/// An installed service of `version`, running, with its core up.
+fn installed(world: &World, version: &str) -> Arc<FakeCore> {
+    let core = world.core(1);
+    install_fake_cli(&world.dirs, STATUS_RUNNING);
+    set_version(&world.dirs, json!(version));
+    core
+}
+
+fn updated_to(host: &LocalHost) -> Option<String> {
+    host.version()["installed"]["version"].as_str().map(str::to_string)
+}
+
+fn tarball_fetches(registry: &FakeRegistry) -> usize {
+    registry.asked().iter().filter(|url| **url == registry.tarball_url()).count()
+}
+
+/// Stops the host when dropped, so a failed assertion in a test does not leave its background update running (the
+/// test's thread scope would wait for it for ever).
+struct StopsHost<'a>(&'a LocalHost);
+
+impl Drop for StopsHost<'_> {
+    fn drop(&mut self) {
+        self.0.shutdown();
+    }
+}
+
+/// Runs the background update (`keep_current`) beside `body`, polling as the app does, and stops it after.
+fn keeping_current<T>(
+    host: &Arc<LocalHost>,
+    registry: &FakeRegistry,
+    options: &install::Options,
+    body: impl FnOnce() -> T,
+) -> T {
+    host.watch();
+    std::thread::scope(|scope| {
+        let _stops = StopsHost(host);
+        scope.spawn(|| host.keep_current(registry, options, || Some(())));
+        body()
+    })
+}
+
+#[test]
+fn version_says_what_is_installed_against_the_pin_and_nothing_without_one() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    assert_eq!(
+        host.version(),
+        json!({
+            "bundled": {"minor": "0.20"}, "installed": {"version": "0.20.0"}, "core_api": 1,
+            "update": "current", "latest": null, "progress": null,
+        }),
+        "the registry is not known to have anything newer yet"
+    );
+    let unpinned = world.host_pinning(None);
+    unpinned.poll();
+    let version = unpinned.version();
+    assert_eq!(
+        (&version["update"], &version["bundled"], &version["installed"]["version"]),
+        (&json!("unknown"), &json!({}), &json!("0.20.0"))
+    );
+    let nothing = World::new();
+    let empty = nothing.host_pinning(Some(PINNED));
+    empty.poll();
+    assert_eq!(empty.version()["update"], "unknown");
+    assert_eq!(empty.version()["installed"], Value::Null);
+}
+
+#[test]
+fn an_update_installs_the_newest_patch_of_the_pinned_minor_and_never_the_latest() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    let registry = world.registry_at_0_20_2(0.0);
+    let report = host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(report.product_version.as_deref(), Some("0.20.2"), "{report:?}");
+    let version = host.version();
+    assert_eq!(
+        (&version["update"], &version["latest"], &version["installed"]["version"]),
+        (&json!("current"), &json!("0.20.2"), &json!("0.20.2"))
+    );
+    let asked = registry.asked();
+    assert!(asked.contains(&"https://registry.npmjs.org/sidevoice".to_string()), "{asked:?}");
+    assert!(asked.contains(&"https://registry.npmjs.org/sidevoice/0.20.2".to_string()), "{asked:?}");
+    assert!(!asked.iter().any(|url| url.ends_with("/sidevoice/latest")), "the latest may be another minor: {asked:?}");
+    assert!(world.installer_ran().exists());
+    // Nothing behind it any more: asking again installs nothing.
+    std::fs::remove_file(world.installer_ran()).unwrap();
+    host.update(&registry, &install_options(&world)).unwrap();
+    assert!(!world.installer_ran().exists(), "up to date: the installer is not run again");
+}
+
+#[test]
+fn a_service_of_a_newer_minor_is_never_touched() {
+    let world = World::new();
+    installed(&world, "0.21.0");
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    let registry = world.registry_at_0_20_2(0.0);
+    let refused = host.update(&registry, &install_options(&world)).unwrap_err();
+    assert_eq!(refused.key, "update.newer-installed");
+    assert_eq!(host.version()["update"], "newer-installed");
+    keeping_current(&host, &registry, &install_options(&world), || {
+        wait_for("the registry is asked", || host.version()["latest"] == "0.20.2");
+        std::thread::sleep(Duration::from_millis(2500));
+        assert_eq!(host.version()["update"], "newer-installed");
+    });
+    assert_eq!(tarball_fetches(&registry), 0);
+    assert!(!world.installer_ran().exists());
+}
+
+#[test]
+fn an_older_service_is_updated_in_the_background_without_saying_installing() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    let registry = world.registry_at_0_20_2(1.5);
+    keeping_current(&host, &registry, &install_options(&world), || {
+        let mut seen = Vec::new();
+        wait_for("the update has run", || {
+            let version = host.version();
+            seen.push((host.state().state, version["update"].clone(), version["progress"].clone()));
+            updated_to(&host).as_deref() == Some("0.20.2")
+        });
+        assert!(seen.iter().any(|(_, update, _)| update == "updating"), "{seen:?}");
+        assert!(seen.iter().all(|(state, _, _)| *state != State::Installing), "the service keeps its state: {seen:?}");
+        let progress: Vec<f64> = seen.iter().filter_map(|(_, _, progress)| progress.as_f64()).collect();
+        assert!(!progress.is_empty() && progress.iter().all(|p| (0.0..=1.0).contains(p)), "{seen:?}");
+        assert!(progress.windows(2).all(|pair| pair[0] <= pair[1]), "forward only: {progress:?}");
+        assert!(seen.iter().filter(|(_, update, _)| update != "updating").all(|(_, _, progress)| progress.is_null()));
+    });
+    assert_eq!(host.version()["update"], "current");
+    assert_eq!(tarball_fetches(&registry), 1);
+}
+
+#[test]
+fn an_update_waits_for_the_call_to_end_and_runs_after() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    let (port, secret) = running(&host);
+    let (call, status, _) = ws_handshake(port, &format!("sidevoice, sidevoice.token.{secret}"), "tauri://localhost");
+    assert_eq!(status, 101);
+    assert_eq!(host.poll().calls, Some(1), "the host knows a call is on");
+    let registry = world.registry_at_0_20_2(0.0);
+    keeping_current(&host, &registry, &install_options(&world), || {
+        wait_for("it says it waits", || host.version()["update"] == "waiting-call");
+        // An explicit update meanwhile changes nothing either, and says so.
+        let report = host.update(&registry, &install_options(&world)).unwrap();
+        assert_eq!(report.product_version.as_deref(), Some("0.20.0"));
+        std::thread::sleep(Duration::from_millis(2500));
+        assert_eq!(tarball_fetches(&registry), 0, "nothing was downloaded while the call was on");
+        assert_eq!(host.version()["update"], "waiting-call");
+        drop(call);
+        wait_for("the update runs once the call has ended", || updated_to(&host).as_deref() == Some("0.20.2"));
+    });
+    assert_eq!(tarball_fetches(&registry), 1);
+}
+
+#[test]
+fn a_service_the_person_stopped_is_not_started_by_an_update() {
+    let world = World::new();
+    install_fake_cli(&world.dirs, r#"{"ok":true,"state":"stopped-by-person","service":"launchd"}"#);
+    set_version(&world.dirs, json!("0.20.0"));
+    let host = world.host_pinning(Some(PINNED));
+    let registry = world.registry_at_0_20_2(0.0);
+    keeping_current(&host, &registry, &install_options(&world), || {
+        wait_for("the registry is asked", || host.version()["latest"] == "0.20.2");
+        std::thread::sleep(Duration::from_millis(2500));
+    });
+    assert_eq!(host.state().state, State::StoppedByPerson);
+    assert_eq!(host.version()["update"], "available", "behind, and left alone");
+    assert_eq!(tarball_fetches(&registry), 0);
+}
+
+#[test]
+fn a_failed_update_is_not_retried_every_pass_and_by_hand_it_is() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    let registry = world.registry_at_0_20_2(0.0);
+    registry.serve(&registry.tarball_url(), 200, b"not the tarball".to_vec());
+    keeping_current(&host, &registry, &install_options(&world), || {
+        wait_for("it tried", || tarball_fetches(&registry) == 1);
+        std::thread::sleep(Duration::from_millis(5000));
+    });
+    assert_eq!(tarball_fetches(&registry), 1, "the same release is left alone for a while");
+    assert!(world.log.lock().unwrap().iter().any(|line| line.contains("service update failed: install.checksum")));
+    assert_eq!(updated_to(&host).as_deref(), Some("0.20.0"));
+    assert_eq!(host.update(&registry, &install_options(&world)).unwrap_err().key, "install.checksum");
+    assert_eq!(tarball_fetches(&registry), 2, "the person's own update always tries");
+}
+
+#[test]
+fn the_install_the_person_asks_for_installs_the_pinned_minor_too() {
+    let world = World::new();
+    let core = world.core(1);
+    let host = world.host_pinning(Some(PINNED));
+    let registry = world.registry_at_0_20_2(0.0);
+    let report = host.begin_install("first").unwrap().run(&registry, &install_options(&world)).unwrap();
+    assert_eq!(report.state, State::Running, "{report:?}");
+    assert_eq!(host.pairing().unwrap()["fp"], core.fingerprint());
+    let asked = registry.asked();
+    assert!(!asked.iter().any(|url| url.ends_with("/sidevoice/latest")), "{asked:?}");
+    assert!(asked.contains(&"https://registry.npmjs.org/sidevoice/0.20.2".to_string()), "{asked:?}");
+}
+
+#[test]
+fn a_call_that_begins_during_the_download_stops_the_update_before_its_installer() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    let (port, secret) = running(&host);
+    let registry = world.registry_at_0_20_2(0.0);
+    let (call, status, _) = ws_handshake(port, &format!("sidevoice, sidevoice.token.{secret}"), "tauri://localhost");
+    assert_eq!(status, 101);
+    assert_eq!(host.state().calls, Some(0), "the host's last pass is from before the call: it does not know yet");
+    let report = host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(report.product_version.as_deref(), Some("0.20.0"), "nothing changed");
+    assert_eq!(tarball_fetches(&registry), 1, "it was downloaded before the call was seen");
+    assert!(!world.installer_ran().exists(), "but the installer, which restarts the service, never ran");
+    assert_eq!(host.version()["update"], "waiting-call");
+    assert_eq!(host.state().state, State::Running);
+    drop(call);
+    // The core notices the closed connection a moment later: the update is asked again only once the host has seen the
+    // call end (waiting on that, not on time).
+    wait_for("the host sees the call end", || host.poll().calls == Some(0));
+    let report = host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(report.product_version.as_deref(), Some("0.20.2"), "{report:?}");
+}
+
+#[test]
+fn an_unknown_count_of_calls_is_never_taken_for_none() {
+    let world = World::new();
+    let core = installed(&world, "0.20.0");
+    core.hide_calls(true);
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    let registry = world.registry_at_0_20_2(0.0);
+    // Behind, the core up and not saying how many calls are on: it waits, as with one on.
+    let report = host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(report.product_version.as_deref(), Some("0.20.0"));
+    assert_eq!(host.version()["update"], "waiting-call");
+    assert_eq!(host.update_hold().expect("held").key, install::WAITING_CALL);
+    keeping_current(&host, &registry, &install_options(&world), || {
+        std::thread::sleep(Duration::from_millis(4500));
+    });
+    assert_eq!(tarball_fetches(&registry), 0, "nothing was downloaded, let alone installed");
+    assert!(!world.installer_ran().exists());
+    // Once the core says, it is an ordinary update.
+    core.hide_calls(false);
+    host.poll();
+    assert_eq!(host.version()["update"], "available");
+    assert!(host.update_hold().is_none());
+    let report = host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(report.product_version.as_deref(), Some("0.20.2"), "{report:?}");
+}
+
+#[test]
+fn with_no_core_answering_there_is_no_call_to_wait_for() {
+    let world = World::new();
+    install_fake_cli(&world.dirs, STATUS_RUNNING);
+    set_version(&world.dirs, json!("0.20.0"));
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    let registry = world.registry_at_0_20_2(0.0);
+    let options = install::Options { settle_time: Duration::from_millis(200), ..install_options(&world) };
+    let report = host.update(&registry, &options).unwrap();
+    assert_eq!(report.product_version.as_deref(), Some("0.20.2"), "{report:?}");
+}
+
+#[test]
+fn the_last_check_says_why_an_update_does_not_go_on() {
+    let world = World::new();
+    let core = installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    let (port, secret) = running(&host);
+    assert!(host.update_hold().is_none(), "nothing in the way");
+    // A call is on.
+    let (call, status, _) = ws_handshake(port, &format!("sidevoice, sidevoice.token.{secret}"), "tauri://localhost");
+    assert_eq!(status, 101);
+    assert_eq!(host.update_hold().expect("held").key, install::WAITING_CALL);
+    drop(call);
+    wait_for("the call has ended", || host.update_hold().is_none());
+    // The count is not known.
+    core.hide_calls(true);
+    assert_eq!(host.update_hold().expect("held").key, install::WAITING_CALL);
+    core.hide_calls(false);
+    assert!(host.update_hold().is_none());
+    // The person stopped the service since (the connector says so; asked again, not read from the last poll).
+    let program = fake_cli(&world.dirs);
+    let says = |state: &str| {
+        fixture::configure(
+            &program,
+            &json!({"mode": "host", "status": {"ok": true, "state": state, "service": "launchd"}}),
+        )
+        .unwrap()
+    };
+    says("stopped-by-person");
+    assert_eq!(host.update_hold().expect("held").key, install::STOPPED);
+    says("running");
+    assert!(host.update_hold().is_none());
+    // Uninstalled since.
+    std::fs::remove_file(world.dirs.install_record()).unwrap();
+    assert_eq!(host.update_hold().expect("held").key, install::GONE);
+    for key in [install::WAITING_CALL, install::STOPPED, install::GONE] {
+        assert!(install::is_held(key));
+    }
+}
+
+#[test]
+fn a_service_action_cancels_an_update_before_its_installer_and_is_refused_after() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    let options = install_options(&world);
+
+    // While it downloads: the action goes first, the update is cancelled and nothing was installed.
+    let slow = world.registry_at_0_20_2(0.0);
+    slow.slow(&slow.tarball_url(), Duration::from_millis(30));
+    let failure = std::thread::scope(|scope| {
+        let updating = scope.spawn(|| host.update(&slow, &options));
+        wait_for("the download is under way", || {
+            host.install_progress("service-update").and_then(|progress| progress.done).is_some()
+        });
+        host.act(Action::Stop).expect("the person's stop is not refused before the installer");
+        updating.join().unwrap().unwrap_err()
+    });
+    assert_eq!(failure.key, install::CANCELLED);
+    assert!(!world.installer_ran().exists(), "the installer never ran: the stop is not undone");
+    assert!(calls(&world.dirs.data.join("calls.log")).iter().any(|call| call == "service stop --json"));
+    assert_ne!(host.version()["update"], "updating");
+
+    // Once its installer runs: refused, like a second install; the update goes on.
+    let registry = world.registry_at_0_20_2(1.5);
+    let report = std::thread::scope(|scope| {
+        let updating = scope.spawn(|| host.update(&registry, &options));
+        wait_for("the installer is running", || {
+            host.install_progress("service-update").is_some_and(|progress| !progress.cancellable)
+        });
+        assert_eq!(host.act(Action::Stop).unwrap_err().key, install::BUSY);
+        updating.join().unwrap().unwrap()
+    });
+    assert_eq!(report.product_version.as_deref(), Some("0.20.2"), "{report:?}");
+}
+
+#[test]
+fn updates_asked_together_or_beside_the_background_one_never_refuse_each_other() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    let registry = world.registry_at_0_20_2(1.0);
+    let options = install_options(&world);
+    // Two of the person's own at once: one installs, the other waits for it and sees nothing left to do.
+    let answers = std::thread::scope(|scope| {
+        let first = scope.spawn(|| host.update(&registry, &options));
+        let second = scope.spawn(|| host.update(&registry, &options));
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+    for answer in answers {
+        assert_eq!(answer.expect("not refused as busy").product_version.as_deref(), Some("0.20.2"));
+    }
+    assert_eq!(tarball_fetches(&registry), 1, "installed once");
+
+    // And one asked while the background update runs.
+    let other = World::new();
+    installed(&other, "0.20.0");
+    let host = other.host_pinning(Some(PINNED));
+    let registry = other.registry_at_0_20_2(1.0);
+    keeping_current(&host, &registry, &install_options(&other), || {
+        wait_for("the background update has begun", || host.install_progress("service-update").is_some());
+        let report = host.update(&registry, &install_options(&other)).expect("not refused as busy");
+        assert_eq!(report.product_version.as_deref(), Some("0.20.2"), "{report:?}");
+    });
+    assert_eq!(tarball_fetches(&registry), 1, "installed once, by whichever came first");
+}
+
+#[test]
+fn an_installer_that_says_ok_and_changes_nothing_is_not_asked_again_at_every_pass() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    let registry = world.registry_whose_installer(0.0, false);
+    keeping_current(&host, &registry, &install_options(&world), || {
+        wait_for("it tried", || tarball_fetches(&registry) == 1);
+        std::thread::sleep(Duration::from_millis(5000));
+    });
+    assert_eq!(tarball_fetches(&registry), 1, "left alone after it, not run again every pass");
+    assert!(world.log.lock().unwrap().iter().any(|line| line.contains("service update failed: update.unchanged")));
+    assert_eq!(host.version()["update"], "available", "and still said to be behind");
+    // The person's own update says so and tries again.
+    assert_eq!(host.update(&registry, &install_options(&world)).unwrap_err().key, "update.unchanged");
+    assert_eq!(tarball_fetches(&registry), 2);
+}
+
+#[test]
+fn the_install_takes_the_pin_or_the_installed_minor_and_never_another() {
+    let registry_at = |world: &World, version: &str| {
+        let registry = fixture::release(
+            Path::new(env!("CARGO_BIN_EXE_fake-connector")),
+            version,
+            PLATFORM,
+            &json!({"ran": world.installer_ran(), "response": {"ok": true, "action": "updated", "version": version}}),
+        );
+        registry.list(&["0.19.9", "0.20.2", "0.21.0", "0.21.1"]);
+        registry
+    };
+    let installs = |installed: Value, registry_version: &str| {
+        let world = World::new();
+        installed_core(&world, installed);
+        let host = world.host_pinning(Some(PINNED));
+        host.poll();
+        let registry = registry_at(&world, registry_version);
+        let outcome = host.begin_install("again").unwrap().run(&registry, &install_options(&world));
+        (outcome, registry.asked())
+    };
+    let url = |path: &str| format!("https://registry.npmjs.org/{path}");
+
+    // A newer minor stays on its own minor, at its newest patch: not on the pin (a downgrade), not on the latest.
+    let (outcome, asked) = installs(json!("0.21.0"), "0.21.1");
+    outcome.expect("installed");
+    assert!(asked.contains(&url("sidevoice/0.21.1")), "{asked:?}");
+    assert!(
+        !asked.iter().any(|asked| asked.ends_with("/sidevoice/latest") || asked.ends_with("/sidevoice/0.20.2")),
+        "{asked:?}"
+    );
+
+    // A pre-release of a minor the registry has no release of is no reason to install another: it is refused, nothing
+    // downloaded.
+    let (outcome, asked) = installs(json!("0.22.0-next.1"), "0.20.2");
+    assert_eq!(outcome.unwrap_err().key, "install.no-bundle");
+    assert_eq!(asked, [url("sidevoice")], "{asked:?}");
+
+    // A version that cannot be read is no reason to leave the pin: not the latest either.
+    let (outcome, asked) = installs(json!("unknown"), "0.20.2");
+    outcome.expect("installed");
+    assert!(asked.contains(&url("sidevoice/0.20.2")), "{asked:?}");
+    assert!(!asked.iter().any(|asked| asked.ends_with("/sidevoice/latest")), "{asked:?}");
+
+    // The pinned minor itself, at an older patch, is the ordinary case.
+    let (outcome, asked) = installs(json!("0.20.0"), "0.20.2");
+    outcome.expect("installed");
+    assert!(asked.contains(&url("sidevoice/0.20.2")), "{asked:?}");
+}
+
+/// An installed service of `version` (as its program says), with its core up.
+fn installed_core(world: &World, version: Value) -> Arc<FakeCore> {
+    let core = world.core(1);
+    install_fake_cli(&world.dirs, STATUS_RUNNING);
+    set_version(&world.dirs, version);
+    core
+}
+
+#[test]
+fn a_service_action_under_way_keeps_every_update_out_until_it_is_done() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    host.poll();
+    let registry = world.registry_at_0_20_2(0.0);
+    let hold = world.dirs.data.join("hold-stop");
+    std::fs::write(&hold, "").unwrap();
+    let options = install_options(&world);
+    let (acted, asked_to_update) = std::thread::scope(|scope| {
+        // The person stops it; the connector's `service stop` is still running, so the state still says it runs.
+        let stopping = scope.spawn(|| host.act(Action::Stop));
+        wait_for("the stop is under way", || world.dirs.data.join("stop-running").exists());
+        assert_eq!(host.state().state, State::Running, "the last poll still has the service up");
+        // The person's own update asked meanwhile waits for the action, and then finds the service stopped.
+        let updating = scope.spawn(|| host.update(&registry, &options));
+        // The background loop, which would find the service behind and up, begins nothing for as long as the stop runs.
+        let acted = keeping_current(&host, &registry, &options, || {
+            wait_for("the registry is asked", || host.version()["latest"] == "0.20.2");
+            std::thread::sleep(Duration::from_millis(4500));
+            assert_eq!(tarball_fetches(&registry), 0, "nothing downloaded while the stop runs");
+            assert!(!world.installer_ran().exists());
+            // The stop ends: the service is stopped from now on.
+            fixture::configure(
+                &fake_cli(&world.dirs),
+                &json!({"mode": "host", "status": {"ok": true, "state": "stopped-by-person", "service": "launchd"}}),
+            )
+            .unwrap();
+            std::fs::remove_file(&hold).unwrap();
+            let acted = stopping.join().unwrap();
+            let asked_to_update = updating.join().unwrap();
+            // And stays so: the loop leaves a stopped service alone.
+            std::thread::sleep(Duration::from_millis(2500));
+            (acted, asked_to_update)
+        });
+        acted
+    });
+    assert_eq!(acted.expect("the stop ran").state, State::StoppedByPerson);
+    assert_eq!(asked_to_update.unwrap_err().key, install::STOPPED);
+    assert!(!world.installer_ran().exists(), "the stop was never undone by an installer");
+    assert_eq!(tarball_fetches(&registry), 0);
+    assert_eq!(host.state().state, State::StoppedByPerson);
+}
+
+#[test]
+fn what_the_last_check_held_is_not_downloaded_again_at_every_pass() {
+    let world = World::new();
+    installed(&world, "0.20.0");
+    let host = world.host_pinning(Some(PINNED));
+    let (port, secret) = running(&host);
+    let registry = world.registry_at_0_20_2(0.0);
+    let (call, status, _) = ws_handshake(port, &format!("sidevoice, sidevoice.token.{secret}"), "tauri://localhost");
+    assert_eq!(status, 101);
+    // The host does not know of the call yet: the update downloads, and the last check holds it.
+    assert_eq!(host.state().calls, Some(0));
+    host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(tarball_fetches(&registry), 1);
+    // The call ends at once; the poll that disagreed with the fresh check agrees with it now. The background update is
+    // not run again for a minute (it is the hold-off, not the poll, that keeps it out here).
+    drop(call);
+    wait_for("the host sees the call end", || host.poll().calls == Some(0));
+    keeping_current(&host, &registry, &install_options(&world), || {
+        wait_for("the registry is asked", || host.version()["latest"] == "0.20.2");
+        std::thread::sleep(Duration::from_millis(4500));
+    });
+    assert_eq!(tarball_fetches(&registry), 1, "held off for a short while after the last check said no");
+    assert!(!world.installer_ran().exists());
+    // The person's own update is never held off.
+    let report = host.update(&registry, &install_options(&world)).unwrap();
+    assert_eq!(report.product_version.as_deref(), Some("0.20.2"), "{report:?}");
 }

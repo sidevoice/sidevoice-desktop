@@ -440,6 +440,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         debug_log,
         local_host::local_host_state,
         local_host::local_host_pairing,
+        local_host::local_host_version,
         local_host::local_host_action,
         local_host::local_host_pairing_code,
         local_host::local_host_install,

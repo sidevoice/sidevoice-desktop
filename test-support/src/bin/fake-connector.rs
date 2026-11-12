@@ -40,6 +40,11 @@ fn main() {
         let mut log = fs::OpenOptions::new().create(true).append(true).open(calls).unwrap();
         writeln!(log, "{}", args.join(" ")).unwrap();
     }
+    // What the installed program says it is (`--version --json`, in `host` mode), as an installer that updated it would.
+    if let Some(version) = config["set_version"].as_str() {
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("version"), json!(version).to_string()).unwrap();
+    }
     if config["install_record"] == true {
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join("install.json.tmp"), "{}").unwrap();
@@ -109,6 +114,14 @@ fn main() {
                         &json!({"ok":false,"error":{"key":"connector.usage","params":{"detail":"invalid subcommand"},"message":"m"}}),
                     );
                     std::process::exit(1);
+                }
+                // A stop the test holds half-done (`D/hold-stop`): leaves `D/stop-running`, and answers once the hold is gone.
+                "service stop" if data.join("hold-stop").exists() => {
+                    fs::write(data.join("stop-running"), "").unwrap();
+                    while data.join("hold-stop").exists() {
+                        sleep(20);
+                    }
+                    emit(&json!({"ok":true,"state":"stopped-by-person","service":"launchd"}));
                 }
                 "service start" => {
                     emit(&json!({"ok":false,"error":{"key":"service.not-loaded","message":"m"}}));
