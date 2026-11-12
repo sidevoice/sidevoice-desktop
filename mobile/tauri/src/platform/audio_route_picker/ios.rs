@@ -4,9 +4,9 @@
 //! (category, mode, options) is not touched. AVKit is linked by the project (`bundle > iOS > frameworks`); `objc2-av-kit` only
 //! binds macOS's view, so the class is declared here, over `UIView`, which is what it is on iOS.
 //!
-//! Whether the sheet came up is not told by the view. The caller looks at [`Presentation`] before and after (the window's
-//! presented controllers and whether it is the key window): no change is a failure it reports. If a later iOS changes the
-//! view's inner button, that is what shows.
+//! The view does not say whether its sheet came up (and the window shows nothing of it: the sheet is the system's), so
+//! `open` is done once the tap is delivered to the button. A failure is the view not taking the tap: no button, or one that
+//! opens a menu.
 use std::cell::RefCell;
 use std::ptr::NonNull;
 
@@ -14,13 +14,15 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{extern_class, msg_send, sel, MainThreadMarker};
-use objc2_avf_audio::{AVAudioSession, AVAudioSessionRouteChangeNotification};
+use objc2_avf_audio::{
+    AVAudioSession, AVAudioSessionPortBuiltInSpeaker, AVAudioSessionRouteChangeNotification,
+};
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{NSNotification, NSNotificationCenter};
 use objc2_ui_kit::{UIResponder, UIView};
 use tauri::webview::PlatformWebview;
 
-use super::{Changed, Os, Presentation};
+use super::{Changed, Os};
 
 pub struct Native;
 
@@ -52,24 +54,6 @@ fn view(webview: &PlatformWebview) -> Option<&UIView> {
 
 impl Os for Native {
     const AVAILABLE: bool = true;
-
-    fn presentation(webview: &PlatformWebview) -> Presentation {
-        let Some(window) = view(webview).and_then(|view| view.window()) else {
-            return Presentation::default();
-        };
-        let mut presented = 0;
-        let mut top = window.rootViewController();
-        while let Some(controller) = top {
-            top = controller.presentedViewController();
-            if top.is_some() {
-                presented += 1;
-            }
-        }
-        Presentation {
-            presented,
-            key: window.isKeyWindow(),
-        }
-    }
 
     fn open(webview: &PlatformWebview) -> Result<(), String> {
         let web_view = view(webview).ok_or_else(|| failed("no web view"))?;
@@ -121,8 +105,20 @@ impl Os for Native {
     fn current() -> Option<String> {
         // SAFETY: read-only messages to the shared session, which answers from any thread.
         let outputs = unsafe { AVAudioSession::sharedInstance().currentRoute().outputs() };
-        // SAFETY: a read of a live port description.
-        let name = unsafe { outputs.iter().next()?.portName().to_string() };
+        let output = outputs.iter().next()?;
+        // The phone's own loudspeaker is left to the page, whose button says "Speaker" in the person's language; the system's
+        // `portName` for it is not always in it. Every other output keeps the system's name.
+        // SAFETY: reads of a live port description and a constant of AVFAudio, linked by the app.
+        let (name, loudspeaker) = unsafe {
+            (
+                output.portName().to_string(),
+                AVAudioSessionPortBuiltInSpeaker
+                    .is_some_and(|speaker| output.portType().isEqualToString(speaker)),
+            )
+        };
+        if loudspeaker {
+            return None;
+        }
         let name = name.trim();
         (!name.is_empty()).then(|| name.to_owned())
     }
