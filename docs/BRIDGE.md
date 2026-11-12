@@ -337,17 +337,17 @@ interface AudioRoute {
   route (the page hears of it as it hears of any route change, and from `subscribe` as the new name). The sheet keeps the system's
   look and cannot be restyled.
 - `current()` is `AVAudioSession.currentRoute`'s first output's `portName`, trimmed; `null` when it has none or is empty (the page then
-  keeps its own label for the control). `subscribe` is told by the app's own observer of `AVAudioSessionRouteChangeNotification`: it
+  keeps its own label for the control; the phone's own loudspeaker, `portType` `BuiltInSpeaker`, counts as none: its system `portName` is not always in the person's language, so the page's translated "Speaker" stays). `subscribe` is told by the app's own observer of `AVAudioSessionRouteChangeNotification`: it
   dispatches the window's `sidevoice-audio-route` event (as Android's text scale does) and the member answers each with `current()`;
   nothing is told on subscribing, the page reads `current()` first. The name is the system's: the page shows it as it is, translates
   nothing and keeps no list. The app's command takes `action` `current` besides `available` and `open`.
-- Codes: `audio-route-picker-failed` (the view the system offers for it did not take the tap) and
+- Codes: `audio-route-picker-failed` (the view the system offers for it did not take the tap: no button, or one that opens a menu) and
   `audio-route-picker-unavailable` (no such sheet on this phone).
 - The app's command `audio_route` (`action`: `available` or `open`) is granted to the app's window alone. On iOS the sheet is
   AVKit's `AVRoutePickerView`, which has no call to open it: the app keeps one, hidden and without size, in the page's window and
   sends its button the tap (`mobile/tauri/src/platform/audio_route_picker/ios.rs`; AVKit is linked by the project). The view does not
   say whether its sheet came up, so the app looks at the window before and after (the controllers presented over it, the key
-  window) and rejects `audio-route-picker-failed` when nothing came over it. The audio session's category, mode and options are not
+  window) and only logs when nothing came over it (with no other output the system offers no sheet, or shows it outside the window): that is not a failure, and `open()` resolves. The audio session's category, mode and options are not
   touched.
 
 ## The cues

@@ -5,8 +5,9 @@
 //! binds macOS's view, so the class is declared here, over `UIView`, which is what it is on iOS.
 //!
 //! Whether the sheet came up is not told by the view. The caller looks at [`Presentation`] before and after (the window's
-//! presented controllers and whether it is the key window): no change is a failure it reports. If a later iOS changes the
-//! view's inner button, that is what shows.
+//! presented controllers and whether it is the key window). No change is not a failure: with nothing to choose (the phone
+//! alone) the system shows no sheet, or one outside this window, and the call answers that it saw none. A failure is the view
+//! not taking the tap (no button, or one that opens a menu), which `open` reports.
 use std::cell::RefCell;
 use std::ptr::NonNull;
 
@@ -14,7 +15,9 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{extern_class, msg_send, sel, MainThreadMarker};
-use objc2_avf_audio::{AVAudioSession, AVAudioSessionRouteChangeNotification};
+use objc2_avf_audio::{
+    AVAudioSession, AVAudioSessionPortBuiltInSpeaker, AVAudioSessionRouteChangeNotification,
+};
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{NSNotification, NSNotificationCenter};
 use objc2_ui_kit::{UIResponder, UIView};
@@ -121,8 +124,20 @@ impl Os for Native {
     fn current() -> Option<String> {
         // SAFETY: read-only messages to the shared session, which answers from any thread.
         let outputs = unsafe { AVAudioSession::sharedInstance().currentRoute().outputs() };
-        // SAFETY: a read of a live port description.
-        let name = unsafe { outputs.iter().next()?.portName().to_string() };
+        let output = outputs.iter().next()?;
+        // The phone's own loudspeaker is left to the page, whose button says "Speaker" in the person's language; the system's
+        // `portName` for it is not always in it. Every other output keeps the system's name.
+        // SAFETY: reads of a live port description and a constant of AVFAudio, linked by the app.
+        let (name, loudspeaker) = unsafe {
+            (
+                output.portName().to_string(),
+                AVAudioSessionPortBuiltInSpeaker
+                    .is_some_and(|speaker| output.portType().isEqualToString(speaker)),
+            )
+        };
+        if loudspeaker {
+            return None;
+        }
         let name = name.trim();
         (!name.is_empty()).then(|| name.to_owned())
     }

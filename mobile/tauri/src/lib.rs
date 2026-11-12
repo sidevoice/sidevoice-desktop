@@ -347,8 +347,9 @@ async fn audio_route(
                 .await
                 .map_err(|why| refusal(&why))?
                 .map_err(|code| serde_json::json!({ "key": "audio_route", "code": code, "message": code }))?;
-            // The view does not say that its sheet came up: the window does. Given a moment, it shows something over the page
-            // or the open failed, which the page is told (not a button that does nothing).
+            // The view does not say that its sheet came up: the window does, given a moment. Nothing over the page is not a
+            // failure: with nothing to choose (the phone alone) the system shows no sheet, or shows it outside this window.
+            // A view that took no tap was refused above. The answer is whether a sheet was seen; the page does not read it.
             tauri::async_runtime::spawn_blocking(|| std::thread::sleep(AUDIO_ROUTE_SETTLE))
                 .await
                 .ok();
@@ -356,13 +357,9 @@ async fn audio_route(
                 .await
                 .map_err(|why| refusal(&why))?;
             if after == before {
-                log::warn!("the output route picker did not open: nothing came over the window");
-                let code = "audio-route-picker-failed";
-                return Err(
-                    serde_json::json!({ "key": "audio_route", "code": code, "message": code }),
-                );
+                log::info!("the output route picker showed nothing over the window (no other output, or a sheet outside it)");
             }
-            Ok(true.into())
+            Ok((after != before).into())
         }
         _ => Err(refusal("audio_route takes available, current or open")),
     }
