@@ -102,7 +102,7 @@ impl Os for Native {
         if MainThreadMarker::new().is_some() {
             watch_here(changed);
         } else if let Err(error) = app.run_on_main_thread(move || watch_here(changed)) {
-            log::warn!("screen: the lock is not watched: {error}");
+            log::warn!(target: "cue", "screen: the lock is not watched: {error}");
         }
     }
 }

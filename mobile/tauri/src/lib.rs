@@ -224,7 +224,11 @@ fn cue(
         cue_available, cue_current, cue_ticket, end_cues, gain_db as offset,
         interval_scale as frequency, prepare_cue, start_cue, stop_cue, Cue, When,
     };
-    let refusal = |why: &str| serde_json::json!({ "key": "bad_request", "message": why });
+    // Every refusal goes to the app's log at warn: the page says it only in its own console.
+    let refusal = |why: &str| {
+        log::warn!(target: "cue", "cue {action} refused: {why}");
+        serde_json::json!({ "key": "bad_request", "message": why })
+    };
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
     if action == "available" {
         return Ok(cue_available(|path| assets(&app, path)));
@@ -259,10 +263,11 @@ fn cue(
     let ticket = cue_ticket();
     room.then(move |room| {
         if !cue_current(ticket) {
+            log::info!(target: "cue", "cue {cue:?}: a start superseded before it was checked");
             return;
         }
-        if !room.cue_allowed() {
-            log::info!("cue {cue:?} refused: no call's audio is open");
+        if let Some(why) = room.cue_refusal() {
+            log::warn!(target: "cue", "cue {cue:?} refused: {why}");
             return;
         }
         // Read and decoded on a thread of its own: neither the main thread nor the room's, whose next job may be the call's end.
@@ -283,21 +288,27 @@ fn cue(
                 ) {
                     Ok(prepared) => prepared,
                     Err(error) => {
-                        log::warn!("cue {cue:?} did not start: {error}");
+                        log::warn!(target: "cue", "cue {cue:?} did not start: {error}");
                         return;
                     }
                 };
                 if !cue_current(ticket) {
+                    log::info!(target: "cue", "cue {cue:?}: a start superseded while its sound was read");
                     return;
                 }
-                let _ = handle.run_on_main_thread(move || {
+                let queued = handle.run_on_main_thread(move || {
                     if let Err(error) = start_cue(cue, prepared, ticket, when) {
-                        log::warn!("cue {cue:?} did not start: {error}");
+                        log::warn!(target: "cue", "cue {cue:?} did not start: {error}");
                     }
                 });
+                if let Err(error) = queued {
+                    log::warn!(target: "cue", 
+                        "cue {cue:?} did not start: the main thread did not take it: {error}"
+                    );
+                }
             });
         if let Err(error) = spawned {
-            log::warn!("cue {cue:?} did not start: {error}");
+            log::warn!(target: "cue", "cue {cue:?} did not start: {error}");
         }
     });
     Ok(true)
@@ -726,8 +737,9 @@ const PAGE_STILLS: [&str; 2] = [
 /// shared/tauri/js/webview-log.js as target `webview`) go in public, category `stills`, so a device's log shows each step
 /// of a still; the lines with target `intent` (what the call's surfaces asked for and what came of it: action names,
 /// states and counters, never a title, a text or an id) go in public, category `intent`, next to the App Intents' own;
-/// every other line is the app's own or the page's and may carry what the person said, so it goes in category `app`,
-/// private.
+/// the lines with target `cue` (the thinking sound: whether it starts, plays, or why not, and the screen's lock it
+/// follows: sound ids, states and errors, never a word) go in public, category `cue`; every other line is the app's own
+/// or the page's and may carry what the person said, so it goes in category `app`, private.
 fn log_category(target: &str, message: &str) -> &'static str {
     let page_still = target == tauri_plugin_log::WEBVIEW_TARGET
         && PAGE_STILLS.iter().any(|form| message.starts_with(form));
@@ -735,6 +747,8 @@ fn log_category(target: &str, message: &str) -> &'static str {
         "stills"
     } else if target == "intent" {
         "intent"
+    } else if target == "cue" {
+        "cue"
     } else {
         "app"
     }
@@ -779,6 +793,19 @@ mod tests {
             log_category("sidevoice_mobile", "call_state: joined"),
             "app"
         );
+    }
+
+    #[test]
+    fn the_cue_lines_are_public_by_their_target_only() {
+        assert_eq!(
+            log_category("cue", "cue Thinking refused: no call is held"),
+            "cue"
+        );
+        assert_eq!(
+            log_category("webview", "console.warn: [sidevoice] cue start failed: x"),
+            "app"
+        );
+        assert_eq!(log_category("sidevoice_mobile", "cue Thinking"), "app");
     }
 
     #[test]
