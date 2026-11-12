@@ -493,6 +493,18 @@ extension CallStills {
 
     private static let scaled = NSCache<NSString, UIImage>()
 
+    /// `image` redrawn at `pixels` (1x scale), alpha kept. `UIImage.preparingThumbnail(of:)` returned an opaque bitmap for a
+    /// PNG with transparency (the corners came out black: in the stack each face covered the next), so the copy is drawn
+    /// into a renderer whose format is explicitly not opaque.
+    static func scaledKeepingAlpha(_ image: UIImage, to pixels: CGSize) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: pixels, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: pixels))
+        }
+    }
+
     /// The still `file` as an image, scaled down to `side` points at the screen's 3×; nil draws the placeholder. The
     /// compact island drew no creature on the phone while the expanded island and the Lock Screen drew the same 240–480 px
     /// file: the system leaves out an image much larger than its slot there. A copy at the slot's size also keeps the
@@ -507,7 +519,7 @@ extension CallStills {
             let width = image.size.width * image.scale, height = image.size.height * image.scale
             let fit = min(1, pixels / max(width, height, 1))
             let small = fit < 1
-                ? image.preparingThumbnail(of: CGSize(width: (width * fit).rounded(), height: (height * fit).rounded())) ?? image
+                ? scaledKeepingAlpha(image, to: CGSize(width: (width * fit).rounded(), height: (height * fit).rounded()))
                 : image
             scaled.setObject(small, forKey: key)
             return small
