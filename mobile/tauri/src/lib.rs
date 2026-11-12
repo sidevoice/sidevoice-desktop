@@ -303,9 +303,6 @@ fn cue(
     Ok(true)
 }
 
-/// How long the system's picker is given to come up before the window is looked at (it animates in).
-const AUDIO_ROUTE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
-
 /// `work` on the main thread with the platform's web view, and its answer: UIKit's objects are the main thread's.
 async fn on_main<T: Send + 'static>(
     webview: &Webview,
@@ -339,27 +336,12 @@ async fn audio_route(
         "available" => Ok(platform::audio_route_picker::available().into()),
         "current" => Ok(platform::audio_route_picker::current().into()),
         "open" => {
-            use platform::audio_route_picker::{open, presentation};
-            let before = on_main(&webview, presentation)
-                .await
-                .map_err(|why| refusal(&why))?;
+            use platform::audio_route_picker::open;
             on_main(&webview, open)
                 .await
                 .map_err(|why| refusal(&why))?
                 .map_err(|code| serde_json::json!({ "key": "audio_route", "code": code, "message": code }))?;
-            // The view does not say that its sheet came up: the window does, given a moment. Nothing over the page is not a
-            // failure: with nothing to choose (the phone alone) the system shows no sheet, or shows it outside this window.
-            // A view that took no tap was refused above. The answer is whether a sheet was seen; the page does not read it.
-            tauri::async_runtime::spawn_blocking(|| std::thread::sleep(AUDIO_ROUTE_SETTLE))
-                .await
-                .ok();
-            let after = on_main(&webview, presentation)
-                .await
-                .map_err(|why| refusal(&why))?;
-            if after == before {
-                log::info!("the output route picker showed nothing over the window (no other output, or a sheet outside it)");
-            }
-            Ok((after != before).into())
+            Ok(true.into())
         }
         _ => Err(refusal("audio_route takes available, current or open")),
     }

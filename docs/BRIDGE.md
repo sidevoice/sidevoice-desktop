@@ -346,8 +346,8 @@ interface AudioRoute {
 - The app's command `audio_route` (`action`: `available` or `open`) is granted to the app's window alone. On iOS the sheet is
   AVKit's `AVRoutePickerView`, which has no call to open it: the app keeps one, hidden and without size, in the page's window and
   sends its button the tap (`mobile/tauri/src/platform/audio_route_picker/ios.rs`; AVKit is linked by the project). The view does not
-  say whether its sheet came up, so the app looks at the window before and after (the controllers presented over it, the key
-  window) and only logs when nothing came over it (with no other output the system offers no sheet, or shows it outside the window): that is not a failure, and `open()` resolves. The audio session's category, mode and options are not
+  say whether its sheet came up, and the window shows nothing of it (the sheet is the system's), so `open()` resolves once the tap is
+  delivered to the button and rejects `audio-route-picker-failed` only when the view has no button or does not take the tap. The audio session's category, mode and options are not
   touched.
 
 ## The cues

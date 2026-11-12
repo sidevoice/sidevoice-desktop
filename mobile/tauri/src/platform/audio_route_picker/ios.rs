@@ -4,10 +4,9 @@
 //! (category, mode, options) is not touched. AVKit is linked by the project (`bundle > iOS > frameworks`); `objc2-av-kit` only
 //! binds macOS's view, so the class is declared here, over `UIView`, which is what it is on iOS.
 //!
-//! Whether the sheet came up is not told by the view. The caller looks at [`Presentation`] before and after (the window's
-//! presented controllers and whether it is the key window). No change is not a failure: with nothing to choose (the phone
-//! alone) the system shows no sheet, or one outside this window, and the call answers that it saw none. A failure is the view
-//! not taking the tap (no button, or one that opens a menu), which `open` reports.
+//! The view does not say whether its sheet came up (and the window shows nothing of it: the sheet is the system's), so
+//! `open` is done once the tap is delivered to the button. A failure is the view not taking the tap: no button, or one that
+//! opens a menu.
 use std::cell::RefCell;
 use std::ptr::NonNull;
 
@@ -23,7 +22,7 @@ use objc2_foundation::{NSNotification, NSNotificationCenter};
 use objc2_ui_kit::{UIResponder, UIView};
 use tauri::webview::PlatformWebview;
 
-use super::{Changed, Os, Presentation};
+use super::{Changed, Os};
 
 pub struct Native;
 
@@ -55,24 +54,6 @@ fn view(webview: &PlatformWebview) -> Option<&UIView> {
 
 impl Os for Native {
     const AVAILABLE: bool = true;
-
-    fn presentation(webview: &PlatformWebview) -> Presentation {
-        let Some(window) = view(webview).and_then(|view| view.window()) else {
-            return Presentation::default();
-        };
-        let mut presented = 0;
-        let mut top = window.rootViewController();
-        while let Some(controller) = top {
-            top = controller.presentedViewController();
-            if top.is_some() {
-                presented += 1;
-            }
-        }
-        Presentation {
-            presented,
-            key: window.isKeyWindow(),
-        }
-    }
 
     fn open(webview: &PlatformWebview) -> Result<(), String> {
         let web_view = view(webview).ok_or_else(|| failed("no web view"))?;
