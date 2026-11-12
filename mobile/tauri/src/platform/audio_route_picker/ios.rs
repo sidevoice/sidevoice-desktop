@@ -14,9 +14,7 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{extern_class, msg_send, sel, MainThreadMarker};
-use objc2_avf_audio::{
-    AVAudioSession, AVAudioSessionPortBuiltInSpeaker, AVAudioSessionRouteChangeNotification,
-};
+use objc2_avf_audio::{AVAudioSession, AVAudioSessionRouteChangeNotification};
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{NSNotification, NSNotificationCenter};
 use objc2_ui_kit::{UIResponder, UIView};
@@ -105,20 +103,8 @@ impl Os for Native {
     fn current() -> Option<String> {
         // SAFETY: read-only messages to the shared session, which answers from any thread.
         let outputs = unsafe { AVAudioSession::sharedInstance().currentRoute().outputs() };
-        let output = outputs.iter().next()?;
-        // The phone's own loudspeaker is left to the page, whose button says "Speaker" in the person's language; the system's
-        // `portName` for it is not always in it. Every other output keeps the system's name.
-        // SAFETY: reads of a live port description and a constant of AVFAudio, linked by the app.
-        let (name, loudspeaker) = unsafe {
-            (
-                output.portName().to_string(),
-                AVAudioSessionPortBuiltInSpeaker
-                    .is_some_and(|speaker| output.portType().isEqualToString(speaker)),
-            )
-        };
-        if loudspeaker {
-            return None;
-        }
+        // SAFETY: a read of a live port description.
+        let name = unsafe { outputs.iter().next()?.portName().to_string() };
         let name = name.trim();
         (!name.is_empty()).then(|| name.to_owned())
     }

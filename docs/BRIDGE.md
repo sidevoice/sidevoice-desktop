@@ -337,7 +337,7 @@ interface AudioRoute {
   route (the page hears of it as it hears of any route change, and from `subscribe` as the new name). The sheet keeps the system's
   look and cannot be restyled.
 - `current()` is `AVAudioSession.currentRoute`'s first output's `portName`, trimmed; `null` when it has none or is empty (the page then
-  keeps its own label for the control; the phone's own loudspeaker, `portType` `BuiltInSpeaker`, counts as none: its system `portName` is not always in the person's language, so the page's translated "Speaker" stays). `subscribe` is told by the app's own observer of `AVAudioSessionRouteChangeNotification`: it
+  keeps its own label for the control). `subscribe` is told by the app's own observer of `AVAudioSessionRouteChangeNotification`: it
   dispatches the window's `sidevoice-audio-route` event (as Android's text scale does) and the member answers each with `current()`;
   nothing is told on subscribing, the page reads `current()` first. The name is the system's: the page shows it as it is, translates
   nothing and keeps no list. The app's command takes `action` `current` besides `available` and `open`.
