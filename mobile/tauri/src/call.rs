@@ -148,13 +148,34 @@ enum Gate {
     Refuse(&'static str),
 }
 
+/// Why a cue may not play, or `None` when it may: the room holds a call (`held`) and a voice call's audio is open. The
+/// reason names what is missing and the system's call as it stands, for the app's log.
+fn cue_refusal(held: bool, audio: &Audio) -> Option<String> {
+    if held && audio.open {
+        return None;
+    }
+    let mut missing = Vec::new();
+    if !held {
+        missing.push("no call is held");
+    }
+    if !audio.open {
+        missing.push("no voice call's audio is open");
+    }
+    Some(format!(
+        "{} (system's call: {:?})",
+        missing.join(", "),
+        audio.system
+    ))
+}
+
 /// What a voice call's audio refused for want of the system's session says (sidevoice-voice's code for it).
 const ACTIVATE_FAILED: &str = "audio-session-activate-failed";
 
 impl PhoneCall {
-    /// Whether a voice call's audio is open, and so the session active.
-    fn audio_open(&self) -> bool {
-        self.audio.lock().unwrap().open
+    /// Why a cue may not play now, the room holding a call or not (`held`): a voice call's audio must be open, and so the
+    /// session active. `None` when it may ([`cue_refusal`]).
+    fn cue_refusal(&self, held: bool) -> Option<String> {
+        cue_refusal(held, &self.audio.lock().unwrap())
     }
 
     /// The system gave the audio back after an interruption (iOS deactivated the session): activates it again if a voice
@@ -569,7 +590,12 @@ impl Room {
     /// Whether a cue may start: a call is held and its audio is open (`cue` in lib.rs). The audio stays open a moment after a
     /// call's end, so the held call is what tells an ended one.
     pub fn cue_allowed(&self) -> bool {
-        self.holding.is_some() && self.phone.audio_open()
+        self.cue_refusal().is_none()
+    }
+
+    /// Why a cue may not start now (`cue_allowed`), for the app's log; `None` when it may.
+    pub fn cue_refusal(&self) -> Option<String> {
+        self.phone.cue_refusal(self.holding.is_some())
     }
 
     /// Stops the page's cue (`host.cue`): the call it played in is over, and the page may not run to stop it (a hang-up of the
@@ -1504,6 +1530,31 @@ mod tests {
         assert_eq!(update_wait(Some(now), later), Some(UPDATE_INTERVAL * 4 / 5));
         assert_eq!(update_wait(Some(now), now + UPDATE_INTERVAL), None);
         assert_eq!(update_wait(Some(now), now + UPDATE_INTERVAL * 3), None);
+    }
+
+    #[test]
+    fn a_cue_plays_only_in_a_held_call_with_its_audio_open_and_a_refusal_says_why() {
+        let open = Audio {
+            open: true,
+            system: SystemAudio::None,
+        };
+        assert_eq!(cue_refusal(true, &open), None);
+        assert_eq!(
+            cue_refusal(false, &open).as_deref(),
+            Some("no call is held (system's call: None)")
+        );
+        let closed = Audio {
+            open: false,
+            system: SystemAudio::Pending,
+        };
+        assert_eq!(
+            cue_refusal(true, &closed).as_deref(),
+            Some("no voice call's audio is open (system's call: Pending)")
+        );
+        assert_eq!(
+            cue_refusal(false, &closed).as_deref(),
+            Some("no call is held, no voice call's audio is open (system's call: Pending)")
+        );
     }
 
     #[test]

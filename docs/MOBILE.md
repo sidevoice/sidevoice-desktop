@@ -446,7 +446,8 @@ its buttons need iOS 17 (before that it only shows the call).
 - **Diagnostics.** The app's log (the Rust side's `log::`, and the page's console warnings and errors, uncaught errors and
   unhandled rejections through shared/tauri/js/webview-log.js, as on the desktop) is a file, which `log show` does not read; on
   iOS every line also goes to the unified log (`SidevoiceLog`, subsystem `ai.sidevoice`, public strings, category `stills` for
-  the creatures' stills, `intent`, `text`, `app`; `app` is private). A still the activity cannot draw is a placeholder, the
+  the creatures' stills, `intent`, `cue` for the thinking sound (each start, play and refusal with its reason, at warn when it
+  does not play), `text`, `app`; `app` is private). A still the activity cannot draw is a placeholder, the
   Sidevoice mark (white, 56 % of its slot, on the slot's ground), never an empty slot, and the cause is logged once. A still's
   way is one public `stills` line per step, which `log show --predicate 'subsystem == "ai.sidevoice" AND category == "stills"'`
   reads from a sysdiagnose or `log collect`:
