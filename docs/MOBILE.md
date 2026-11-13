@@ -75,7 +75,7 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `shortcuts` | The headset's presses, the only shortcuts a phone has (docs/BRIDGE.md → "The shortcuts" → "The mobile app"): `get`, `subscribe` and `setHeadset`, reporting the `headset` group alone (`shortcuts: {}`, `inApp: false`) with what each press can do on this phone (`actions`, from the shared media controls' `presses`), so Settings › Shortcuts shows only that, with no platform check in the page. Single press: mute, and the double press: nothing, until chosen (say one thing, skip what is playing, or mute), where the press can do it. Kept in `headset.json` of the app's own files (`mobile/tauri/src/bridge.rs` (`headset`)), untouched by what a press can do; what the presses do is `shared/headset`'s, shared with the desktop. **iOS**: in a call only the AirPods / Beats Press to Mute reaches the app (a headset's other presses are hands-free call control, which goes to CallKit), opted in at launch through `AVAudioApplication` (docs/MEDIA_CONTROLS.md): the single press is reported as the system's mute alone and there is no double press, so the page shows a line and no choice. No Now Playing, no remote commands, at any time. **Android**: both presses, every action: the call service's `MediaSession` (`onPlay`, `onPause`, and `onSkipToNext` for the double press: the framework turns a headset's PLAY_PAUSE or HEADSETHOOK pressed twice within the system's double-tap time into it, with skip-to-next advertised only while the double press has an action, so that a single press is immediate otherwise), released with the service at hang-up. With "Treat calls as system calls" on, the system mutes: `managedBySystem`, the rows are read-only. |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 | `deviceName` | The name the person gave the phone (`mobile/tauri/src/platform/device_name`), read when the window is made: on Android `Settings.Global` `device_name`, else `Settings.Secure` `bluetooth_name`, else the model (`Samsung SM-A600FN`), with no permission; on iOS `UIDevice.current.name`, which since iOS 16 is the generic model ("iPhone") without the user-assigned-device-name entitlement. Without it the page would name the phone from the webview's user agent ("Chrome on Android"). |
-| `debug` | The developer options of a nightly or a dev build (docs/BRIDGE.md → "The developer options"); absent in a release. One switch, `systemCall` ("Treat calls as system calls", off by default: "The system's call" below), kept in `developer-options.json` of the app's own files and set through the app's own `developer_options` command (`mobile/tauri/src/developer_options.rs`). |
+| `debug` | The developer options of a nightly or a dev build (docs/BRIDGE.md → "The developer options"); absent in a release. One switch, `systemCall` ("Treat calls as system calls", off by default: "The system's call" below), and on iOS one choice, `callAudio` ("Call audio mode (test)", voice chat by default: "The call audio mode test" below), kept in `developer-options.json` of the app's own files and set through the app's own `developer_options` command (`set` a switch, `choose` a choice's value; `mobile/tauri/src/developer_options.rs`). |
 | `build` | What this build is, in the desktop's shape (docs/BRIDGE.md → "The build"): `{channel, version, commit?, date?}`. `cargo xtask mobile build` and `testflight` tell the build script (`mobile/tauri/build.rs`) the channel: `nightly` on CI, so every build shipped today (TestFlight, the signed APK) is a nightly with its `commit` and `date`, `dev` on a laptop, `SIDEVOICE_BUILD_CHANNEL` overriding; `version` is `tauri.conf.json`'s. The page unlocks its Developer options by the channel (Settings → Advanced, the Build row tapped 10 times; nightly only). |
 | `codeScanner` | `{ permission(), request(), scan(), cancel(), openSettings() }`: the camera that scans the pairing QR code a machine shows ("Scanning the pairing code" below). |
 | `screen` | `{ locked() }`: whether the screen is locked now, a screen that is off counting as locked (docs/BRIDGE.md → "The screen"): Android's keyguard or the screen off; iOS's protected data gone, so only with a passcode and some seconds after the lock. The page's "only with the screen off" thinking sound; the app's own player (`cue`, iOS) applies it itself while the screen is locked (`whileLocked`, docs/BRIDGE.md → "The cues"). |
@@ -122,7 +122,8 @@ through `run` (the call's service hangs up through it).
     doing. logcat (`SidevoiceCall`) says which: `audio: the call's audio opens now: …`.
 - **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
   play-and-record with mode `VoiceChat` (what makes iOS take the audio as a call: the Bluetooth hands-free route, a car's call, rather than A2DP "music"; desktop#465), the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
-  activated only when a call starts (above). Once it is active (the app's activation, CallKit's, or the app's again after
+  activated only when a call starts (above). The nightly developer option "Call audio mode (test)" declares another mode
+  ("The call audio mode test" below). Once it is active (the app's activation, CallKit's, or the app's again after
   an interruption), a call that plays on the phone itself (the receiver or the loudspeaker) is moved to the loudspeaker with
   `overrideOutputAudioPort(.speaker)` (`mobile/tauri/src/platform/loudspeaker.rs`): `DefaultToSpeaker` alone left the
   call very low on the iPhone's loudspeaker, the volume keys moving it only a little, while headphones were loud (the
@@ -640,6 +641,43 @@ during an upload collapse into the newest one. Its one step is `cargo xtask mobi
   4. the people who test are users of the team (Users and Access) and members of an internal testing group of the app
      (TestFlight → Internal Testing); an internal build needs no beta review;
   5. the environment `testflight` exists with the deployment-branch rule.
+
+## The call audio mode test (iOS)
+
+Everything the app plays through the iPhone's loudspeaker is very quiet, a call and a try in Settings alike, with the
+volume keys moving it only a little; headphones are loud. The session's mode is the suspect: `voiceChat` (and
+`videoChat`) applies the system's voice processing and the call's volume, `default` does neither (Apple's
+`AVAudioSession.Mode`). The nightly developer option **Call audio mode (test)** (Settings → Developer options → Calls;
+`host.debug.callAudio`, `mobile/tauri/src/developer_options.rs`) chooses the mode, for an A/B test on a device; every
+choice keeps play-and-record, `defaultToSpeaker`, `allowBluetoothHFP` and the loudspeaker override:
+
+| Choice | At the app's start and for a try in Settings | In the room's call |
+|---|---|---|
+| `voiceChat` (default) | `.voiceChat` | `.voiceChat` |
+| `videoChat` | `.videoChat` | `.videoChat` |
+| `default` | `.default` | `.default` |
+| `voiceChatInCalls` | `.default` | `.voiceChat`, declared as the room's call starts and `.default` again as it ends |
+
+A choice is declared at once while no voice call's audio is open, else when the next one opens (`call::PhoneCall`).
+Video chat is declared by the app itself (`platform/audio_session`), since sidevoice-voice's `SessionConfig` has only
+`Default` and `VoiceChat`; the option is a test, to be removed once the evidence picks a declaration.
+
+**The log.** The unified log's public category `audio` (subsystem `ai.sidevoice`) has one line per moment, each with the
+mode chosen, what was declared and the session as the system has it then (category, mode, options, the route's output and
+input ports, `outputVolume`, `isOtherAudioPlaying`, `secondaryAudioShouldBeSilencedHint`, the sample rate, the IO buffer
+and their preferred values, the output latency and channels): at the app's start, as a mode is chosen, as a voice call's
+audio opens and as the last one's stops (a try in Settings too), as the room's call starts and ends; and at every route change (with
+its reason and the route before), interruption (with its type, `shouldResume` and reason), loss and reset of the media
+services, and move of the output volume (the volume keys). sidevoice-voice exposes no gain of its playback to log.
+`log stream --predicate 'subsystem == "ai.sidevoice" AND category == "audio"'` (or Console with `subsystem:ai.sidevoice
+category:audio`).
+
+**The page's own sounds.** The thinking sound's try in Settings (`previewThinkingSound`) and the recording's playback are
+the web view's (Web Audio, an `<audio>` element), not the voice's: WebKit plays them through its own audio session, in its
+processes, and it is not documented to follow the app's. The `audio` log tells: if the app's session changes when one of
+them plays (a route change with reason `categoryChange`, another category), WebKit drives the app's session. The voice's
+try in Settings is a voice call (the app's session, the lines above). In a call the thinking sound is the app's own player
+(`cue`), on the app's session.
 
 ## Audio interruptions (D-AUDIO-FOCUS)
 
