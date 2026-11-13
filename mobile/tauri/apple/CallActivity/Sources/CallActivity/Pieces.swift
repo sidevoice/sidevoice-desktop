@@ -536,7 +536,9 @@ extension CallStills {
         let width = still.size.width * still.scale, height = still.size.height * still.scale
         // The slot's points per pixel of the still, as `scaledToFit` lays it out.
         let point = slot / max(width, height, 1)
-        let pad = (grow / point).rounded(.up)
+        // The ring in the still's pixels, and the whole pixels the canvas grows by to hold it.
+        let reach = grow / point
+        let pad = reach.rounded(.up)
         let pixels = CGSize(width: width + 2 * pad, height: height + 2 * pad)
         let size = CGSize(width: pixels.width * point, height: pixels.height * point)
         let anchor = UnitPoint(x: 0.5, y: (pad + 0.96 * height) / pixels.height)
@@ -548,10 +550,10 @@ extension CallStills {
         let drawn = UIGraphicsImageRenderer(size: pixels, format: format).image { _ in
             let box = CGRect(x: pad, y: pad, width: width, height: height)
             solid.draw(in: box)
-            // Rings at a third, two thirds and the whole of the pad, 32 stamps each: every point within `pad` of the
+            // Rings at a third, two thirds and the whole of the reach, 32 stamps each: every point within `reach` of the
             // creature is covered, the edge within a fraction of a pixel of round.
-            for step in 1...3 where pad > 0 {
-                let radius = pad * CGFloat(step) / 3
+            for step in 1...3 where reach > 0 {
+                let radius = reach * CGFloat(step) / 3
                 for index in 0..<32 {
                     let angle = CGFloat(index) / 32 * 2 * .pi
                     solid.draw(in: box.offsetBy(dx: radius * cos(angle), dy: radius * sin(angle)))
