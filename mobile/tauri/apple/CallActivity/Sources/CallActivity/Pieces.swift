@@ -187,14 +187,16 @@ struct OthersStack: View {
         .accessibilityLabel(state.words.conversations)
     }
 
-    private static let face: CGFloat = 26
-    private static let step: CGFloat = 18
+    static let face: CGFloat = 26
+    static let step: CGFloat = 18
     /// The gap between a face and the one over it.
-    private static let ring: CGFloat = 2
+    static let ring: CGFloat = 2
 
     /// The faces, each over the one before it, which has a ring-wide gap cut out of it around the newer face: whatever is
     /// behind the card (the Lock Screen's material, the island's black) shows through, as the mic badge's ring does, in
-    /// light and dark alike. The first of `others` underneath, on the left.
+    /// light and dark alike. The first of `others` underneath, on the left. The gap follows the newer creature's outline
+    /// (`cut`), never its slot's circle: a creature is not a disc, and a circle cut a disc out of the face beneath that the
+    /// newer one did not cover (on the Lock Screen's dark card, a black disc behind each face).
     private var faces: some View {
         let shown = Array(state.others.prefix(3).enumerated())
         return ZStack(alignment: .leading) {
@@ -205,7 +207,7 @@ struct OthersStack: View {
                         ZStack {
                             Rectangle().padding(-Self.face)
                             ForEach(Array((index + 1)..<shown.count), id: \.self) { over in
-                                Circle().frame(width: Self.face + 2 * Self.ring, height: Self.face + 2 * Self.ring)
+                                Self.cut(shown[over].element)
                                     .offset(x: CGFloat(over - index) * Self.step)
                                     .blendMode(.destinationOut)
                             }
@@ -216,6 +218,21 @@ struct OthersStack: View {
             }
         }
         .frame(width: Self.face + CGFloat(max(shown.count - 1, 0)) * Self.step, height: Self.face, alignment: .leading)
+    }
+
+    /// What a face cuts out of the one beneath it: its own outline grown by the ring, laid out as `Still` lays the face out
+    /// (fitted to the slot, enlarged by its `k` from near its bottom, so the ring is `ring` wide once enlarged). A face whose
+    /// still has not arrived is the placeholder's disc, so it cuts the disc grown by the ring.
+    @ViewBuilder static func cut(_ creature: CallState.Creature?) -> some View {
+        let k = creature?.k ?? 1
+        if let file = creature?.file, let outline = CallStills.outline(file, slot: face, k: k, grow: ring / k) {
+            Image(uiImage: outline.image).resizable().interpolation(.high)
+                .frame(width: outline.size.width, height: outline.size.height)
+                .scaleEffect(k, anchor: outline.anchor)
+                .frame(width: face, height: face)
+        } else {
+            Circle().frame(width: face + 2 * ring, height: face + 2 * ring)
+        }
     }
 }
 
@@ -503,6 +520,47 @@ extension CallStills {
         return UIGraphicsImageRenderer(size: pixels, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: pixels))
         }
+    }
+
+    private static let outlines = NSCache<NSString, UIImage>()
+
+    /// The still `file` as `Still` draws it in a `slot` enlarged by `k` (`image(_:side:)` at `slot * k`), its opaque part
+    /// grown by `grow` points of the slot on every side, in black: what a face cuts out of the face beneath it (`OthersStack`).
+    /// `size` is the outline's size in the slot's points, centred where the fitted still is, and `anchor` the point of it that
+    /// `Still` enlarges the still from (0.5, 0.96 of the fitted still); nil when the still is not there.
+    /// Drawn here, in CoreGraphics, rather than by a blur or a filter the system might draw otherwise: the still stamped
+    /// around circles of up to `grow`, then filled black where anything was stamped.
+    static func outline(_ file: String, slot: CGFloat, k: CGFloat, grow: CGFloat) -> (image: UIImage, size: CGSize, anchor: UnitPoint)? {
+        guard let still = image(file, side: slot * k) else { return nil }
+        let width = still.size.width * still.scale, height = still.size.height * still.scale
+        // The slot's points per pixel of the still, as `scaledToFit` lays it out.
+        let point = slot / max(width, height, 1)
+        let pad = (grow / point).rounded(.up)
+        let pixels = CGSize(width: width + 2 * pad, height: height + 2 * pad)
+        let size = CGSize(width: pixels.width * point, height: pixels.height * point)
+        let anchor = UnitPoint(x: 0.5, y: (pad + 0.96 * height) / pixels.height)
+        let key = "\(directory?.path ?? "-")/\(file)@\(Int(width))x\(Int(height))+\(Int(pad))" as NSString
+        if let cached = outlines.object(forKey: key) { return (cached, size, anchor) }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let drawn = UIGraphicsImageRenderer(size: pixels, format: format).image { context in
+            let box = CGRect(x: pad, y: pad, width: width, height: height)
+            still.draw(in: box)
+            // Rings at a third, two thirds and the whole of the pad, 32 stamps each: every point within `pad` of the
+            // creature is covered, the edge within a fraction of a pixel of round.
+            for step in 1...3 where pad > 0 {
+                let radius = pad * CGFloat(step) / 3
+                for index in 0..<32 {
+                    let angle = CGFloat(index) / 32 * 2 * .pi
+                    still.draw(in: box.offsetBy(dx: radius * cos(angle), dy: radius * sin(angle)))
+                }
+            }
+            UIColor.black.setFill()
+            context.fill(CGRect(origin: .zero, size: pixels), blendMode: .sourceIn)
+        }
+        outlines.setObject(drawn, forKey: key)
+        return (drawn, size, anchor)
     }
 
     /// The still `file` as an image, scaled down to `side` points at the screen's 3×; nil draws the placeholder. The
