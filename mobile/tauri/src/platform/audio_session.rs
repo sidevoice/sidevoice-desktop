@@ -16,6 +16,12 @@ pub type Heard = Arc<dyn Fn(String) + Send + Sync>;
 
 /// What differs per OS.
 trait Os {
+    /// Whether every output of the session's route is the phone itself (its receiver or its loudspeaker) rather than
+    /// headphones, Bluetooth, a car, AirPlay or USB; `None` where there is no session or the route has no output.
+    fn on_phone() -> Option<bool> {
+        None
+    }
+
     /// The session as the system has it now, in one line; `None` where there is no session.
     fn describe() -> Option<String> {
         None
@@ -27,6 +33,11 @@ trait Os {
     fn observe(_heard: Heard) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// Whether the route plays on the phone itself (`Os::on_phone`).
+pub fn on_phone() -> Option<bool> {
+    Native::on_phone()
 }
 
 /// The session as the system has it now, in one line, or `None` where there is none.

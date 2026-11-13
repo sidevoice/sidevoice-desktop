@@ -122,8 +122,7 @@ through `run` (the call's service hangs up through it).
     route settled, or at once when Telecom refuses the call (it stays the app's own), or after 3 s whatever Telecom is
     doing. logcat (`SidevoiceCall`) says which: `audio: the call's audio opens now: …`.
 - **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
-  play-and-record with the default mode, always (a call, a try in Settings and the app's start alike), the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
-  activated only when a call starts (above). The default mode was chosen on a device (2026-11-13): the loudspeaker plays at the media volume, a call does not cut itself and barge-in works, and putting on headphones switches the audio to them; `.voiceChat` was quiet on the loudspeaker. The voice (sidevoice-voice's `Session`) declares nothing of its own on iOS: the app's declaration is what the system applies. Once it is active (the app's activation, CallKit's, or the app's again after
+  play-and-record, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed, in a mode that follows the route (`call::mode_for`, decided on a device 2026-11-13): `.default` while the call plays on the phone itself (receiver or loudspeaker: loud, at the media volume; `.voiceChat` and `.videoChat` are quiet there) and `.voiceChat` while it plays on headphones, Bluetooth, a car or AirPlay (the AirPods' press-to-mute gesture works in `.voiceChat`, not in `.default`). It is declared for the route as it is at the app's start, before every voice call's audio (Settings previews included) and after a media services reset; activated only when a call starts (above). While a voice call's audio is open, every route change (reason other than our own `categoryChange`) declares the mode the new route wants, live: no call or room restart. The declaration is itself a route change (`categoryChange`), which makes the voice open its microphone and speaker streams again by itself as the route is now (sidevoice-voice's `recovery`, cpal's `StreamInvalidated`), the audio only, at most a brief glitch. Every switch is logged in the `audio` category with its route-change line. The voice declares nothing of its own on iOS: the app's declaration is what the system applies. Once it is active (the app's activation, CallKit's, or the app's again after
   an interruption), a call that plays on the phone itself (the receiver or the loudspeaker) is moved to the loudspeaker with
   `overrideOutputAudioPort(.speaker)` (`mobile/tauri/src/platform/loudspeaker.rs`): `DefaultToSpeaker` alone left the
   call very low on the iPhone's loudspeaker, the volume keys moving it only a little, while headphones were loud (the
@@ -650,7 +649,7 @@ input ports, `outputVolume`, `isOtherAudioPlaying`, `secondaryAudioShouldBeSilen
 and their preferred values, the output latency and channels): at the app's start, as a voice call's
 audio opens and as the last one's stops (a try in Settings too); and at every route change (with
 its reason and the route before), interruption (with its type, `shouldResume` and reason), loss and reset of the media
-services, and move of the output volume (the volume keys). sidevoice-voice exposes no gain of its playback to log.
+services, and move of the output volume (the volume keys), and every switch of the session's mode (`audio mode switched Default -> VoiceChat on route change: reason …`). sidevoice-voice exposes no gain of its playback to log.
 `log stream --predicate 'subsystem == "ai.sidevoice" AND category == "audio"'` (or Console with `subsystem:ai.sidevoice
 category:audio`).
 

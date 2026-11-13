@@ -13,7 +13,8 @@ use objc2_avf_audio::{
     AVAudioSession, AVAudioSessionCategoryOptions, AVAudioSessionInterruptionNotification,
     AVAudioSessionInterruptionOptionKey, AVAudioSessionInterruptionReasonKey,
     AVAudioSessionInterruptionTypeKey, AVAudioSessionMediaServicesWereLostNotification,
-    AVAudioSessionMediaServicesWereResetNotification, AVAudioSessionRouteChangeNotification,
+    AVAudioSessionMediaServicesWereResetNotification, AVAudioSessionPortBuiltInReceiver,
+    AVAudioSessionPortBuiltInSpeaker, AVAudioSessionRouteChangeNotification,
     AVAudioSessionRouteChangePreviousRouteKey, AVAudioSessionRouteChangeReasonKey,
     AVAudioSessionRouteDescription,
 };
@@ -27,6 +28,26 @@ use super::{Heard, Os};
 pub struct Native;
 
 impl Os for Native {
+    fn on_phone() -> Option<bool> {
+        // SAFETY: read-only messages to the shared session, reads of live port descriptions, and constants of AVFAudio.
+        unsafe {
+            let outputs = AVAudioSession::sharedInstance().currentRoute().outputs();
+            if outputs.is_empty() {
+                return None;
+            }
+            Some(outputs.iter().all(|port| {
+                let kind = port.portType();
+                [
+                    AVAudioSessionPortBuiltInReceiver,
+                    AVAudioSessionPortBuiltInSpeaker,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|own| kind.isEqualToString(own))
+            }))
+        }
+    }
+
     fn describe() -> Option<String> {
         // SAFETY: read-only messages to the shared session, which answers from any thread.
         unsafe {
