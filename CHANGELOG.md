@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.4.1...v0.5.0) (2026-11-12)
+
+
+### Features
+
+* **engine:** the engine's recommendation and builds that stop in the background, for the page ([#497](https://github.com/sidevoice/sidevoice-desktop/issues/497)) ([7582211](https://github.com/sidevoice/sidevoice-desktop/commit/7582211f681c1c381f8e3933158c9ed8e0b5242e))
+* **ios:** choose the microphone from the audio session and open the system output picker ([#498](https://github.com/sidevoice/sidevoice-desktop/issues/498)) ([2ea1523](https://github.com/sidevoice/sidevoice-desktop/commit/2ea1523cdb002f8e9eec5141e076699c6f43b4e3))
+* **ios:** ring the stacked faces of other conversations in the Live Activity ([#500](https://github.com/sidevoice/sidevoice-desktop/issues/500)) ([5448471](https://github.com/sidevoice/sidevoice-desktop/commit/54484711104e442361e46fc2425ef6c02dfe6403))
+* **local-host:** update the service in the background within the pinned minor ([#503](https://github.com/sidevoice/sidevoice-desktop/issues/503)) ([e6ac0a1](https://github.com/sidevoice/sidevoice-desktop/commit/e6ac0a1fe6809fe19cf908d9b7fcada57c9867f8))
+
+
+### Bug Fixes
+
+* **ios:** do not report a false failure when the output picker opens ([#506](https://github.com/sidevoice/sidevoice-desktop/issues/506)) ([db79723](https://github.com/sidevoice/sidevoice-desktop/commit/db79723e9ee1fbe0892679799b42f9dcb567abb1))
+* **ios:** end the call's Live Activity when the app is swiped away ([#493](https://github.com/sidevoice/sidevoice-desktop/issues/493)) ([0078a6c](https://github.com/sidevoice/sidevoice-desktop/commit/0078a6cd0e3e37b64a3a4cf527d1d8672096b8a3))
+* **ios:** log every thinking-sound refusal and failure at warn, in public ([#511](https://github.com/sidevoice/sidevoice-desktop/issues/511)) ([4e1f3e5](https://github.com/sidevoice/sidevoice-desktop/commit/4e1f3e531b790fc3d8865d609134d1d40ad01ce7))
+* **ios:** the output button names the system's route in every case ([#507](https://github.com/sidevoice/sidevoice-desktop/issues/507)) ([54e0f5d](https://github.com/sidevoice/sidevoice-desktop/commit/54e0f5dd17d55562fe769b133590500d49a31b38))
+* **local-host:** the state names the core's own port, not the proxy's ([#504](https://github.com/sidevoice/sidevoice-desktop/issues/504)) ([f5afed8](https://github.com/sidevoice/sidevoice-desktop/commit/f5afed830b471d5a6312072eaaf3a3c7a1f167a9))
+* **mobile:** keep the creature stills' transparency in the Live Activity stack ([#510](https://github.com/sidevoice/sidevoice-desktop/issues/510)) ([bd4fe57](https://github.com/sidevoice/sidevoice-desktop/commit/bd4fe577ba28dda28c46a1b499431896c9cd06b7))
+
 ## [0.4.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.4.0...v0.4.1) (2026-11-10)
 
 
