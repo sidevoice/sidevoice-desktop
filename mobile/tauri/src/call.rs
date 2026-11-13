@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 
 use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
 use crate::platform::interruption::{self, Interruption};
+use crate::platform::loudspeaker;
 use sidevoice_mobile_plugin::{
     call_activates_audio, call_replaces_media_controls, clear_stills, end_surface_now,
     forget_stills, refresh_call_service, request_call_focus, save_still, start_call_service,
@@ -187,7 +188,10 @@ impl PhoneCall {
             return true;
         }
         match Session::activate() {
-            Ok(()) => true,
+            Ok(()) => {
+                loudspeaker::take();
+                true
+            }
             Err(error) => {
                 log::warn!("call: the audio session was not activated again: {error}");
                 false
@@ -246,6 +250,9 @@ impl CallActivity for PhoneCall {
                 }
             }
         }
+        // The session is active, the app's or the system's call's: a call on the phone itself plays on its loudspeaker, at its
+        // full level, before any of the voice's streams opens (the move is a change of the route, which reopens them).
+        loudspeaker::take();
         audio.open = true;
         Ok(())
     }
