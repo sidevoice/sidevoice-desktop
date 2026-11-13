@@ -122,7 +122,13 @@ through `run` (the call's service hangs up through it).
     doing. logcat (`SidevoiceCall`) says which: `audio: the call's audio opens now: …`.
 - **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
   play-and-record with mode `VoiceChat` (what makes iOS take the audio as a call: the Bluetooth hands-free route, a car's call, rather than A2DP "music"; desktop#465), the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
-  activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see
+  activated only when a call starts (above). Once it is active (the app's activation, CallKit's, or the app's again after
+  an interruption), a call that plays on the phone itself (the receiver or the loudspeaker) is moved to the loudspeaker with
+  `overrideOutputAudioPort(.speaker)` (`mobile/tauri/src/platform/loudspeaker.rs`): `DefaultToSpeaker` alone left the
+  call very low on the iPhone's loudspeaker, the volume keys moving it only a little, while headphones were loud (the
+  receiver, or the low play-and-record level Apple has been told of since iOS 13, developer forums thread 721535). The
+  override lasts until the route changes; headphones, a car or AirPlay are left as the system chose. Android has no
+  session to declare. **Not verified on a device yet**; see
   "Not verified" below.
 - **Background audio** (iOS): `UIBackgroundModes` `audio` and `voip` in `mobile/tauri/Info.ios.plist`: `audio` so a call
   goes on with the screen locked, `voip` because CallKit refuses every call of an app without it (unentitled), and the call

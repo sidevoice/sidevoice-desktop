@@ -6,6 +6,7 @@ pub mod backup;
 pub mod device_name;
 pub mod entry;
 pub mod interruption;
+pub mod loudspeaker;
 pub mod message_overlay;
 pub mod microphone_help;
 pub mod private_dir;
