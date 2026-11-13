@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.5.0...v0.5.1) (2026-11-13)
+
+
+### Features
+
+* **ios:** call audio mode test option and public audio session log ([#517](https://github.com/sidevoice/sidevoice-desktop/issues/517)) ([d93ae8a](https://github.com/sidevoice/sidevoice-desktop/commit/d93ae8a1d827cdc3eb1388e730bd8fcfdb45641f))
+
+
+### Bug Fixes
+
+* **ios:** cut the stacked faces' ring along the creature over them ([#516](https://github.com/sidevoice/sidevoice-desktop/issues/516)) ([72f80fd](https://github.com/sidevoice/sidevoice-desktop/commit/72f80fd9ce46b911bfb7e319190674a085e104c6))
+* **ios:** follow the route with the audio session mode, live ([#520](https://github.com/sidevoice/sidevoice-desktop/issues/520)) ([80e01aa](https://github.com/sidevoice/sidevoice-desktop/commit/80e01aa79f17d41ad86af77247180502a256700b))
+* **ios:** play the call on the loudspeaker at its full level ([#513](https://github.com/sidevoice/sidevoice-desktop/issues/513)) ([ff328f4](https://github.com/sidevoice/sidevoice-desktop/commit/ff328f444edefe92f6a7ded5b84d46827a2bf8b5))
+
+
+### Miscellaneous Chores
+
+* **web:** pin the web 0.33.1 release ([#522](https://github.com/sidevoice/sidevoice-desktop/issues/522)) ([81c98e2](https://github.com/sidevoice/sidevoice-desktop/commit/81c98e25001dc012a0240ab7fb48eeee2f4b7f16))
+
 ## [0.5.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.4.1...v0.5.0) (2026-11-12)
 
 
