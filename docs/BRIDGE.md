@@ -1276,16 +1276,11 @@ the webviews (docs/MACOS.md); `compositingBorders` and `repaintCounters` are Web
 and offered only where WebKit provides their setters. All three are put on the room and the card as each is created and on each
 change. Windows and Linux: `available` is empty (Chromium's paint flags need a relaunch; no WebKitGTK binding is wired).
 **The phone** (`mobile/tauri/js/mobile-bridge.js`, `mobile/tauri/src/developer_options.rs`) has the same member with one switch,
-`systemCall`, and on iOS one choice, `callAudio` (below): `available` is `["systemCall"]`, and `host.debug` is absent in a release. `systemCall` ("Treat calls as system
+`systemCall`: `available` is `["systemCall"]`, and `host.debug` is absent in a release. `systemCall` ("Treat calls as system
 calls", docs/MOBILE.md → "The system's call") is off by default: the room's call is the app's own, with no CallKit provider
 on iOS and no Telecom registration on Android; on, the call is a CallKit or a Core-Telecom call. It is kept in the app's own
 files, read when each call starts, and read again by the page as it loads (`{action: "get"}`, so a reload shows the live state) and set through the app's own command `developer_options` (same arguments and answer as
 `debug_options`; the app's one window only, `capabilities/main.json`), refused `bad_request` in a release.
-
-`callAudio` (iOS, "Call audio mode (test)", docs/MOBILE.md → "The call audio mode test") is a choice, not a switch: `host.debug.callAudio`
-reads its value (`"voiceChat"` by default, `"videoChat"`, `"default"`, `"voiceChatInCalls"`), and `host.debug.choose("callAudio", value)`
-chooses one (`developer_options` `{action: "choose", name, value}`); a choice the phone lacks, or a value it does not have, rejects
-`{key: "bad_request"}`. `available` lists it where it is offered; `set` never takes it.
 
 The command is `debug_options` `{action: "set", name, enabled}`, answering `{available, inspectable,
 compositingBorders, repaintCounters}`; only the room page may call it (`capabilities/room.json`).

@@ -1,6 +1,6 @@
 //! iOS: `AVAudioSession.sharedInstance()`, read whole (any thread answers), its notifications (route change, interruption,
 //! media services lost and reset) with what their `userInfo` says as Apple documents it, and its `outputVolume`, which
-//! Apple documents as key-value observable: the volume keys move it. Video chat is `AVAudioSession.Mode.videoChat`.
+//! Apple documents as key-value observable: the volume keys move it.
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::OnceLock;
@@ -10,13 +10,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, AllocAnyThread};
 use objc2_avf_audio::{
-    AVAudioSession, AVAudioSessionCategoryOptions, AVAudioSessionCategoryPlayAndRecord,
-    AVAudioSessionInterruptionNotification, AVAudioSessionInterruptionOptionKey,
-    AVAudioSessionInterruptionReasonKey, AVAudioSessionInterruptionTypeKey,
-    AVAudioSessionMediaServicesWereLostNotification,
-    AVAudioSessionMediaServicesWereResetNotification, AVAudioSessionModeVideoChat,
-    AVAudioSessionRouteChangeNotification, AVAudioSessionRouteChangePreviousRouteKey,
-    AVAudioSessionRouteChangeReasonKey, AVAudioSessionRouteDescription,
+    AVAudioSession, AVAudioSessionCategoryOptions, AVAudioSessionInterruptionNotification,
+    AVAudioSessionInterruptionOptionKey, AVAudioSessionInterruptionReasonKey,
+    AVAudioSessionInterruptionTypeKey, AVAudioSessionMediaServicesWereLostNotification,
+    AVAudioSessionMediaServicesWereResetNotification, AVAudioSessionRouteChangeNotification,
+    AVAudioSessionRouteChangePreviousRouteKey, AVAudioSessionRouteChangeReasonKey,
+    AVAudioSessionRouteDescription,
 };
 use objc2_foundation::{
     NSDictionary, NSKeyValueObservingOptions, NSNotification, NSNotificationCenter,
@@ -28,37 +27,6 @@ use super::{Heard, Os};
 pub struct Native;
 
 impl Os for Native {
-    const MODE_SELECTABLE: bool = true;
-
-    fn declare_video_chat(speaker: bool, bluetooth: bool) -> Result<(), String> {
-        let mut options = AVAudioSessionCategoryOptions::empty();
-        if speaker {
-            options |= AVAudioSessionCategoryOptions::DefaultToSpeaker;
-        }
-        if bluetooth {
-            options |= AVAudioSessionCategoryOptions::AllowBluetoothHFP;
-        }
-        // SAFETY: constants of AVFAudio, linked by the app.
-        let (Some(category), Some(mode)) =
-            (unsafe { AVAudioSessionCategoryPlayAndRecord }, unsafe {
-                AVAudioSessionModeVideoChat
-            })
-        else {
-            return Err("audio session: play-and-record or video chat is missing".into());
-        };
-        // SAFETY: a message to the shared session with arguments of the types it takes.
-        unsafe {
-            AVAudioSession::sharedInstance().setCategory_mode_options_error(category, mode, options)
-        }
-        .map_err(|error| {
-            format!(
-                "audio session: video chat refused: {} ({})",
-                error.localizedDescription(),
-                error.code()
-            )
-        })
-    }
-
     fn describe() -> Option<String> {
         // SAFETY: read-only messages to the shared session, which answers from any thread.
         unsafe {
