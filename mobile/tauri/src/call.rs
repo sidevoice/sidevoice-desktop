@@ -1687,6 +1687,7 @@ mod tests {
         let open = Audio {
             open: true,
             system: SystemAudio::None,
+            room: true,
         };
         assert_eq!(cue_refusal(true, &open), None);
         assert_eq!(
@@ -1696,6 +1697,7 @@ mod tests {
         let closed = Audio {
             open: false,
             system: SystemAudio::Pending,
+            room: false,
         };
         assert_eq!(
             cue_refusal(true, &closed).as_deref(),
