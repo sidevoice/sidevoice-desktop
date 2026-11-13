@@ -86,10 +86,12 @@
 		084491628E8D53FF0885F833 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		08702CFC095D2F17073267AA /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		0C54967DE38A99011EDDA22E /* AVFAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFAudio.framework; path = System/Library/Frameworks/AVFAudio.framework; sourceTree = SDKROOT; };
+		109890CBCB27601B28629110 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		117FBA52414C7BCA98E25C76 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "../../frameworks/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
 		180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		18601F15F6E9459C676D6904 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
+		1CAE0679DD2A16427423BD0E /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		20F786B267C7F9B83687598C /* CallActivity */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CallActivity; path = ../../apple/CallActivity; sourceTree = SOURCE_ROOT; };
 		216916D93E3C8D75635265CC /* downloads.rs */ = {isa = PBXFileReference; path = downloads.rs; sourceTree = "<group>"; };
 		26D96D0B9DBADA3317A773B9 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
@@ -130,6 +132,7 @@
 		8609C7142CEC5C4009BB8B54 /* surface.rs */ = {isa = PBXFileReference; path = surface.rs; sourceTree = "<group>"; };
 		86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		8807C52FB04E7019B2BC1690 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
+		97B4D4DE0196E1CBE4DFB1B2 /* audio_session.rs */ = {isa = PBXFileReference; path = audio_session.rs; sourceTree = "<group>"; };
 		9B99011EAA107BB9AD2AA47E /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		9F8D209D8F7F183F8C5BF60D /* private_dir.rs */ = {isa = PBXFileReference; path = private_dir.rs; sourceTree = "<group>"; };
 		A113CAD3D1FD380DEEE3CE26 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -345,6 +348,15 @@
 			path = ../../src;
 			sourceTree = "<group>";
 		};
+		8D8A14F665AF9BF5D8C8735B /* audio_session */ = {
+			isa = PBXGroup;
+			children = (
+				109890CBCB27601B28629110 /* android.rs */,
+				1CAE0679DD2A16427423BD0E /* ios.rs */,
+			);
+			path = audio_session;
+			sourceTree = "<group>";
+		};
 		988857BD3C85CA7F7B8A7871 /* Externals */ = {
 			isa = PBXGroup;
 			children = (
@@ -433,6 +445,7 @@
 				58C2E83A04B6987A0D4453C7 /* app_files.rs */,
 				283E9FABA170116B2849F571 /* audio_input.rs */,
 				B129F4CBB75A235241D6CB33 /* audio_route_picker.rs */,
+				97B4D4DE0196E1CBE4DFB1B2 /* audio_session.rs */,
 				5146689FF402E85DE500476B /* backup.rs */,
 				536BB1C7D959EB9FF56EB28A /* device_name.rs */,
 				5721EA507184E736863684BC /* entry.rs */,
@@ -445,6 +458,7 @@
 				A6C8CD431FED33808E2B7AC8 /* webview.rs */,
 				D13E1E110DD69DF3B162651A /* audio_input */,
 				BE400868CDB1D5FB596C1C8F /* audio_route_picker */,
+				8D8A14F665AF9BF5D8C8735B /* audio_session */,
 				7A9D2BCC197B63250747232C /* backup */,
 				615B3B6311CF4230A1CA8F47 /* device_name */,
 				C5DF4E9D279B95F0791F7AA3 /* interruption */,
