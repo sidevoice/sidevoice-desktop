@@ -26,7 +26,6 @@ use std::collections::BTreeSet;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::developer_options::{self, CallAudio};
 use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
 use crate::platform::interruption::{self, Interruption};
 use crate::platform::{audio_session, loudspeaker};
@@ -42,71 +41,44 @@ use sidevoice_shared_tauri::platform::media_controls::{self, CallState};
 use tauri::{AppHandle, Manager};
 
 /// How the call uses the audio session (iOS; D-AUDIO-SESSION, sidevoice-voice's `SessionConfig`): play-and-record, the
-/// voice-chat mode, the loudspeaker rather than the receiver when nothing else is plugged in, and a Bluetooth hands-free
-/// headset allowed. The mode is what makes iOS take the audio as a call: it prefers the Bluetooth hands-free route (HFP, a
-/// car's call) over A2DP "music". Activating it interrupts other apps' audio (no mix-with-others is declared). `Default`
-/// mode was the declaration when the car kept its music (desktop#465; not verified on a device). The voice's own echo
-/// cancellation is still the app's: this mode brings none to the audio unit the call opens.
-const CALL_AUDIO: SessionConfig = SessionConfig {
-    mode: SessionMode::VoiceChat,
-    speaker: true,
-    bluetooth: true,
-};
-
-/// What the audio session is declared as, by the developer option "Call audio mode (test)" ([`CallAudio`]): sidevoice-voice's
-/// declaration in one of its two modes, or video chat, which it has no mode for (`platform::audio_session`). Voice chat
-/// (`CALL_AUDIO`) unless the person chose another; every one plays and records, on the loudspeaker with Bluetooth allowed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Declaration {
-    Voice(SessionConfig),
-    VideoChat,
-}
-
-/// The declaration for `choice`, while the room holds a call (`in_call`) or not (the app's start, a try in Settings).
-fn declaration(choice: CallAudio, in_call: bool) -> Declaration {
-    let default = SessionConfig {
-        mode: SessionMode::Default,
-        ..CALL_AUDIO
-    };
-    match choice {
-        CallAudio::VoiceChat => Declaration::Voice(CALL_AUDIO),
-        CallAudio::VideoChat => Declaration::VideoChat,
-        CallAudio::Default => Declaration::Voice(default),
-        CallAudio::VoiceChatInCalls if in_call => Declaration::Voice(CALL_AUDIO),
-        CallAudio::VoiceChatInCalls => Declaration::Voice(default),
+/// loudspeaker rather than the receiver when nothing else is plugged in, a Bluetooth hands-free headset allowed, and a
+/// mode that follows the route ([`mode_for`]): `.default` while the call plays on the phone itself, `.voiceChat` while it
+/// plays on headphones, Bluetooth, a car or AirPlay. Activating it interrupts other apps' audio (no mix-with-others is
+/// declared). The voice's own echo cancellation is the app's: neither mode brings any to the audio unit the call opens.
+const fn call_audio(mode: SessionMode) -> SessionConfig {
+    SessionConfig {
+        mode,
+        speaker: true,
+        bluetooth: true,
     }
 }
 
-/// Declares the audio session for `choice`, the room holding a call (`in_call`) or not. Activates nothing.
-fn declare(choice: CallAudio, in_call: bool) -> Result<(), String> {
-    match declaration(choice, in_call) {
-        Declaration::Voice(config) => Session::configure(&config),
-        Declaration::VideoChat => {
-            audio_session::declare_video_chat(CALL_AUDIO.speaker, CALL_AUDIO.bluetooth)
-        }
+/// The session's mode for a route (operator decision, 2026-11-13, tested on a device): `.default` is loud on the phone's
+/// own receiver and loudspeaker (`.voiceChat` and `.videoChat` are quiet there), but with it the AirPods' press-to-mute
+/// gesture does not work, which it does in `.voiceChat`; so `.voiceChat` whenever the route is not the phone itself.
+/// `on_phone` is [`audio_session::on_phone`]: where it is unknown (no session, no output) the loud mode is kept.
+fn mode_for(on_phone: Option<bool>) -> SessionMode {
+    if on_phone == Some(false) {
+        SessionMode::VoiceChat
+    } else {
+        SessionMode::Default
     }
 }
 
-/// Logs the audio session as it is `when`, with the mode chosen and what was declared for it (iOS; target `audio`, public
-/// in the unified log: the system's names, levels and the route's port names, never a word of the call). Nothing where
-/// there is no session to describe.
-fn report(when: &str, choice: CallAudio, in_call: bool) {
+/// Logs the audio session as it is `when` (iOS; target `audio`, public in the unified log: the system's names, levels and
+/// the route's port names, never a word of the call). Nothing where there is no session to describe.
+fn report(when: &str) {
     if let Some(session) = audio_session::describe() {
-        log::info!(
-            target: "audio",
-            "audio {when}: chosen {} declared {:?} | {session}",
-            choice.name(),
-            declaration(choice, in_call)
-        );
+        log::info!(target: "audio", "audio {when}: {session}");
     }
 }
 
-/// Declares the call's use of the audio session, at the app's start (the developer option's mode, outside a call).
-/// Activates nothing.
-pub fn configure(app: &AppHandle) -> Result<(), String> {
-    let choice = developer_options::call_audio(app);
-    let declared = declare(choice, false);
-    report("at the app's start", choice, false);
+/// Declares the call's use of the audio session for the route as it is now, and answers the mode declared. Activates
+/// nothing.
+pub fn configure() -> Result<SessionMode, String> {
+    let mode = mode_for(audio_session::on_phone());
+    let declared = Session::configure(&call_audio(mode)).map(|()| mode);
+    report("declared");
     declared
 }
 
@@ -124,7 +96,7 @@ const QUIT_SERVICE_LIMIT: Duration = Duration::from_millis(1500);
 /// The phone's side of the host's voice calls: the audio session while any of them has audio open.
 #[derive(Default)]
 pub struct PhoneCall {
-    /// The app, whose developer option says how the session is declared (`None`: voice chat, in a test).
+    /// The app, whose press-to-mute observer is added again when the mode switches to voice chat (`None` in a test).
     app: Option<AppHandle>,
     /// Held across every activation and deactivation, so that the state and the session change together (an interruption's
     /// end cannot activate it again after the last call's audio has stopped).
@@ -135,12 +107,12 @@ pub struct PhoneCall {
 
 #[derive(Debug, Default)]
 struct Audio {
+    /// The mode the session was declared in last, once it has been (it follows the route: [`PhoneCall::follow_route`]).
+    declared: Option<SessionMode>,
     /// Whether a voice call has audio open: the session is active.
     open: bool,
     /// The system's call, where the system makes its audio ready ([`call_activates_audio`]).
     system: SystemAudio,
-    /// Whether the room holds a call: the developer option's "voice chat in calls only" declares voice chat only then.
-    room: bool,
 }
 
 /// The audio of the system's call, where the system makes it ready (CallKit activates the session; Telecom makes the call
@@ -238,61 +210,54 @@ impl PhoneCall {
         }
     }
 
-    /// How the session is declared now: the developer option's mode.
-    fn choice(&self) -> CallAudio {
-        self.app
-            .as_ref()
-            .map(developer_options::call_audio)
-            .unwrap_or_default()
-    }
-
-    /// The room holds a call (`held`) or no longer does: a mode that declares otherwise in the room's call is declared
-    /// again at once, and a voice call's audio open on the phone moved back to its loudspeaker (the new declaration is a
-    /// change of the route).
-    pub fn room_call(&self, held: bool) {
+    /// The media services reset took the session's declaration with them: declared again, for the route as it is.
+    fn redeclare(&self) -> Result<(), String> {
         let mut audio = self.audio.lock().unwrap();
-        if audio.room == held {
-            return;
-        }
-        audio.room = held;
-        let choice = self.choice();
-        if declaration(choice, held) != declaration(choice, !held) {
-            if let Err(error) = declare(choice, held) {
-                log::warn!(target: "audio", "audio: the session was not declared for the room's call: {error}");
-            }
-            if audio.open && audio.system == SystemAudio::None {
-                loudspeaker::take();
-            }
-        }
-        report(
-            if held {
-                "as the room's call starts"
-            } else {
-                "as the room's call ends"
-            },
-            choice,
-            held,
-        );
+        let mode = configure()?;
+        audio.declared = Some(mode);
+        Ok(())
     }
 
-    /// The person chose another call audio mode: declared now while no voice call's audio is open, else at the next one.
-    pub fn call_audio_chosen(&self) {
-        let audio = self.audio.lock().unwrap();
-        let choice = self.choice();
+    /// The route changed (`why`: the system's line, with its reason): while a voice call's audio is open, the session is
+    /// declared in the mode the new route wants ([`mode_for`]), live, with the call and the room untouched. The declaration
+    /// is itself a change of the route (reason `categoryChange`), which makes the voice open its streams again by itself
+    /// as the route is now, the audio only (sidevoice-voice's `recovery`: at most a brief glitch). A call that plays on the
+    /// receiver is moved to the loudspeaker again, as at its start, since the change of the route undid the override.
+    fn follow_route(&self, why: &str) {
+        let mut audio = self.audio.lock().unwrap();
         if audio.open {
-            log::info!(target: "audio", "audio: {} chosen, declared when the next voice call's audio opens", choice.name());
-            return;
+            self.settle_mode(&mut audio, why, true);
         }
-        if let Err(error) = declare(choice, audio.room) {
-            log::warn!(target: "audio", "audio: the session was not declared for {}: {error}", choice.name());
-        }
-        report("as the mode is chosen", choice, audio.room);
     }
 
-    /// The media services reset took the session's declaration with them: declared again as it was.
-    fn declare_again(&self) -> Result<(), String> {
-        let room = self.audio.lock().unwrap().room;
-        declare(self.choice(), room)
+    /// Declares the mode the route as it is wants, if it is not the one declared (`why`: the moment, for the log). A switch
+    /// is itself a change of the route, so a call that plays on the receiver is moved to the loudspeaker again (`speaker`:
+    /// not at the call's start, which does it itself afterwards), in CallKit's calls too, as at their start; and a switch to
+    /// `.voiceChat` adds the press-to-mute observer again, as each call does when its record session goes active.
+    fn settle_mode(&self, audio: &mut Audio, why: &str, speaker: bool) {
+        let wanted = mode_for(audio_session::on_phone());
+        let Some(now) = audio.declared else { return };
+        if now == wanted {
+            return;
+        }
+        match Session::configure(&call_audio(wanted)) {
+            Ok(()) => {
+                audio.declared = Some(wanted);
+                log::info!(target: "audio", "audio mode switched {now:?} -> {wanted:?} on {why}");
+                if speaker {
+                    loudspeaker::take();
+                }
+                if wanted == SessionMode::VoiceChat {
+                    if let Some(app) = &self.app {
+                        media_controls::reobserve_input_mute(app);
+                    }
+                }
+                report("after the mode switch");
+            }
+            Err(error) => {
+                log::warn!(target: "audio", "audio mode not switched {now:?} -> {wanted:?} on {why}: {error}");
+            }
+        }
     }
 
     /// Why a cue may not play now, the room holding a call or not (`held`): a voice call's audio must be open, and so the
@@ -345,11 +310,12 @@ impl CallActivity for PhoneCall {
     fn starting(&self) -> Result<(), String> {
         let mut audio = self.audio.lock().unwrap();
         // Declared again first, the same as at the app's start: whatever took the declaration away under an earlier call
-        // (a reset of the media services) does not keep this one from recording. The developer option's mode is read now,
-        // so a mode chosen since applies.
-        let choice = self.choice();
-        if let Err(error) = declare(choice, audio.room) {
-            log::warn!(target: "audio", "call: the audio session was not declared again: {error}");
+        // (a reset of the media services) does not keep this one from recording.
+        match configure() {
+            Ok(mode) => audio.declared = Some(mode),
+            Err(error) => {
+                log::warn!(target: "audio", "call: the audio session was not declared again: {error}");
+            }
         }
         let deadline = Instant::now() + SYSTEM_AUDIO_LIMIT;
         loop {
@@ -374,11 +340,14 @@ impl CallActivity for PhoneCall {
                 }
             }
         }
+        // The route may have moved as the session went active (a headset's hands-free appears at the activation): the mode
+        // of the route as it is, before any stream is open.
+        self.settle_mode(&mut audio, "the call's audio opening", false);
         // The session is active, the app's or the system's call's: a call on the phone itself plays on its loudspeaker, at its
         // full level, before any of the voice's streams opens (the move is a change of the route, which reopens them).
         loudspeaker::take();
         audio.open = true;
-        report("as a voice call's audio opens", choice, audio.room);
+        report("as a voice call's audio opens");
         Ok(())
     }
 
@@ -393,11 +362,7 @@ impl CallActivity for PhoneCall {
         if let Err(error) = Session::deactivate() {
             log::warn!("call: the audio session was not given back: {error}");
         }
-        report(
-            "as the last voice call's audio stops",
-            self.choice(),
-            audio.room,
-        );
+        report("as the last voice call's audio stops");
     }
 }
 
@@ -405,13 +370,29 @@ impl CallActivity for PhoneCall {
 /// gives `phone` the session back first so that the call's audio can go on (D-AUDIO-FOCUS). Android needs none of this
 /// (the call's service reports its audio focus: [`on_service_event`]).
 pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
-    // What the system says of the session, with the session as it is then, into the public `audio` log: no lock is taken,
-    // since the system may post while the session is being declared.
-    let heard_app = app.clone();
+    // What the system says of the session, with the session as it is then, into the public `audio` log. The block runs on
+    // the thread that posts, which may be one that is declaring the session: it takes no lock, only logs and hands the
+    // route changes over to a thread that follows the route ([`PhoneCall::follow_route`]), so that the mode is declared
+    // after the system is done posting. Our own declarations post `categoryChange` too: following them is idempotent, and a headset's hands-free that appears under one is a real move of the route.
+    let (routes, route_changes) = mpsc::channel::<String>();
+    let follower = phone.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name("audio-route".into())
+        .spawn(move || {
+            while let Ok(why) = route_changes.recv() {
+                follower.follow_route(&why);
+            }
+        })
+    {
+        log::warn!(target: "audio", "audio: the route is not followed: {error}");
+    }
+    let routes = Mutex::new(routes);
     if let Err(error) = audio_session::observe(Arc::new(move |event| {
         if let Some(session) = audio_session::describe() {
-            let choice = developer_options::call_audio(&heard_app);
-            log::info!(target: "audio", "audio {event}: chosen {} | {session}", choice.name());
+            log::info!(target: "audio", "audio {event}: {session}");
+        }
+        if event.starts_with("route change") {
+            let _ = routes.lock().unwrap().send(event);
         }
     })) {
         log::warn!(target: "audio", "audio: the session is not observed: {error}");
@@ -429,7 +410,7 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
             // call, until the app starts again. It is declared again, and activated again if the app holds it; the voice
             // reopens its streams itself. Nothing of the call pauses or resumes.
             Interruption::Reset => {
-                match phone.declare_again() {
+                match phone.redeclare() {
                     Ok(()) => log::info!("audio session: declared again after the reset"),
                     Err(error) => log::error!("audio session: not declared again: {error}"),
                 }
@@ -816,7 +797,6 @@ impl Room {
                     }
                 }
             }
-            self.phone.room_call(self.holding.is_some());
         } else {
             self.holding = None;
             self.system = false;
@@ -826,7 +806,6 @@ impl Room {
             self.since = None;
             self.shown = None;
             self.phone.system_call(false);
-            self.phone.room_call(false);
             if let Err(error) = stop_call_service(&self.app) {
                 log::warn!("call: the call's service did not stop: {error}");
             }
@@ -1687,7 +1666,7 @@ mod tests {
         let open = Audio {
             open: true,
             system: SystemAudio::None,
-            room: true,
+            ..Audio::default()
         };
         assert_eq!(cue_refusal(true, &open), None);
         assert_eq!(
@@ -1697,7 +1676,7 @@ mod tests {
         let closed = Audio {
             open: false,
             system: SystemAudio::Pending,
-            room: false,
+            ..Audio::default()
         };
         assert_eq!(
             cue_refusal(true, &closed).as_deref(),
@@ -1710,31 +1689,6 @@ mod tests {
     }
 
     #[test]
-    fn voice_chat_unless_another_mode_is_chosen_and_in_calls_only_while_the_room_holds_one() {
-        let default = Declaration::Voice(SessionConfig {
-            mode: SessionMode::Default,
-            speaker: true,
-            bluetooth: true,
-        });
-        for in_call in [false, true] {
-            assert_eq!(
-                declaration(CallAudio::default(), in_call),
-                Declaration::Voice(CALL_AUDIO)
-            );
-            assert_eq!(
-                declaration(CallAudio::VideoChat, in_call),
-                Declaration::VideoChat
-            );
-            assert_eq!(declaration(CallAudio::Default, in_call), default);
-        }
-        assert_eq!(declaration(CallAudio::VoiceChatInCalls, false), default);
-        assert_eq!(
-            declaration(CallAudio::VoiceChatInCalls, true),
-            Declaration::Voice(CALL_AUDIO)
-        );
-    }
-
-    #[test]
     fn without_a_system_s_call_the_app_activates_the_session_itself() {
         assert_eq!(SystemAudio::None.gate(false), Gate::Activate);
         // A report for a call that is not the system's any more changes nothing.
@@ -1743,14 +1697,14 @@ mod tests {
     }
 
     #[test]
-    fn an_app_owned_call_activates_voice_chat_and_a_system_owned_one_waits() {
+    fn an_app_owned_call_activates_the_default_mode_and_a_system_owned_one_waits() {
         // What the room tells the phone at a call's start is `system_call(call_activates_audio(kind))`: the app's own call
-        // is no system's call, so the app activates the session (voice chat, `CALL_AUDIO`); CallKit's is activated by the
+        // is no system's call, so the app activates the session (`call_audio`); CallKit's is activated by the
         // system, and the app waits for it.
         assert!(!call_activates_audio(false));
         let own = SystemAudio::None.call(call_activates_audio(false));
         assert_eq!(own.gate(false), Gate::Activate);
-        assert_eq!(CALL_AUDIO.mode, SessionMode::VoiceChat);
+        assert_eq!(mode_for(None), SessionMode::Default);
         assert_eq!(SystemAudio::None.call(true).gate(false), Gate::Wait);
         // A stale system's call (it ended, or the system refused it and it went on as the app's own) never keeps the app
         // from activating its session.
@@ -1813,14 +1767,35 @@ mod tests {
     }
 
     #[test]
-    fn the_session_is_play_and_record_in_voice_chat_on_the_loudspeaker_with_bluetooth() {
+    fn the_session_is_play_and_record_on_the_loudspeaker_with_bluetooth_in_either_mode() {
+        for mode in [SessionMode::Default, SessionMode::VoiceChat] {
+            assert_eq!(
+                call_audio(mode),
+                SessionConfig {
+                    mode,
+                    speaker: true,
+                    bluetooth: true
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn the_phone_itself_plays_in_the_default_mode_and_any_other_route_in_voice_chat() {
+        assert_eq!(mode_for(Some(true)), SessionMode::Default);
+        assert_eq!(mode_for(Some(false)), SessionMode::VoiceChat);
+        // No session or no output to read: the loud mode, as a call on the phone's own speaker.
+        assert_eq!(mode_for(None), SessionMode::Default);
+    }
+
+    #[test]
+    fn a_route_change_leaves_the_mode_alone_while_no_voice_call_s_audio_is_open() {
+        let phone = PhoneCall::default();
+        phone.audio.lock().unwrap().declared = Some(SessionMode::Default);
+        phone.follow_route("route change: reason newDeviceAvailable");
         assert_eq!(
-            CALL_AUDIO,
-            SessionConfig {
-                mode: SessionMode::VoiceChat,
-                speaker: true,
-                bluetooth: true
-            }
+            phone.audio.lock().unwrap().declared,
+            Some(SessionMode::Default)
         );
     }
 

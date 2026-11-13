@@ -1,5 +1,5 @@
 //! The phone's own loudspeaker for the call's audio. The call declares play-and-record with "the loudspeaker rather than
-//! the receiver" (`call::CALL_AUDIO`), yet iOS can still play an active play-and-record session on the receiver (CallKit's
+//! the receiver" (`call::call_audio`), yet iOS can still play an active play-and-record session on the receiver (CallKit's
 //! audio call) or on the loudspeaker at a far lower level than the media volume (the same session, the same declaration:
 //! reported to Apple since iOS 13, developer forums thread 721535), with the volume keys moving it only a little. Only
 //! `overrideOutputAudioPort(.speaker)` on the active session gives the loudspeaker its full level, and it lasts until the
@@ -11,11 +11,10 @@
 mod imp;
 use imp::Native;
 
+use crate::platform::audio_session;
+
 /// What differs per OS.
 trait Os {
-    /// Whether the active session plays on the phone itself now (its receiver or its loudspeaker), rather than on
-    /// headphones, Bluetooth, a car or AirPlay. False where the OS routes the call itself.
-    fn on_the_phone() -> bool;
     /// Has the system play the active session on the loudspeaker until the route changes.
     fn force() -> Result<(), String>;
 }
@@ -23,7 +22,7 @@ trait Os {
 /// Once the call's session is active: a call that plays on the phone itself plays on its loudspeaker, at its full level.
 /// A refusal is logged; the call goes on where the system put it.
 pub fn take() {
-    if !Native::on_the_phone() {
+    if audio_session::on_phone() != Some(true) {
         return;
     }
     match Native::force() {

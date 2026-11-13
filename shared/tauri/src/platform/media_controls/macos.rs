@@ -22,6 +22,10 @@ impl Os for Native {
     fn update(app: &AppHandle, call: &CallState) {
         apple::update::<Native>(app, call)
     }
+
+    fn reobserve_input_mute(app: &AppHandle) {
+        apple::reobserve_now(app)
+    }
 }
 
 impl apple::Os for Native {

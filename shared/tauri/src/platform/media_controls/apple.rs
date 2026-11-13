@@ -382,6 +382,20 @@ fn reobserve_input_mute(record_active: bool) {
     sidevoice_shared::debug::debug("headset: press to mute observed again, the call's audio active");
 }
 
+/// Adds the observer again now, on the main thread, removed first so that each gesture is still heard once: the call's
+/// audio session changed its mode under the call. Nothing when no observer was added at launch.
+pub fn reobserve_now(app: &AppHandle) {
+    let _ = app.run_on_main_thread(|| {
+        let mut observer = OBSERVER.lock().unwrap();
+        let Some(observer) = observer.as_mut() else { return };
+        let token: &AnyObject = AsRef::<AnyObject>::as_ref(&*observer.token);
+        // SAFETY: main thread; the token is the one the center returned.
+        unsafe { NSNotificationCenter::defaultCenter().removeObserver(token) };
+        observer.token = add_observer(observer.name, &observer.block);
+        sidevoice_shared::debug::debug("headset: press to mute observed again, the session's mode changed");
+    });
+}
+
 /// Every command of the shared command center, by name ([`ALL_COMMANDS`]): the app registers only [`commands`], but any of
 /// them with a target, or enabled, keeps the app the Now Playing app as much (HANDOVER-live-activity R2-6), so all of them
 /// are let go.

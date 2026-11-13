@@ -1,5 +1,5 @@
 //! iOS: an `AVAudioPlayer` on the cue's WAV, looping, in the audio session the native call has made active (the app's
-//! play-and-record voice-chat session, `call::CALL_AUDIO`): it joins that session and changes nothing of it. The player
+//! play-and-record session, `call::call_audio`): it joins that session and changes nothing of it. The player
 //! lives on the main thread, where the commands run it (`lib.rs` `cue`). A sound's file is decoded by `AVAudioFile`, which
 //! reads a file, not bytes: it is written to the app's temporary folder for that, and removed.
 use std::cell::RefCell;

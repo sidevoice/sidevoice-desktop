@@ -148,8 +148,8 @@ impl CallReport {
 #[derive(Default)]
 struct LastReport(std::sync::Mutex<CallReport>);
 
-/// `host.debug`'s one command (docs/BRIDGE.md → "The developer options"): `action` `get`, `set` with a switch's `name` and `enabled`,
-/// or `choose` with a choice's `name` and `value`, answering the options' state. Refused (`bad_request`) in a release, for a switch the phone lacks or another action.
+/// `host.debug`'s one command (docs/BRIDGE.md → "The developer options"): `action` `get`, or `set` with a switch's `name` and `enabled`,
+/// answering the switches' state. Refused (`bad_request`) in a release, for a switch the phone lacks or another action.
 #[tauri::command]
 fn developer_options(
     app: AppHandle,
@@ -158,24 +158,16 @@ fn developer_options(
     action: String,
     name: Option<String>,
     enabled: Option<bool>,
-    value: Option<String>,
 ) -> Result<serde_json::Value, serde_json::Value> {
     let refusal = |why: String| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(refusal)?;
-    match (action.as_str(), name, enabled, value) {
-        ("get", None, None, None) => options
+    match (action.as_str(), name, enabled) {
+        ("get", None, None) => options
             .state()
             .ok_or_else(|| refusal("The developer options are not in this build.".into())),
-        ("set", Some(name), Some(on), None) => options.set(&name, on).map_err(refusal),
-        ("choose", Some(name), None, Some(value)) => {
-            let state = options.choose(&name, &value).map_err(refusal)?;
-            if let Some(phone) = app.try_state::<Arc<call::PhoneCall>>() {
-                phone.call_audio_chosen();
-            }
-            Ok(state)
-        }
+        ("set", Some(name), Some(on)) => options.set(&name, on).map_err(refusal),
         _ => Err(refusal(
-            "developer_options takes get, set with a name and enabled, or choose with a name and value".into(),
+            "developer_options takes get, or set with a name and enabled".into(),
         )),
     }
 }
@@ -588,19 +580,16 @@ fn run_app() {
             if let Err(error) = sidevoice_mobile_plugin::clear_stills(&handle) {
                 log::warn!(target: "stills", "call_still: the earlier stills were not removed: {error}");
             }
-            // The developer options (nightly and dev builds): read before the first call, whose kind they decide, and before the
-            // audio session is declared, whose mode one of them chooses (iOS).
+            // Declared now, activated only while a call's audio is open (`call::PhoneCall`).
+            if let Err(error) = call::configure() {
+                log::error!("audio session: {error}");
+            }
+            let phone = Arc::new(call::PhoneCall::new(handle.clone()));
+            // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
             app.manage(developer_options::DeveloperOptions::of_app(
                 &handle,
                 env!("SIDEVOICE_BUILD_CHANNEL"),
             )?);
-            // Declared now, activated only while a call's audio is open (`call::PhoneCall`).
-            if let Err(error) = call::configure(&handle) {
-                log::error!("audio session: {error}");
-            }
-            let phone = Arc::new(call::PhoneCall::new(handle.clone()));
-            // The developer option that chooses the session's mode declares it again as it is chosen.
-            app.manage(phone.clone());
             app.manage(headset::HeadsetSettings::of_app(&handle)?);
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
             // The application host: the voice call and the engine. A phone never resets its data under the call, so

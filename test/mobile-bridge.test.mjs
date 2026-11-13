@@ -483,22 +483,6 @@ test("host.debug is the phone's one developer switch, only where the app offers 
   assert.equal(JSON.stringify(invoked.filter(([command, args]) => command === "developer_options" && args.action === "set")), JSON.stringify([["developer_options", { action: "set", name: "systemCall", enabled: true }]]));
 });
 
-test("host.debug's call audio mode is the app's choice, read and chosen through the app, only where it offers it", async () => {
-  const phone = install("tauri://localhost", undefined, true, null, null, null, undefined, { available: ["systemCall"], systemCall: false });
-  assert.equal(phone.api.host.debug.callAudio, undefined, "a phone without the choice has none");
-  await assert.rejects(phone.api.host.debug.choose("callAudio", "default"), { key: "bad_request" });
-  const { api, invoked } = install("tauri://localhost", undefined, true, null, null, null, undefined, { available: ["systemCall", "callAudio"], systemCall: false, callAudio: "voiceChat" });
-  const debug = api.host.debug;
-  assert.deepEqual([...debug.available], ["systemCall", "callAudio"]);
-  assert.equal(debug.callAudio, "voiceChat");
-  await assert.rejects(debug.choose("systemCall", "on"), { key: "bad_request" });
-  await assert.rejects(debug.set("callAudio", true), { key: "bad_request" }, "a choice is not a switch");
-  await assert.rejects(debug.choose("callAudio", 3), { key: "bad_request" });
-  assert.equal(invoked.some(([command, args]) => command === "developer_options" && args.action !== "get"), false);
-  await debug.choose("callAudio", "videoChat");
-  assert.equal(JSON.stringify(invoked.filter(([command, args]) => command === "developer_options" && args.action === "choose")), JSON.stringify([["developer_options", { action: "choose", name: "callAudio", value: "videoChat" }]]));
-});
-
 test("host.debug after a reload reads the app's live state, not the snapshot the script was built with", async () => {
   // The script's text is fixed at the app's start (systemCall off); the person turned it on since, and reloads the page.
   live.debug = { available: ["systemCall"], systemCall: true };

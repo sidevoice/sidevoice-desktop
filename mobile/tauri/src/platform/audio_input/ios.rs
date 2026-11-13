@@ -1,6 +1,6 @@
 //! iOS: `AVAudioSession.availableInputs` and `setPreferredInput`. The ports' ids are the system's own (`UID`), their names
 //! the system's (`portName`: "iPhone Microphone", the car's, the AirPods'). The session's category, mode and options are
-//! the call's (`call::CALL_AUDIO`); nothing here touches them. The session answers from any thread.
+//! the call's (`call::call_audio`); nothing here touches them. The session answers from any thread.
 use objc2_avf_audio::AVAudioSession;
 use sidevoice_shared::app::SystemInputs;
 use sidevoice_shared::sidevoice_voice::AudioDevice;

@@ -6,7 +6,7 @@
 //! AirPods"), which this app does once, at launch, for the process's life (`apple::observe_input_mute`, as macOS does). iOS then
 //! mutes the app's input itself, plays its tone and posts the notification, which brings the call in step; the app's own mute
 //! goes the other way through `setInputMuted`. It is posted only while a record session is active (the call's
-//! play-and-record, voice chat: `mobile/tauri` `call.rs`).
+//! play-and-record, in the mode that follows the route: `mobile/tauri` `call.rs`).
 //!
 //! The app runs on iOS 15 and 16 too, where `AVAudioApplication` and its notification do not exist: the class is looked
 //! up at run time (`apple.rs` asks before anything here runs), and so are the notification's name and its key (`apple.rs`).
@@ -33,6 +33,10 @@ impl Os for Native {
 
     fn update(app: &AppHandle, call: &CallState) {
         apple::update::<Native>(app, call)
+    }
+
+    fn reobserve_input_mute(app: &AppHandle) {
+        apple::reobserve_now(app)
     }
 }
 
