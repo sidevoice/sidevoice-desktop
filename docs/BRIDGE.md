@@ -353,7 +353,7 @@ interface AudioRoute {
 ## The cues
 
 `host.cue` is the app's own player for a sound the page decides on, offered where a webview's Web Audio is not sure to come
-out: the mobile app on iOS, whose native call holds the audio session (play-and-record, voice chat; `CALL_AUDIO` in
+out: the mobile app on iOS, whose native call holds the audio session (play-and-record, in the mode that follows the route; `call_audio` in
 `mobile/tauri/src/call.rs`). The page decides when (the thinking sound: in a call, while the agent works, as Settings →
 Call says: never, only with the screen off, always) and which sound and how loud; the app only plays. `sidevoice-web#439`.
 

@@ -96,6 +96,8 @@ const QUIT_SERVICE_LIMIT: Duration = Duration::from_millis(1500);
 /// The phone's side of the host's voice calls: the audio session while any of them has audio open.
 #[derive(Default)]
 pub struct PhoneCall {
+    /// The app, whose press-to-mute observer is added again when the mode switches to voice chat (`None` in a test).
+    app: Option<AppHandle>,
     /// Held across every activation and deactivation, so that the state and the session change together (an interruption's
     /// end cannot activate it again after the last call's audio has stopped).
     audio: Mutex<Audio>,
@@ -200,6 +202,14 @@ fn cue_refusal(held: bool, audio: &Audio) -> Option<String> {
 const ACTIVATE_FAILED: &str = "audio-session-activate-failed";
 
 impl PhoneCall {
+    /// The phone's side of `app`'s voice calls.
+    pub fn new(app: AppHandle) -> PhoneCall {
+        PhoneCall {
+            app: Some(app),
+            ..PhoneCall::default()
+        }
+    }
+
     /// The media services reset took the session's declaration with them: declared again, for the route as it is.
     fn redeclare(&self) -> Result<(), String> {
         let mut audio = self.audio.lock().unwrap();
@@ -215,9 +225,16 @@ impl PhoneCall {
     /// receiver is moved to the loudspeaker again, as at its start, since the change of the route undid the override.
     fn follow_route(&self, why: &str) {
         let mut audio = self.audio.lock().unwrap();
-        if !audio.open {
-            return;
+        if audio.open {
+            self.settle_mode(&mut audio, why, true);
         }
+    }
+
+    /// Declares the mode the route as it is wants, if it is not the one declared (`why`: the moment, for the log). A switch
+    /// is itself a change of the route, so a call that plays on the receiver is moved to the loudspeaker again (`speaker`:
+    /// not at the call's start, which does it itself afterwards), in CallKit's calls too, as at their start; and a switch to
+    /// `.voiceChat` adds the press-to-mute observer again, as each call does when its record session goes active.
+    fn settle_mode(&self, audio: &mut Audio, why: &str, speaker: bool) {
         let wanted = mode_for(audio_session::on_phone());
         let Some(now) = audio.declared else { return };
         if now == wanted {
@@ -227,8 +244,13 @@ impl PhoneCall {
             Ok(()) => {
                 audio.declared = Some(wanted);
                 log::info!(target: "audio", "audio mode switched {now:?} -> {wanted:?} on {why}");
-                if audio.system == SystemAudio::None {
+                if speaker {
                     loudspeaker::take();
+                }
+                if wanted == SessionMode::VoiceChat {
+                    if let Some(app) = &self.app {
+                        media_controls::reobserve_input_mute(app);
+                    }
                 }
                 report("after the mode switch");
             }
@@ -318,6 +340,9 @@ impl CallActivity for PhoneCall {
                 }
             }
         }
+        // The route may have moved as the session went active (a headset's hands-free appears at the activation): the mode
+        // of the route as it is, before any stream is open.
+        self.settle_mode(&mut audio, "the call's audio opening", false);
         // The session is active, the app's or the system's call's: a call on the phone itself plays on its loudspeaker, at its
         // full level, before any of the voice's streams opens (the move is a change of the route, which reopens them).
         loudspeaker::take();
@@ -348,7 +373,7 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
     // What the system says of the session, with the session as it is then, into the public `audio` log. The block runs on
     // the thread that posts, which may be one that is declaring the session: it takes no lock, only logs and hands the
     // route changes over to a thread that follows the route ([`PhoneCall::follow_route`]), so that the mode is declared
-    // after the system is done posting. Our own declarations post `categoryChange` and say nothing new.
+    // after the system is done posting. Our own declarations post `categoryChange` too: following them is idempotent, and a headset's hands-free that appears under one is a real move of the route.
     let (routes, route_changes) = mpsc::channel::<String>();
     let follower = phone.clone();
     if let Err(error) = std::thread::Builder::new()
@@ -366,7 +391,7 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
         if let Some(session) = audio_session::describe() {
             log::info!(target: "audio", "audio {event}: {session}");
         }
-        if event.starts_with("route change") && !event.contains(": reason categoryChange") {
+        if event.starts_with("route change") {
             let _ = routes.lock().unwrap().send(event);
         }
     })) {

@@ -4,10 +4,6 @@ use super::Os;
 pub struct Native;
 
 impl Os for Native {
-    fn on_the_phone() -> bool {
-        false
-    }
-
     fn force() -> Result<(), String> {
         Ok(())
     }

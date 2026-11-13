@@ -64,6 +64,9 @@ trait Os {
 
     /// Follow call and microphone state. Unavailable hosts leave the page in control.
     fn update(_app: &AppHandle, _call: &CallState) {}
+
+    /// Adds the input-mute observer again, now (the session's mode changed under a call). Unavailable hosts do nothing.
+    fn reobserve_input_mute(_app: &AppHandle) {}
 }
 
 /// Whether the app owns the system's media controls here. Where it does not, the page keeps its Media Session handlers
@@ -81,6 +84,13 @@ pub fn presses() -> HeadsetCapabilities {
 /// Installs process-lifetime callbacks once at startup. Unavailable hosts install nothing.
 pub fn attach(app: &AppHandle, sink: CommandSink) {
     Native::attach(app, sink)
+}
+
+/// The call's audio session changed its mode while the call runs (iOS: `.default` to `.voiceChat` when the route became a
+/// headset): the input-mute observer is added again, as it is once per call when the record session goes active, since the
+/// system may read it only as the session was then (docs/MOBILE.md → "The audio session"). Nothing where there is none.
+pub fn reobserve_input_mute(app: &AppHandle) {
+    Native::reobserve_input_mute(app)
 }
 
 /// Follows call and microphone state, including navigation and hang-up resets.

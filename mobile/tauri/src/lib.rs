@@ -584,7 +584,7 @@ fn run_app() {
             if let Err(error) = call::configure() {
                 log::error!("audio session: {error}");
             }
-            let phone = Arc::new(call::PhoneCall::default());
+            let phone = Arc::new(call::PhoneCall::new(handle.clone()));
             // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
             app.manage(developer_options::DeveloperOptions::of_app(
                 &handle,
