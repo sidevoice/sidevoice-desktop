@@ -66,11 +66,11 @@ final class StackRingTests: XCTestCase {
                     guard layers[below].alpha(x, y) >= 250, over.allSatisfy({ $0.alpha(x, y) <= 5 }) else { continue }
                     let distance = Self.distance(x, y, to: outline, within: ring + 3)
                     let drawn = stack.rgba(x, y)
-                    if distance <= ring - 2 {
+                    if distance <= Double(ring - 2) {
                         // Within the ring: the background, not black, not the face beneath.
                         gap += 1
                         if !Self.close(drawn, background) { gapWrong += 1 }
-                    } else if distance > ring + 2 {
+                    } else if distance > Double(ring + 2) {
                         // Beyond it: the face beneath, untouched.
                         kept += 1
                         if !Self.close(drawn, layers[below].rgba(x, y)) { keptWrong += 1 }
