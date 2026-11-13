@@ -528,10 +528,11 @@ extension CallStills {
     /// grown by `grow` points of the slot on every side, in black: what a face cuts out of the face beneath it (`OthersStack`).
     /// `size` is the outline's size in the slot's points, centred where the fitted still is, and `anchor` the point of it that
     /// `Still` enlarges the still from (0.5, 0.96 of the fitted still); nil when the still is not there.
-    /// Drawn here, in CoreGraphics, rather than by a blur or a filter the system might draw otherwise: the still stamped
-    /// around circles of up to `grow`, then filled black where anything was stamped.
+    /// Drawn here, in CoreGraphics, rather than by a blur or a filter the system might draw otherwise: the creature's solid
+    /// part (`solid`) stamped around circles of up to `grow`. A faint shadow under a creature is not part of it, so it
+    /// cuts nothing.
     static func outline(_ file: String, slot: CGFloat, k: CGFloat, grow: CGFloat) -> (image: UIImage, size: CGSize, anchor: UnitPoint)? {
-        guard let still = image(file, side: slot * k) else { return nil }
+        guard let still = image(file, side: slot * k), let solid = solid(still) else { return nil }
         let width = still.size.width * still.scale, height = still.size.height * still.scale
         // The slot's points per pixel of the still, as `scaledToFit` lays it out.
         let point = slot / max(width, height, 1)
@@ -544,23 +545,45 @@ extension CallStills {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = false
-        let drawn = UIGraphicsImageRenderer(size: pixels, format: format).image { context in
+        let drawn = UIGraphicsImageRenderer(size: pixels, format: format).image { _ in
             let box = CGRect(x: pad, y: pad, width: width, height: height)
-            still.draw(in: box)
+            solid.draw(in: box)
             // Rings at a third, two thirds and the whole of the pad, 32 stamps each: every point within `pad` of the
             // creature is covered, the edge within a fraction of a pixel of round.
             for step in 1...3 where pad > 0 {
                 let radius = pad * CGFloat(step) / 3
                 for index in 0..<32 {
                     let angle = CGFloat(index) / 32 * 2 * .pi
-                    still.draw(in: box.offsetBy(dx: radius * cos(angle), dy: radius * sin(angle)))
+                    solid.draw(in: box.offsetBy(dx: radius * cos(angle), dy: radius * sin(angle)))
                 }
             }
-            UIColor.black.setFill()
-            context.fill(CGRect(origin: .zero, size: pixels), blendMode: .sourceIn)
         }
         outlines.setObject(drawn, forKey: key)
         return (drawn, size, anchor)
+    }
+
+    /// `image`'s pixels at least half opaque, in opaque black, the rest transparent: the creature without its soft shadow and
+    /// edges, at the still's own pixels.
+    static func solid(_ image: UIImage) -> UIImage? {
+        guard let cg = image.cgImage else { return nil }
+        let width = cg.width, height = cg.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let made: CGImage? = bytes.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return nil }
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+            for index in stride(from: 0, to: buffer.count, by: 4) {
+                let solid: UInt8 = buffer[index + 3] >= 128 ? 255 : 0
+                buffer[index] = 0
+                buffer[index + 1] = 0
+                buffer[index + 2] = 0
+                buffer[index + 3] = solid
+            }
+            return context.makeImage()
+        }
+        return made.map { UIImage(cgImage: $0, scale: 1, orientation: .up) }
     }
 
     /// The still `file` as an image, scaled down to `side` points at the screen's 3×; nil draws the placeholder. The
