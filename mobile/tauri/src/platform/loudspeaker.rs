@@ -11,60 +11,23 @@
 mod imp;
 use imp::Native;
 
-/// Where the active session plays now, as far as the choice needs it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Output {
-    /// The speaker held to the ear.
-    Receiver,
-    /// The phone's loudspeaker.
-    Loudspeaker,
-    /// Anything else (headphones, Bluetooth, a car, AirPlay), or a route the system does not say.
-    Other,
-}
-
 /// What differs per OS.
 trait Os {
-    /// Where the audio plays now.
-    fn output() -> Output;
+    /// Whether the active session plays on the phone itself now (its receiver or its loudspeaker), rather than on
+    /// headphones, Bluetooth, a car or AirPlay. False where the OS routes the call itself.
+    fn on_the_phone() -> bool;
     /// Has the system play the active session on the loudspeaker until the route changes.
     fn force() -> Result<(), String>;
-}
-
-/// Whether a session playing on `output` is moved to the loudspeaker: only what plays on the phone itself.
-fn moves(output: Output) -> bool {
-    matches!(output, Output::Receiver | Output::Loudspeaker)
 }
 
 /// Once the call's session is active: a call that plays on the phone itself plays on its loudspeaker, at its full level.
 /// A refusal is logged; the call goes on where the system put it.
 pub fn take() {
-    let output = Native::output();
-    if !moves(output) {
+    if !Native::on_the_phone() {
         return;
     }
     match Native::force() {
-        Ok(()) => log::info!("call: the audio plays on the loudspeaker (it was on {output:?})"),
-        Err(error) => log::warn!("call: the audio stays on {output:?}: {error}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{moves, Output};
-
-    #[test]
-    fn only_audio_on_the_phone_itself_moves_to_the_loudspeaker() {
-        assert!(
-            moves(Output::Receiver),
-            "the receiver is what makes the call sound so low"
-        );
-        assert!(
-            moves(Output::Loudspeaker),
-            "the loudspeaker, again, for its full level"
-        );
-        assert!(
-            !moves(Output::Other),
-            "headphones, a car or AirPlay stay as the system chose"
-        );
+        Ok(()) => log::info!("call: the audio plays on the phone's loudspeaker"),
+        Err(error) => log::warn!("call: the audio stays where the system put it: {error}"),
     }
 }

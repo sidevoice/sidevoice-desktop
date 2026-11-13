@@ -5,31 +5,27 @@ use objc2_avf_audio::{
     AVAudioSessionPortOverride,
 };
 
-use super::{Os, Output};
+use super::Os;
 
 pub struct Native;
 
 impl Os for Native {
-    fn output() -> Output {
+    fn on_the_phone() -> bool {
         // SAFETY: read-only messages to the shared session, reads of a live port description, and constants of AVFAudio,
         // linked by the app.
         unsafe {
             let outputs = AVAudioSession::sharedInstance().currentRoute().outputs();
             let Some(port) = outputs.iter().next() else {
-                return Output::Other;
+                return false;
             };
             let kind = port.portType();
-            if AVAudioSessionPortBuiltInReceiver
-                .is_some_and(|receiver| kind.isEqualToString(receiver))
-            {
-                Output::Receiver
-            } else if AVAudioSessionPortBuiltInSpeaker
-                .is_some_and(|speaker| kind.isEqualToString(speaker))
-            {
-                Output::Loudspeaker
-            } else {
-                Output::Other
-            }
+            [
+                AVAudioSessionPortBuiltInReceiver,
+                AVAudioSessionPortBuiltInSpeaker,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|own| kind.isEqualToString(own))
         }
     }
 
