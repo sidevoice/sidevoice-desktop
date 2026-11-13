@@ -148,8 +148,8 @@ impl CallReport {
 #[derive(Default)]
 struct LastReport(std::sync::Mutex<CallReport>);
 
-/// `host.debug`'s one command (docs/BRIDGE.md → "The developer options"): `action` `get`, or `set` with a switch's `name` and `enabled`,
-/// answering the switches' state. Refused (`bad_request`) in a release, for a switch the phone lacks or another action.
+/// `host.debug`'s one command (docs/BRIDGE.md → "The developer options"): `action` `get`, `set` with a switch's `name` and `enabled`,
+/// or `choose` with a choice's `name` and `value`, answering the options' state. Refused (`bad_request`) in a release, for a switch the phone lacks or another action.
 #[tauri::command]
 fn developer_options(
     app: AppHandle,
@@ -158,16 +158,24 @@ fn developer_options(
     action: String,
     name: Option<String>,
     enabled: Option<bool>,
+    value: Option<String>,
 ) -> Result<serde_json::Value, serde_json::Value> {
     let refusal = |why: String| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(refusal)?;
-    match (action.as_str(), name, enabled) {
-        ("get", None, None) => options
+    match (action.as_str(), name, enabled, value) {
+        ("get", None, None, None) => options
             .state()
             .ok_or_else(|| refusal("The developer options are not in this build.".into())),
-        ("set", Some(name), Some(on)) => options.set(&name, on).map_err(refusal),
+        ("set", Some(name), Some(on), None) => options.set(&name, on).map_err(refusal),
+        ("choose", Some(name), None, Some(value)) => {
+            let state = options.choose(&name, &value).map_err(refusal)?;
+            if let Some(phone) = app.try_state::<Arc<call::PhoneCall>>() {
+                phone.call_audio_chosen();
+            }
+            Ok(state)
+        }
         _ => Err(refusal(
-            "developer_options takes get, or set with a name and enabled".into(),
+            "developer_options takes get, set with a name and enabled, or choose with a name and value".into(),
         )),
     }
 }
@@ -576,20 +584,23 @@ fn run_app() {
             if let Err(error) = platform::tls::init() {
                 log::error!("tls: {error}");
             }
-            // Declared now, activated only while a call's audio is open (`call::PhoneCall`).
-            if let Err(error) = call::configure() {
-                log::error!("audio session: {error}");
-            }
             // The creatures' stills an earlier run kept for the call's surfaces: the page sends the ones it shows again.
             if let Err(error) = sidevoice_mobile_plugin::clear_stills(&handle) {
                 log::warn!(target: "stills", "call_still: the earlier stills were not removed: {error}");
             }
-            let phone = Arc::new(call::PhoneCall::default());
-            // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
+            // The developer options (nightly and dev builds): read before the first call, whose kind they decide, and before the
+            // audio session is declared, whose mode one of them chooses (iOS).
             app.manage(developer_options::DeveloperOptions::of_app(
                 &handle,
                 env!("SIDEVOICE_BUILD_CHANNEL"),
             )?);
+            // Declared now, activated only while a call's audio is open (`call::PhoneCall`).
+            if let Err(error) = call::configure(&handle) {
+                log::error!("audio session: {error}");
+            }
+            let phone = Arc::new(call::PhoneCall::new(handle.clone()));
+            // The developer option that chooses the session's mode declares it again as it is chosen.
+            app.manage(phone.clone());
             app.manage(headset::HeadsetSettings::of_app(&handle)?);
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
             // The application host: the voice call and the engine. A phone never resets its data under the call, so
@@ -738,8 +749,10 @@ const PAGE_STILLS: [&str; 2] = [
 /// of a still; the lines with target `intent` (what the call's surfaces asked for and what came of it: action names,
 /// states and counters, never a title, a text or an id) go in public, category `intent`, next to the App Intents' own;
 /// the lines with target `cue` (the thinking sound: whether it starts, plays, or why not, and the screen's lock it
-/// follows: sound ids, states and errors, never a word) go in public, category `cue`; every other line is the app's own
-/// or the page's and may carry what the person said, so it goes in category `app`, private.
+/// follows: sound ids, states and errors, never a word) go in public, category `cue`; the lines with target `audio` (the
+/// audio session: its category, mode, options, route ports, volume, rates and buffers, and the system's reasons for its
+/// changes, never a word) go in public, category `audio`; every other line is the app's own or the page's and may carry
+/// what the person said, so it goes in category `app`, private.
 fn log_category(target: &str, message: &str) -> &'static str {
     let page_still = target == tauri_plugin_log::WEBVIEW_TARGET
         && PAGE_STILLS.iter().any(|form| message.starts_with(form));
@@ -749,6 +762,8 @@ fn log_category(target: &str, message: &str) -> &'static str {
         "intent"
     } else if target == "cue" {
         "cue"
+    } else if target == "audio" {
+        "audio"
     } else {
         "app"
     }
@@ -806,6 +821,19 @@ mod tests {
             "app"
         );
         assert_eq!(log_category("sidevoice_mobile", "cue Thinking"), "app");
+    }
+
+    #[test]
+    fn the_audio_session_lines_are_public_by_their_target_only() {
+        assert_eq!(
+            log_category("audio", "audio route change: reason override"),
+            "audio"
+        );
+        assert_eq!(
+            log_category("webview", "console.warn: [sidevoice] audio x"),
+            "app"
+        );
+        assert_eq!(log_category("sidevoice_mobile", "audio session: x"), "app");
     }
 
     #[test]

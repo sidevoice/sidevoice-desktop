@@ -13,17 +13,20 @@ public enum CallLog {
     public static let text = Logger(subsystem: subsystem, category: "text")
     /// The thinking sound the app plays for the page: whether it starts, plays, or why not (ids, states, errors).
     public static let cue = Logger(subsystem: subsystem, category: "cue")
+    /// The app's audio session: its category, mode, options, route, volume, rates and buffers, and why they changed.
+    public static let audio = Logger(subsystem: subsystem, category: "audio")
     /// The app's own log lines (the Rust side's), by category.
     public static let app = Logger(subsystem: subsystem, category: "app")
 
-    /// A line the Rust side hands over (`SidevoiceLog`): its category, as the unified log has it. The stills', the intents' and the cue's
-    /// lines hold ids, sizes and names, never the conversation's words, and are public; the app's own lines may carry what
+    /// A line the Rust side hands over (`SidevoiceLog`): its category, as the unified log has it. The stills', the intents', the cue's and
+    /// the audio session's lines hold ids, sizes, names and levels, never the conversation's words, and are public; the app's own lines may carry what
     /// the person said, and stay private (a device's log shows them as `<private>`).
     public static func write(_ category: String, _ message: String) {
         switch category {
         case "stills": stills.notice("\(message, privacy: .public)")
         case "intent": intent.notice("\(message, privacy: .public)")
         case "cue": cue.notice("\(message, privacy: .public)")
+        case "audio": audio.notice("\(message, privacy: .public)")
         default: app.notice("\(message, privacy: .private)")
         }
     }

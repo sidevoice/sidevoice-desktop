@@ -128,14 +128,22 @@
 
   /** The developer options (nightly and dev builds): sidevoice-web's hidden "Developer options" section, onto the
    *  `developer_options` command (docs/BRIDGE.md -> "The developer options"), as the desktop's `host.debug`. The one switch
-   *  a phone has is `systemCall`: whether the call is a system's call (CallKit, Telecom). It reads live: what the app kept (asked
-   *  again as each page loads, the injected snapshot being from the app's start), then what the last `set` took. */
+   *  a phone has is `systemCall`: whether the call is a system's call (CallKit, Telecom); and iOS has one choice, `callAudio`:
+   *  the audio session's mode for the call audio mode test (a name, `choose`). It reads live: what the app kept (asked again as
+   *  each page loads, the injected snapshot being from the app's start), then what the last `set` or `choose` took. */
   function debug(initial, changed) {
     const SWITCHES = ["systemCall"];
-    const available = Object.freeze(SWITCHES.filter((name) => (initial.available || []).includes(name)));
+    const CHOICES = ["callAudio"];
+    const offered = initial.available || [];
+    const available = Object.freeze([...SWITCHES, ...CHOICES].filter((name) => offered.includes(name)));
     const state = {};
     const take = (from) => {
       for (const name of SWITCHES) state[name] = !!(from && from[name]) && available.includes(name);
+      // A choice reads the value the app says (its values are the app's: it refuses any other); one the phone lacks, undefined.
+      for (const name of CHOICES) {
+        if (!available.includes(name)) state[name] = undefined;
+        else if (from && typeof from[name] === "string") state[name] = from[name];
+      }
     };
     take(initial);
     // The script is built once, when the app starts, and a page that loads anew gets the same text: its snapshot is what the
@@ -146,13 +154,23 @@
       get systemCall() {
         return state.systemCall;
       },
+      get callAudio() {
+        return state.callAudio;
+      },
       set: (name, on) =>
-        available.includes(name) && typeof on === "boolean"
+        available.includes(name) && SWITCHES.includes(name) && typeof on === "boolean"
           ? transport.own.call("developer_options", { action: "set", name, enabled: on }).then((state) => {
               take(state);
               changed();
             })
           : Promise.reject({ key: "bad_request", message: "set(name, on) takes an available switch and a boolean." }),
+      choose: (name, value) =>
+        available.includes(name) && CHOICES.includes(name) && typeof value === "string"
+          ? transport.own.call("developer_options", { action: "choose", name, value }).then((state) => {
+              take(state);
+              changed();
+            })
+          : Promise.reject({ key: "bad_request", message: "choose(name, value) takes an available choice and a value." }),
     });
   }
 
