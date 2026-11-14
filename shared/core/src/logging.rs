@@ -160,6 +160,17 @@ impl<F: Fn(&str)> Drop for Line<'_, F> {
     }
 }
 
+/// What a process adds to [`init`]'s file layer: a layer of its own (the phone's system log), and which of the other parts it
+/// wants.
+pub struct Extras<L> {
+    /// A layer of the process's own, under the same filter.
+    pub layer: Option<L>,
+    /// Whether stderr gets a layer when it is a terminal (never on the phone, where stderr is the system's public log).
+    pub stderr: bool,
+    /// Whether the panic hook is installed here (the phone's has its own, which never logs).
+    pub panic_hook: bool,
+}
+
 /// Installs the process's subscriber: `SIDEVOICE_LOG` as the filter, and one human `key=value` layer into `sink` (the file) and
 /// one into stderr when stderr is a terminal and `SIDEVOICE_DEBUG` is not on (that channel prints its own lines there). Both
 /// show `home` as `~`. It also routes the `log` crate's records (tao, wry, tauri) into it, and a panic goes to it through a
@@ -168,6 +179,16 @@ pub fn init<F>(own: &[&str], home: Option<&std::path::Path>, sink: F)
 where
     F: Fn(&str) + Send + Sync + 'static,
 {
+    let extras: Extras<tracing_subscriber::layer::Identity> = Extras { layer: None, stderr: true, panic_hook: true };
+    init_with(own, home, sink, extras);
+}
+
+/// [`init`] with `extras`.
+pub fn init_with<F, L>(own: &[&str], home: Option<&std::path::Path>, sink: F, extras: Extras<L>)
+where
+    F: Fn(&str) + Send + Sync + 'static,
+    L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+{
     let (filter, invalid) = filter(std::env::var(VARIABLE).ok().as_deref(), own);
     let home = Home::new(home);
     let _ = HOME.set(home.clone());
@@ -175,7 +196,7 @@ where
         .with_ansi(false)
         .with_writer(Lines { sink, home: home.clone() })
         .log_internal_errors(false);
-    let stderr = (std::io::stderr().is_terminal() && !crate::debug::enabled()).then(|| {
+    let stderr = (extras.stderr && std::io::stderr().is_terminal() && !crate::debug::enabled()).then(|| {
         let to_stderr = |line: &str| {
             let _ = writeln!(std::io::stderr().lock(), "{line}");
         };
@@ -184,9 +205,14 @@ where
             .with_writer(Lines { sink: to_stderr, home })
             .log_internal_errors(false)
     });
-    let installed = tracing_subscriber::registry().with(file.and_then(stderr).with_filter(filter)).try_init().is_ok();
+    let installed = tracing_subscriber::registry()
+        .with(file.and_then(stderr).and_then(extras.layer).with_filter(filter))
+        .try_init()
+        .is_ok();
     if installed {
-        install_panic_hook();
+        if extras.panic_hook {
+            install_panic_hook();
+        }
         if invalid {
             tracing::warn!(variable = VARIABLE, "invalid log filter, using the default");
         }

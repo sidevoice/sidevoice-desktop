@@ -207,6 +207,18 @@ impl std::fmt::Display for StillError {
     }
 }
 
+impl StillError {
+    /// A fixed word for the reason, for the log: the error's text can hold the system's.
+    pub fn code(&self) -> &'static str {
+        match self {
+            StillError::Id => "id",
+            StillError::Image => "image",
+            StillError::Full => "full",
+            StillError::Io(_) => "io",
+        }
+    }
+}
+
 impl std::error::Error for StillError {}
 
 /// The longest still id: its file name (twice as long, in hex) stays well under a file system's 255 bytes.
@@ -243,8 +255,7 @@ pub fn stills_dir<R: Runtime>(app: &AppHandle<R>) -> io::Result<PathBuf> {
         // Where the stills go is where the surfaces must read them: a widget extension cannot read the app's cache.
         log::info!(
             target: "stills",
-            "call stills: folder {} (shared container: {})",
-            dir.display(),
+            "call stills: folder kept (shared container: {})",
             shared.is_some()
         );
     });
@@ -265,8 +276,10 @@ pub fn save_still<R: Runtime>(
     if let Err(error) = check_still(id, png, px) {
         log::warn!(
             target: "stills",
-            "call stills: refused {id} ({} bytes, {px} px): {error}",
-            png.len()
+            "call stills: refused a still (id of {} bytes, {} bytes, {px} px): {}",
+            id.len(),
+            png.len(),
+            error.code()
         );
         return Err(error);
     }
@@ -290,8 +303,7 @@ pub fn save_still<R: Runtime>(
         .map_err(StillError::Io)?;
     log::info!(
         target: "stills",
-        "call stills: kept {} ({} bytes, {px} px)",
-        file.display(),
+        "call stills: kept a still ({} bytes, {px} px)",
         png.len()
     );
     Ok(())
@@ -385,7 +397,7 @@ pub(crate) fn start_surface(details: &CallDetails, events: CallEvents) {
         &details_json(details, false),
         Arc::new(move |name| match SurfaceAction::named(name) {
             Some(action) => events(CallEvent::Action { action }),
-            None => log::warn!("call surface: no action named {name:?}"),
+            None => log::warn!("call surface: an action the app does not know"),
         }),
     );
 }

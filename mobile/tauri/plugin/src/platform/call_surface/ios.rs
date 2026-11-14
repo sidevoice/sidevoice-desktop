@@ -117,13 +117,16 @@ define_class!(
         /// thread).
         #[unsafe(method(act:))]
         fn act(action: &NSString) {
+            // Only an action the app knows is named in the public log: the string is the intent's, not checked yet.
+            let known = crate::call_surface::SurfaceAction::named(&action.to_string())
+                .map_or_else(|| "invalid".to_owned(), |named| format!("{named:?}"));
             let on_action = ON_ACTION.lock().ok().and_then(|current| current.clone());
             match on_action {
                 Some(on_action) => {
-                    log::info!(target: "intent", "call surface: {action} asked for by the Live Activity");
+                    log::info!(target: "intent", "call surface: {known} asked for by the Live Activity");
                     on_action(&action.to_string())
                 }
-                None => log::warn!(target: "intent", "call surface: {action} asked for with no call running"),
+                None => log::warn!(target: "intent", "call surface: {known} asked for with no call running"),
             }
         }
     }

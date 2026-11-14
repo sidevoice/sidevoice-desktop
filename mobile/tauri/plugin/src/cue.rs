@@ -165,8 +165,8 @@ pub fn cue_available(read: impl Fn(&str) -> Option<Vec<u8>>) -> bool {
     match chosen_sound(read, None) {
         Ok(_) => true,
         // A phone with a player that offers none: the page plays its own sound, which a call's session may not let out.
-        Err(error) => {
-            log::warn!(target: "cue", "cue: not offered, the bundled web's sounds are not usable: {error}");
+        Err(_) => {
+            log::warn!(target: "cue", "cue: not offered, the bundled web's sounds are not usable");
             false
         }
     }
@@ -393,7 +393,7 @@ fn screen_changed(locked: bool) {
                 if locked { "plays" } else { "stops" }
             ),
             Ok(false) => {}
-            Err(error) => log::warn!(target: "cue", "cue: did not start at the lock: {error}"),
+            Err(_) => log::warn!(target: "cue", "cue: did not start at the lock"),
         }
     });
 }

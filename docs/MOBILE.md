@@ -147,7 +147,7 @@ through `run` (the call's service hangs up through it).
   cargo the native project runs again from inside its build (Xcode's build phase, Gradle's `rust` task) gets from the
   Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
   (`mobile/tauri/frameworks/`, the `.so` files of `jniLibs`).
-- **The log**: `tauri-plugin-log` to the system's (logcat, the unified log) and a file in the app's log folder.
+- **The log**: `tracing`, as the [logging guideline](https://github.com/sidevoice/.github-private/blob/main/docs/logging.md) says: one subscriber (`mobile/tauri/src/lib.rs`, `SIDEVOICE_LOG`, default `info`; the Xcode scheme sets it, Android has no environment) with a file in the app's log folder (written by `tauri-plugin-log`'s file logger, 2 MB x 5) and the system's log (`src/system_log.rs`): the unified log on iOS through the Swift `SidevoiceLog`, logcat on Android with the tag `sidevoice`. The plugin itself only serves the page's `log` command. On iOS the category is the event's real target, also for `log` records: `stills`, `intent`, `cue` and `audio` are public and carry only codes, counts and the system's enum names (no port names, no error text, no ids named by the page); everything else, the page's lines included, is `app`, private. No layer writes to stdout or stderr.
   - **Panics** (`mobile/tauri/src/panics.rs`): a hook logs each one (its thread, place and message) and adds it to
     `last-panic.txt` beside the log file, at most 16 KB; the next launch logs that file's panics as the last run's
     (`the last run panicked:`) and removes it. The hook never logs itself: a panic inside a log call holds the logger's

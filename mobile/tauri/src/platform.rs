@@ -11,5 +11,6 @@ pub mod loudspeaker;
 pub mod message_overlay;
 pub mod microphone_help;
 pub mod private_dir;
+pub mod system_log;
 pub mod tls;
 pub mod webview;

@@ -357,7 +357,9 @@ final class Controller {
         } catch {
             failedAt = Date()
             Coming.now.set(false)
-            NSLog("Sidevoice: the call's Live Activity did not start: \(error)")
+            // The error's domain and code, never its text: the system's words are free text.
+            let failure = error as NSError
+            NSLog("Sidevoice: the call's Live Activity did not start: %@ %d", failure.domain, failure.code)
             return
         }
         Coming.now.set(false)

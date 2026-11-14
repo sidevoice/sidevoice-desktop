@@ -101,8 +101,8 @@ impl Os for Native {
     fn watch<R: Runtime>(app: &AppHandle<R>, changed: fn(bool)) {
         if MainThreadMarker::new().is_some() {
             watch_here(changed);
-        } else if let Err(error) = app.run_on_main_thread(move || watch_here(changed)) {
-            log::warn!(target: "cue", "screen: the lock is not watched: {error}");
+        } else if app.run_on_main_thread(move || watch_here(changed)).is_err() {
+            log::warn!(target: "cue", "screen: the lock is not watched");
         }
     }
 }

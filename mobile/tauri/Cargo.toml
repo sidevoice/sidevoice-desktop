@@ -32,9 +32,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The creatures' stills reach the app as base64 (`call_still`, src/lib.rs), as the page's canvas gives them.
 base64 = "0.22"
-# The app's log (src/lib.rs): the system's (logcat, the unified log) and a file in the app's log folder.
+# The app's log (src/lib.rs, src/system_log.rs): `tracing` events through one subscriber: a file in the app's log folder (the plugin
+# writes it, `split`; its `log` command is the page's channel) and the system's (logcat, the unified log). `log` is what the
+# plugins and Tauri emit, which `tracing-log` bridges, and whose real target the system log reads back (`NormalizeEvent`).
 tauri-plugin-log = "2"
 log = "0.4"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-log = "0.2.0"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry"] }
 # The camera that scans the pairing QR code (`host.codeScanner`, js/mobile-bridge.js): Tauri's official barcode scanner, CameraX
 # and ML Kit on Android, AVFoundation on iOS, with the camera permission it asks for itself (docs/MOBILE.md -> "Scanning the pairing code").
 tauri-plugin-barcode-scanner = "2.5.3"
@@ -54,6 +59,8 @@ objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+# logcat (src/platform/system_log/android.rs): `__android_log_write`, the same binding `android_logger` (Tauri's) uses.
+android_log-sys = "0.3.2"
 # The engine's HTTPS (remote providers, model downloads) verifies certificates with Android's own verifier, which calls into
 # the JVM and has to be told the app's context once (src/platform/tls/android.rs). The version is the one the engine's
 # reqwest resolves, so there is one verifier in the build; jni is its own, ndk-context Tauri's.
