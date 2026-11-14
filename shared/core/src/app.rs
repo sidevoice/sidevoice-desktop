@@ -198,7 +198,7 @@ impl<A: LaneAudio> AppHost<A> {
         let engines = match NativeEngines::new(config.model_root, keys, runtime.clone()) {
             Ok(engines) => Some(Arc::new(engines)),
             Err(e) => {
-                log::error!("the native engine did not start: {} ({})", e.key, e.message);
+                tracing::error!(code = e.key, "native engine did not start");
                 None
             }
         };
@@ -299,7 +299,11 @@ impl<A: LaneAudio> AppHost<A> {
         if held.is_empty() {
             crate::debug::debug("voice: every model released");
         } else {
-            log::error!("voice: models still held at exit after {limit:?}: {}", held.join(", "));
+            tracing::error!(
+                count = held.len(),
+                duration_ms = limit.as_millis() as u64,
+                "voice models still held at exit"
+            );
             crate::debug::debug(&format!("voice: models still held at exit: {}", held.join(", ")));
         }
         held

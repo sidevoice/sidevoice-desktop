@@ -2,10 +2,10 @@
 // each app into the window that shows the room (the desktop's room window, the phone's one window). Forwards `console.warn` / `console.error`, uncaught errors and unhandled rejections to the plugin's
 // `log` command, and leaves the console as it was.
 //
-// What it writes is deliberately narrow: strings and numbers as given, an Error as `name: message` plus the first lines
-// of its stack, and any other object only by its `code`, `key`, `name` and `message` fields (the failure codes the page
-// shows). Never an object's other fields: they may hold a transcript or a message. Credential-shaped text is masked, each
-// line is cut short, and a flood is dropped (a count is written instead).
+// What it writes is an allowlist, never free text (a log line is written as if it will be published): numbers, booleans and
+// null; for an Error or any other object, its `name`, `code` and `key` (each only if it has the shape of an identifier) and
+// the first frame of its stack as `file:line:column`. Every string, an Error's `message` included, is written as `[string]`.
+// A flood is dropped (a count is written instead).
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
   else factory(window);
@@ -13,46 +13,41 @@
   "use strict";
   const WARN = 4;
   const ERROR = 5;
-  const MAX_LINE = 1000;
   const MAX_PER_WINDOW = 50; // lines per 10 s
   const WINDOW_MS = 10000;
-  const SECRET = [
-    /\b(sk|pk|rk|xai|gsk|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{8,}/g,
-    /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-    /\b(api[-_]?key|token|secret|password|authorization|pairing[-_ ]?code|code(?=["']?\s*[:=]\s*["']?\d))(["']?\s*[:=]\s*["']?)[^\s"',;&}]+/gi,
-    /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g,
-  ];
+  const NAME = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/;
+  const KEY = /^[a-z0-9_.-]{1,64}$/;
+  const KEY_FILE = /^[A-Za-z0-9_.-]{1,64}$/;
+  const FRAME = /([A-Za-z0-9_.-]{1,64}):(\d{1,7})(?::(\d{1,7}))?\)?\s*$/;
 
-  function mask(text) {
-    let out = String(text);
-    out = out.replace(SECRET[0], "[redacted]").replace(SECRET[1], "Bearer [redacted]");
-    out = out.replace(SECRET[2], (_all, name, sep) => name + sep + "[redacted]");
-    return out.replace(SECRET[3], "[redacted]");
+  function frameOf(stack) {
+    if (typeof stack !== "string") return "";
+    for (const line of stack.split("\n").slice(0, 4)) {
+      const found = FRAME.exec(line);
+      if (found) return found[1] + ":" + found[2] + (found[3] ? ":" + found[3] : "");
+    }
+    return "";
   }
 
   function describe(value) {
-    if (value === null || value === undefined) return String(value);
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
-    if (value instanceof Error || (typeof value === "object" && typeof value.stack === "string" && typeof value.message === "string")) {
-      const stack = typeof value.stack === "string" ? value.stack.split("\n").slice(0, 4).join(" | ") : "";
-      return `${value.name}: ${value.message}${stack ? ` (${stack})` : ""}`;
+    if (value === null || value === undefined || typeof value === "number" || typeof value === "boolean") return String(value);
+    if (typeof value === "string") return "[string]";
+    if (typeof value !== "object") return `[${typeof value}]`;
+    const picked = [];
+    for (const [field, shape] of [["name", NAME], ["code", KEY], ["key", KEY]]) {
+      const v = value[field];
+      if (typeof v === "string" && shape.test(v)) picked.push(`${field}=${v}`);
     }
-    if (typeof value === "object") {
-      const picked = [];
-      for (const field of ["code", "key", "name", "message"]) {
-        const v = value[field];
-        if (typeof v === "string" || typeof v === "number") picked.push(`${field}=${v}`);
-      }
-      return picked.length ? `{${picked.join(" ")}}` : "[object]";
-    }
-    return `[${typeof value}]`;
+    const frame = frameOf(value.stack);
+    if (frame) picked.push(`at=${frame}`);
+    return picked.length ? `{${picked.join(" ")}}` : "[object]";
   }
 
   let windowStart = 0;
   let sent = 0;
   let dropped = 0;
 
-  function send(level, message) {
+  function send(level, text) {
     const internals = win.__TAURI_INTERNALS__;
     if (!internals || typeof internals.invoke !== "function") return;
     const now = Date.now();
@@ -68,8 +63,6 @@
       return;
     }
     sent += 1;
-    let text = mask(message);
-    if (text.length > MAX_LINE) text = `${text.slice(0, MAX_LINE)}...`;
     // The log must never break the page: the capability may not match yet, or the app may be reloading.
     try {
       Promise.resolve(internals.invoke("plugin:log|log", { level, message: text })).catch(() => {});
@@ -93,7 +86,8 @@
 
   win.addEventListener("error", (event) => {
     try {
-      const where = event.filename ? ` at ${String(event.filename).split("/").pop()}:${event.lineno}:${event.colno}` : "";
+      const base = event.filename ? String(event.filename).split("/").pop() : "";
+      const where = KEY_FILE.test(base) ? ` at ${base}:${event.lineno}:${event.colno}` : "";
       send(ERROR, `uncaught: ${event.error ? describe(event.error) : describe(event.message)}${where}`);
     } catch (_e) {
       /* ignored */

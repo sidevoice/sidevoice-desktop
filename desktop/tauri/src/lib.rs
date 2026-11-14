@@ -177,7 +177,7 @@ fn bridge_state(
     }
     let previous = std::mem::replace(&mut *state.call.lock().unwrap(), snapshot.clone());
     if let Some(changes) = snapshot.changes_since(&previous) {
-        log::info!("bridge_state: {changes}");
+        tracing::info!(changes, "bridge_state");
     }
     // The whole snapshot only at level debug or with SIDEVOICE_DEBUG=1, and without the rest of the room's projection:
     // its facts carry the conversation's words, which stay out of the log.
@@ -222,29 +222,65 @@ pub(crate) fn app_log_file(app: &AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_log_dir().ok().map(|dir| dir.join(format!("{LOG_FILE}.log")))
 }
 
+/// The webview's `log` command only (its lines have target `webview`): the plugin installs no logger. Its records reach the
+/// subscriber through `log`'s bridge, so one filter and one writer serve every line.
 fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri_plugin_log::Builder::new().skip_logger().build()
+}
+
+/// The file logger of the app log, held once `setup` knows the log folder (`app_log_dir` needs the app). The subscriber's
+/// file layer hands it each finished line; the lines before that are not kept.
+static LOG_SINK: std::sync::OnceLock<Box<dyn log::Log>> = std::sync::OnceLock::new();
+
+/// tauri-plugin-log's file logger, built but not installed (`split`): it keeps the file's name, place and rotation.
+fn open_log_file(app: &AppHandle) {
     use tauri_plugin_log::{FileOpenStrategy, RotationStrategy, Target, TargetKind};
-    tauri_plugin_log::Builder::new()
+    let built = tauri_plugin_log::Builder::new()
         .clear_targets()
         .target(Target::new(TargetKind::LogDir { file_name: Some(LOG_FILE.into()) }))
-        .level(sidevoice_desktop_core::logging::level(
-            std::env::var(sidevoice_desktop_core::logging::LEVEL_VARIABLE).ok().as_deref(),
-        ))
-        .level_for("tao", log::LevelFilter::Warn)
-        .level_for("wry", log::LevelFilter::Warn)
+        .format(|out, message, _| out.finish(*message))
         .max_file_size(LOG_MAX_BYTES)
         .rotation_strategy(RotationStrategy::KeepSome(LOG_KEPT))
         .file_open_strategy(FileOpenStrategy::Rotate)
-        .build()
+        .split(app);
+    if let Ok((_, _, logger)) = built {
+        let _ = LOG_SINK.set(logger);
+    }
 }
 
-/// A panic goes to the log too (then to stderr as before).
-fn log_panics() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        log::error!("panic: {info}");
-        previous(info);
-    }));
+/// The targets a bare `SIDEVOICE_LOG` level applies to: our crates and the fixed targets (`panic`, the page's `webview`).
+/// Every other target stays at `warn` unless the variable names it.
+const OWN_TARGETS: &[&str] = &[
+    "sidevoice_desktop_lib",
+    "sidevoice_desktop_core",
+    "sidevoice_local_host",
+    "sidevoice_shared",
+    "sidevoice_shared_tauri",
+    "sidevoice_shared_i18n",
+    "sidevoice_shared_headset",
+    "sidevoice_voice",
+    "sidevoice_engine",
+    "sidevoice_platform",
+    "panic",
+    "webview",
+];
+
+/// The process's subscriber, first thing in `run`.
+fn init_logging() {
+    sidevoice_shared::logging::init(
+        OWN_TARGETS,
+        sidevoice_shared::logging::Lines(|line: &str| {
+            if let Some(file) = LOG_SINK.get() {
+                file.log(
+                    &log::Record::builder()
+                        .args(format_args!("{line}"))
+                        .level(log::Level::Info)
+                        .target("sidevoice")
+                        .build(),
+                );
+            }
+        }),
+    );
 }
 
 // Diagnostics on stderr with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them): sidevoice-shared's, shared with the
@@ -253,14 +289,16 @@ fn log_panics() {
 use sidevoice_shared::debug::enabled as debugging;
 pub(crate) use sidevoice_shared::debug::{debug, debug_detail};
 
-/// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
+/// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`. Only a probe build reads it: in any
+/// other the command does nothing, so page text never reaches a log at any level.
 #[tauri::command]
 fn debug_log(app: AppHandle, line: String) {
-    debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
     #[cfg(feature = "probe")]
-    probe::exit_on(&app, &line);
-    #[cfg(feature = "probe")]
-    probe::memory_on(&app, &line);
+    {
+        debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
+        probe::exit_on(&app, &line);
+        probe::memory_on(&app, &line);
+    }
     let _ = (app, line);
 }
 
@@ -480,7 +518,7 @@ pub fn run() {
     let context = probe::with_page(context);
     #[cfg(feature = "probe")]
     probe::watch_exit_handlers();
-    log_panics();
+    init_logging();
     // First, so everything after it is logged.
     // Where the call's events go: over the channel the room page opens (the shared plugin's `voice_events`).
     let pages = sidevoice_shared_tauri::Pages::default();
@@ -496,6 +534,8 @@ pub fn run() {
         .invoke_handler(handler())
         .setup(move |app| {
             let handle = app.handle().clone();
+            open_log_file(&handle);
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), os = std::env::consts::OS, "app started");
             carried.log();
             application::prepare(&handle)?;
             shortcuts::setup(&handle);

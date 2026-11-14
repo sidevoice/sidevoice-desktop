@@ -7,20 +7,20 @@ pub fn enabled() -> bool {
 
 /// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
 pub fn debug(message: &str) {
-    log::info!("{message}");
+    tracing::info!("{message}");
     if enabled() {
         eprintln!("sidevoice: {message}");
     }
 }
 
-/// A line too frequent or too large for the log by default: in it at level `debug` (`SIDEVOICE_LOG_LEVEL`), and on stderr
+/// A line too frequent or too large for the log by default: in it at level `debug` (`SIDEVOICE_LOG`), and on stderr
 /// with `SIDEVOICE_DEBUG=1`.
 pub fn debug_detail(message: impl FnOnce() -> String) {
-    if !enabled() && !log::log_enabled!(log::Level::Debug) {
+    if !enabled() && !tracing::enabled!(tracing::Level::DEBUG) {
         return;
     }
     let message = message();
-    log::debug!("{message}");
+    tracing::debug!("{message}");
     if enabled() {
         eprintln!("sidevoice: {message}");
     }

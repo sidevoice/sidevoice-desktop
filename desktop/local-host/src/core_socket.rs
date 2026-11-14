@@ -49,11 +49,17 @@ pub struct Node {
     pub host: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct Paired {
     pub device_id: String,
     pub token: String,
     pub node: Node,
+}
+/// The device id only: the token is a secret, and the node holds the machine's name.
+impl std::fmt::Debug for Paired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Paired").field("device_id", &self.device_id).finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,5 +167,21 @@ impl CoreSocket {
             401 => Ok(false),
             status => Err(failed(format!("GET /api/device/devices answered {status}"))),
         }
+    }
+}
+
+#[cfg(test)]
+mod debug_tests {
+    use super::*;
+
+    #[test]
+    fn a_paired_debug_holds_neither_token_nor_node() {
+        let paired = Paired {
+            device_id: "dev".into(),
+            token: "canary-secret-7f3a".into(),
+            node: Node { fingerprint: "fp".into(), public_key: "k".into(), host: Some("canary-host-7f3a".into()) },
+        };
+        let text = format!("{paired:?}");
+        assert!(!text.contains("canary") && text.contains("dev"), "{text}");
     }
 }

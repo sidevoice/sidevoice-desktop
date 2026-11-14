@@ -26,38 +26,49 @@ test("console.error and console.warn reach the plugin and still reach the consol
   win.console.error("boom", 3);
   win.console.warn("careful");
   assert.deepEqual(calls.map((c) => [c.command, c.level, c.message]), [
-    ["plugin:log|log", 5, "console.error: boom 3"],
-    ["plugin:log|log", 4, "console.warn: careful"],
+    ["plugin:log|log", 5, "console.error: [string] 3"],
+    ["plugin:log|log", 4, "console.warn: [string]"],
   ]);
   assert.equal(original.length, 2);
 });
 
-test("objects are written by their failure fields only", () => {
+test("objects are written by their allowlisted fields only", () => {
   const { win, calls } = setup();
-  win.console.error({ code: "voice.failure.model", transcript: "private words" });
+  win.console.error({ code: "voice.failure.model", transcript: "private words", message: "private words" });
   assert.equal(calls[0].message, "console.error: {code=voice.failure.model}");
   win.console.error({ transcript: "private words" });
   assert.equal(calls[1].message, "console.error: [object]");
+  win.console.error({ code: "has spaces and private words", key: "Not_A_Key" });
+  assert.equal(calls[2].message, "console.error: [object]");
 });
 
-test("credential-shaped text is masked", () => {
+test("free text never reaches the log, whatever it looks like", () => {
   const { win, calls } = setup();
   win.console.error("failed with sk-abcdefghijkl and Bearer abcdefgh12345 api_key=hunter22hunter");
-  assert.ok(!/abcdefghijkl|abcdefgh12345|hunter22/.test(calls[0].message), calls[0].message);
+  win.console.error(new Error("canary words 7f3a"), { message: "canary words 7f3a" });
+  for (const call of calls) assert.ok(!/abcdefghijkl|abcdefgh12345|hunter22|canary/.test(call.message), call.message);
+});
+
+test("an Error is written by its name and the first frame of its stack", () => {
+  const { win, calls } = setup();
+  const error = { name: "TypeError", message: "canary words 7f3a", stack: "TypeError: canary words 7f3a\nrender@http://localhost/assets/app.js:12:34\nother@http://x/b.js:1:1" };
+  win.console.error(error);
+  assert.equal(calls[0].message, "console.error: {name=TypeError at=app.js:12:34}");
 });
 
 test("uncaught errors and unhandled rejections are logged", () => {
   const { listeners, calls } = setup();
-  listeners.error({ error: new TypeError("bad"), filename: "http://x/app.js", lineno: 1, colno: 2 });
+  listeners.error({ error: new TypeError("bad"), filename: "http://x/app.js?token=canary", lineno: 1, colno: 2 });
+  listeners.error({ message: "canary words", filename: "http://x/app.js", lineno: 1, colno: 2 });
   listeners.unhandledrejection({ reason: { key: "voice.failure.start" } });
-  assert.match(calls[0].message, /^uncaught: TypeError: bad/);
-  assert.equal(calls[1].message, "unhandled rejection: {key=voice.failure.start}");
+  assert.match(calls[0].message, /^uncaught: \{name=TypeError[^}]*\}$/);
+  assert.ok(!calls[0].message.includes("canary"));
+  assert.equal(calls[1].message, "uncaught: [string] at app.js:1:2");
+  assert.equal(calls[2].message, "unhandled rejection: {key=voice.failure.start}");
 });
 
-test("a flood is cut and long lines are shortened", () => {
+test("a flood is cut", () => {
   const { win, calls } = setup();
-  win.console.error("x".repeat(5000));
-  assert.ok(calls[0].message.length < 1100);
   for (let i = 0; i < 100; i++) win.console.error("again");
   assert.equal(calls.length, 50);
 });

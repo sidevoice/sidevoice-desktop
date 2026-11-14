@@ -150,6 +150,7 @@ fn act(app: &AppHandle, name: &str) -> Answer {
 /// The whole install, blocking (on the async runtime's blocking pool: the HTTPS client runs a runtime of its own, made
 /// and dropped here). The host logs how it went; a failure is logged here in full, at error level.
 fn run_install(installing: Installing) -> Answer {
+    let _span = tracing::info_span!("local_host_install", job = %install::loggable_job(installing.id())).entered();
     let fetch = Https::new().map_err(|failure| {
         log::error!("local-host install could not start: {}", failure.log_report());
         json!(failure)

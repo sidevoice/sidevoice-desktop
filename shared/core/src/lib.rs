@@ -5,6 +5,7 @@
 pub mod app;
 pub mod debug;
 pub mod engine;
+pub mod logging;
 pub mod platform;
 pub mod voice;
 

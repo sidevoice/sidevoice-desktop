@@ -495,6 +495,7 @@ impl NativeEngines {
     /// job reports the engine of the build it installs. A cancel the job accepted wins: one that lands after the download ended removes
     /// the build this job installed, and only it, so a cancelled install leaves nothing of it to load (sidevoice-core#21
     /// review R04). A removal that fails is said (`install_cancel_failed`), never hidden.
+    #[tracing::instrument(skip_all, name = "model_install", fields(job = crate::logging::client_id(job), model = crate::logging::client_id(model_id)))]
     pub fn install_job(&self, jobs: &Jobs, job: &str, model_id: &str, wanted: Wanted<'_>) -> Result<(), Error> {
         let chosen = match self.locate(model_id, wanted) {
             Ok(chosen) => chosen,

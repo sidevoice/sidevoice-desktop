@@ -151,6 +151,7 @@ fn download(app: &AppHandle, asked: bool) {
 /// The download itself, in memory (the plugin hands back the bytes; there is no partial file). Aborting only stops it
 /// at its next await, so what it writes (progress, bytes, result) is accepted only while its `token` is the current
 /// one: a cancel, and any download after it, make a late write a no-op.
+#[tracing::instrument(skip_all, name = "update_download", fields(version = %update.version))]
 async fn download_task(app: AppHandle, update: Update, token: core::Token, _permit: crate::data::Permit) {
     let mut received = 0;
     let progress = |chunk: usize, total: Option<u64>| {

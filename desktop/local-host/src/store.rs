@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const FILE_NAME: &str = "local-host.json";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pairing {
     /// The core's fingerprint when the app paired.
     pub fp: String,
@@ -28,12 +28,15 @@ pub struct Pairing {
 }
 
 impl Pairing {
-    /// The token, kept out of `{:?}`.
+    /// What may be logged of a pairing: not the token, the key or the machine's name.
     pub fn redacted(&self) -> String {
-        format!(
-            "{{fp: {}, device_id: {}, host: {}, paired_at: {}}}",
-            self.fp, self.device_id, self.host, self.paired_at
-        )
+        format!("{{fp: {}, device_id: {}, paired_at: {}}}", self.fp, self.device_id, self.paired_at)
+    }
+}
+
+impl std::fmt::Debug for Pairing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.redacted())
     }
 }
 
@@ -122,7 +125,9 @@ mod tests {
         StorageFixtures::assert_private(&dir.join(FILE_NAME));
         StorageFixtures::assert_private(&dir);
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "nothing staged is left");
-        assert!(!pairing().redacted().contains("secret-token"));
+        for text in [pairing().redacted(), format!("{:?}", pairing())] {
+            assert!(!text.contains("secret-token") && !text.contains(&pairing().host), "{text}");
+        }
         remove(&dir).unwrap();
         remove(&dir).unwrap();
         assert_eq!(load(&dir), None);
