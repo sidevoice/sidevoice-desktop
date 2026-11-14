@@ -1,5 +1,6 @@
 //! The modules of the build tooling (`cargo xtask`, main.rs): a library so that a step one host has no use for is
 //! not dead code on it.
+#![allow(clippy::disallowed_macros, reason = "build tooling prints for people")]
 
 pub mod checks;
 pub mod host_graph;
