@@ -507,7 +507,10 @@ fn run_app() {
     // from aborts it before anything else is written (`panics`).
     panics::install();
     init_logging();
-    #[allow(clippy::disallowed_macros, reason = "the context Tauri generates prints its own diagnostics")]
+    #[allow(
+        clippy::disallowed_macros,
+        reason = "the context Tauri generates prints its own diagnostics"
+    )]
     let context = tauri::generate_context!();
     // Where the call's events go: over the channel the page opens (the shared plugin's `voice_events`).
     let pages = Pages::default();
