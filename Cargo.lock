@@ -5186,6 +5186,7 @@ dependencies = [
 name = "sidevoice-mobile"
 version = "0.1.0"
 dependencies = [
+ "android_log-sys",
  "atomic-write-file",
  "base64 0.22.1",
  "block2",
@@ -5210,6 +5211,7 @@ dependencies = [
  "tauri-plugin-barcode-scanner",
  "tauri-plugin-log",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -5277,6 +5279,7 @@ dependencies = [
  "sidevoice-voice",
  "tokio",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",

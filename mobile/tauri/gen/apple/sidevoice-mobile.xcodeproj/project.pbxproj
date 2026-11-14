@@ -91,12 +91,14 @@
 		14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "../../frameworks/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
 		180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		18601F15F6E9459C676D6904 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
+		1981A931E18D3F4459297845 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		1CAE0679DD2A16427423BD0E /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		20F786B267C7F9B83687598C /* CallActivity */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CallActivity; path = ../../apple/CallActivity; sourceTree = SOURCE_ROOT; };
 		216916D93E3C8D75635265CC /* downloads.rs */ = {isa = PBXFileReference; path = downloads.rs; sourceTree = "<group>"; };
 		26D96D0B9DBADA3317A773B9 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		283E9FABA170116B2849F571 /* audio_input.rs */ = {isa = PBXFileReference; path = audio_input.rs; sourceTree = "<group>"; };
 		299D7B306F3BF743AC1EF244 /* interruption.rs */ = {isa = PBXFileReference; path = interruption.rs; sourceTree = "<group>"; };
+		2B0B5924928489EEA55CACD0 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		2BF45AA0672154DA34102887 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		2CA4698307C9928A0B5866DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		2F7FFFBA485380A406EB4250 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
@@ -110,6 +112,7 @@
 		48772D858001537DA0BAD70F /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		49F5B7CE8791856160DB8F83 /* bridge.rs */ = {isa = PBXFileReference; path = bridge.rs; sourceTree = "<group>"; };
 		4A0565150C0509FAC5C66706 /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		4C98564BFDD8DDE097B2146A /* system_log.rs */ = {isa = PBXFileReference; path = system_log.rs; sourceTree = "<group>"; };
 		5110D95F2FDA8A4F485C96AA /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		5146689FF402E85DE500476B /* backup.rs */ = {isa = PBXFileReference; path = backup.rs; sourceTree = "<group>"; };
 		536BB1C7D959EB9FF56EB28A /* device_name.rs */ = {isa = PBXFileReference; path = device_name.rs; sourceTree = "<group>"; };
@@ -430,6 +433,15 @@
 			path = audio_route_picker;
 			sourceTree = "<group>";
 		};
+		C379E41647E6535724DEA587 /* system_log */ = {
+			isa = PBXGroup;
+			children = (
+				2B0B5924928489EEA55CACD0 /* android.rs */,
+				1981A931E18D3F4459297845 /* ios.rs */,
+			);
+			path = system_log;
+			sourceTree = "<group>";
+		};
 		C5DF4E9D279B95F0791F7AA3 /* interruption */ = {
 			isa = PBXGroup;
 			children = (
@@ -454,6 +466,7 @@
 				D8ED5FADE4B6E55EBEA152B9 /* message_overlay.rs */,
 				035C90F560637AC4EE9E2858 /* microphone_help.rs */,
 				9F8D209D8F7F183F8C5BF60D /* private_dir.rs */,
+				4C98564BFDD8DDE097B2146A /* system_log.rs */,
 				C1188ECF695A1AC9631488B1 /* tls.rs */,
 				A6C8CD431FED33808E2B7AC8 /* webview.rs */,
 				D13E1E110DD69DF3B162651A /* audio_input */,
@@ -466,6 +479,7 @@
 				CF13280DDF0E676A5BCFDECF /* message_overlay */,
 				63D94CE980AE1EF2EBB0FFBE /* microphone_help */,
 				6C86A9A2C43172A90C0FA47A /* private_dir */,
+				C379E41647E6535724DEA587 /* system_log */,
 				A4F4ADFF1EE4A1E8FEA820B9 /* tls */,
 				0AEE8EC07FFF92C7DC06F2CE /* webview */,
 			);

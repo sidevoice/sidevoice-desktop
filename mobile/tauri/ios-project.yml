@@ -33,7 +33,7 @@ targetTemplates:
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
-        RUST_LOG: info
+        SIDEVOICE_LOG: info
     settings:
       groups: [app]
 targets:
@@ -90,7 +90,7 @@ targets:
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
-        RUST_LOG: info
+        SIDEVOICE_LOG: info
       {{~#if ios-command-line-arguments}}
       commandLineArguments:
       {{~#each ios-command-line-arguments}}

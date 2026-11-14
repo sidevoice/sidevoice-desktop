@@ -27,6 +27,6 @@ pub fn take() {
     }
     match Native::force() {
         Ok(()) => log::info!("call: the audio plays on the phone's loudspeaker"),
-        Err(error) => log::warn!("call: the audio stays where the system put it: {error}"),
+        Err(_) => log::warn!("call: the audio stays where the system put it"),
     }
 }

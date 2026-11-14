@@ -684,18 +684,8 @@ fn live_activity_index(shots: &[String], device: &str) -> String {
 /// engine's libraries, as a build does.
 pub fn lint(name: &str) -> Result<()> {
     crate::checks::web()?;
-    // The mobile app adopts the logging guideline in its own change: its console output is not banned here yet.
-    let flags = [
-        "--",
-        "-D",
-        "warnings",
-        "-A",
-        "clippy::disallowed_methods",
-        "-A",
-        "clippy::disallowed_types",
-        "-A",
-        "clippy::disallowed_macros",
-    ];
+    // `disallowed_macros` is on (clippy.toml: no `dbg!`, `println!`, `eprintln!`): the app logs through `tracing`.
+    let flags = ["--", "-D", "warnings", "-A", "clippy::disallowed_methods", "-A", "clippy::disallowed_types"];
     let packages = ["-p", "sidevoice-mobile", "-p", "sidevoice-mobile-plugin", "--all-targets"];
     let mobile = repo().join("mobile/tauri");
     match project(name)?.cli {

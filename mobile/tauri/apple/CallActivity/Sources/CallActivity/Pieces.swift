@@ -486,7 +486,7 @@ extension CallStills {
     static func problem(_ file: String) -> String? {
         guard directory != nil else { return "no App Group container (\(appGroup))" }
         guard let url = url(file) else { return "not a file name: \(file)" }
-        guard FileManager.default.fileExists(atPath: url.path) else { return "no file \(file) in \(url.deletingLastPathComponent().path)" }
+        guard FileManager.default.fileExists(atPath: url.path) else { return "no file \(file) in the App Group container" }
         return UIImage(contentsOfFile: url.path) == nil ? "\(file) does not decode as an image" : nil
     }
 

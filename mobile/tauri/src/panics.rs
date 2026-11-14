@@ -1,9 +1,9 @@
 //! The app's panics, kept past the crash they may end in. A panic the app cannot unwind from (in a callback from the
 //! system, in a destructor while unwinding, on a thread nothing catches) aborts the process, and the system's crash
 //! report then has only the stack: not the message, not the place. So a hook adds every panic to a small file beside the
-//! log file; the next launch logs what that file holds as the last run's panics, and removes it.
+//! log file; the next launch logs what that file holds (`target: "panic"`) as the last run's panics, and removes it.
 //!
-//! The hook never logs: a panic inside a `log!` call (a `Display` that panics) happens with the logger's lock held, and
+//! The hook never logs (the logging guideline's exception for a platform where it can deadlock): a panic inside a log call (a `Display` that panics) happens with the writer's lock held, and
 //! logging from the hook, on the same thread, would wait for it forever. It only writes the file (and the standard hook,
 //! which prints to standard error, still runs).
 
@@ -42,9 +42,16 @@ pub fn install() {
 pub fn watch(dir: &Path) {
     let path = dir.join(FILE);
     match take(&path) {
-        Ok(Some(text)) => log::error!("the last run panicked:\n{}", text.trim_end()),
+        // One event per panic: the file holds the hook's one-line reports. The writer shows the home as `~`.
+        Ok(Some(text)) => {
+            for report in text.lines() {
+                tracing::error!(target: "panic", report, "the last run panicked");
+            }
+        }
         Ok(None) => {}
-        Err(error) => log::warn!("panics: {}: {error}", path.display()),
+        Err(error) => {
+            tracing::warn!(kind = ?error.kind(), os_error = error.raw_os_error(), "the panic file was not read")
+        }
     }
     let _ = PATH.set(path);
 }

@@ -30,7 +30,7 @@ targetTemplates:
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
-        RUST_LOG: info
+        SIDEVOICE_LOG: info
     settings:
       groups: [app]
 targets:
@@ -81,7 +81,7 @@ targets:
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
-        RUST_LOG: info
+        SIDEVOICE_LOG: info
     settings:
       base:
         ENABLE_BITCODE: false

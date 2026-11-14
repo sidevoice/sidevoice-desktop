@@ -227,7 +227,7 @@ fn options(options: AVAudioSessionCategoryOptions) -> String {
     format!("[{}] (0x{:x})", names.join(","), options.0)
 }
 
-/// The route's outputs (`outputs`) or inputs, each as its port type and name.
+/// The route's outputs (`outputs`) or inputs, each as its port type: the system's enum name (`BluetoothA2DPOutput`), never the port's name, which is the person's ("Ana's AirPods"). The log is public.
 fn ports(route: &AVAudioSessionRouteDescription, outputs: bool) -> String {
     // SAFETY: reads of a live route description and its ports.
     unsafe {
@@ -238,7 +238,7 @@ fn ports(route: &AVAudioSessionRouteDescription, outputs: bool) -> String {
         };
         ports
             .iter()
-            .map(|port| format!("{} \"{}\"", port.portType(), port.portName()))
+            .map(|port| port.portType().to_string())
             .collect::<Vec<_>>()
             .join(", ")
     }

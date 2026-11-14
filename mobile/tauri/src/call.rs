@@ -66,7 +66,7 @@ fn mode_for(on_phone: Option<bool>) -> SessionMode {
 }
 
 /// Logs the audio session as it is `when` (iOS; target `audio`, public in the unified log: the system's names, levels and
-/// the route's port names, never a word of the call). Nothing where there is no session to describe.
+/// the route's port types, never a port's name or a word of the call). Nothing where there is no session to describe.
 fn report(when: &str) {
     if let Some(session) = audio_session::describe() {
         log::info!(target: "audio", "audio {when}: {session}");
@@ -254,8 +254,9 @@ impl PhoneCall {
                 }
                 report("after the mode switch");
             }
-            Err(error) => {
-                log::warn!(target: "audio", "audio mode not switched {now:?} -> {wanted:?} on {why}: {error}");
+            Err(_) => {
+                // The system's text stays out of a public category: the modes and the reason say what was asked.
+                log::warn!(target: "audio", "audio mode not switched {now:?} -> {wanted:?} on {why}");
             }
         }
     }
@@ -279,8 +280,8 @@ impl PhoneCall {
                 loudspeaker::take();
                 true
             }
-            Err(error) => {
-                log::warn!("call: the audio session was not activated again: {error}");
+            Err(_) => {
+                log::warn!("call: the audio session was not activated again");
                 false
             }
         }
@@ -313,8 +314,8 @@ impl CallActivity for PhoneCall {
         // (a reset of the media services) does not keep this one from recording.
         match configure() {
             Ok(mode) => audio.declared = Some(mode),
-            Err(error) => {
-                log::warn!(target: "audio", "call: the audio session was not declared again: {error}");
+            Err(_) => {
+                log::warn!(target: "audio", "call: the audio session was not declared again");
             }
         }
         let deadline = Instant::now() + SYSTEM_AUDIO_LIMIT;
@@ -359,8 +360,8 @@ impl CallActivity for PhoneCall {
         if audio.system != SystemAudio::None {
             return;
         }
-        if let Err(error) = Session::deactivate() {
-            log::warn!("call: the audio session was not given back: {error}");
+        if Session::deactivate().is_err() {
+            log::warn!("call: the audio session was not given back");
         }
         report("as the last voice call's audio stops");
     }
@@ -384,18 +385,20 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
             }
         })
     {
-        log::warn!(target: "audio", "audio: the route is not followed: {error}");
+        log::warn!(target: "audio", "audio: the route is not followed (os error {:?})", error.raw_os_error());
     }
     let routes = Mutex::new(routes);
-    if let Err(error) = audio_session::observe(Arc::new(move |event| {
+    if audio_session::observe(Arc::new(move |event| {
         if let Some(session) = audio_session::describe() {
             log::info!(target: "audio", "audio {event}: {session}");
         }
         if event.starts_with("route change") {
             let _ = routes.lock().unwrap().send(event);
         }
-    })) {
-        log::warn!(target: "audio", "audio: the session is not observed: {error}");
+    }))
+    .is_err()
+    {
+        log::warn!(target: "audio", "audio: the session is not observed");
     }
     let app = app.clone();
     let listener = Arc::new(move |event: Interruption| {
@@ -412,7 +415,7 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
             Interruption::Reset => {
                 match phone.redeclare() {
                     Ok(()) => log::info!("audio session: declared again after the reset"),
-                    Err(error) => log::error!("audio session: not declared again: {error}"),
+                    Err(_) => log::error!("audio session: not declared again"),
                 }
                 phone.reactivate();
                 return;
@@ -422,8 +425,8 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
             room.then(move |room| room.signal(Source::Session, signal));
         }
     });
-    if let Err(error) = interruption::observe(listener) {
-        log::error!("audio session: {error}");
+    if interruption::observe(listener).is_err() {
+        log::error!("audio session: interruptions are not observed");
     }
 }
 
@@ -516,7 +519,7 @@ fn retire(
             Ok(()) => {
                 forgotten.remove(&id);
             }
-            Err(error) => log::warn!("call_forget: {error}"),
+            Err(_) => log::warn!("call_forget: refused"),
         }
     }
 }
@@ -605,7 +608,7 @@ impl RoomCall {
             // The old page's stills go with it (nothing draws them once its call has ended): the new page sends its own.
             room.forgotten.clear();
             if let Err(error) = clear_stills(&room.app) {
-                log::warn!(target: "stills", "call_still: the old page's stills were not removed: {error}");
+                log::warn!(target: "stills", "call_still: the old page's stills were not removed (os error {:?})", error.raw_os_error());
             }
             // What the old page's interruptions held is let go first; the new page starts with none.
             room.clear_interruption();
@@ -673,7 +676,7 @@ impl RoomCall {
             let result = if room.page != page {
                 log::info!(
                     target: "stills",
-                    "call stills: {id} is of page {page}, the room is on {}: dropped",
+                    "call stills: a still is of page {page}, the room is on {}: dropped",
                     room.page
                 );
                 Ok(())
@@ -806,8 +809,8 @@ impl Room {
             self.since = None;
             self.shown = None;
             self.phone.system_call(false);
-            if let Err(error) = stop_call_service(&self.app) {
-                log::warn!("call: the call's service did not stop: {error}");
+            if stop_call_service(&self.app).is_err() {
+                log::warn!("call: the call's service did not stop");
             }
             log::info!("call: ended");
         }
@@ -853,7 +856,7 @@ impl Room {
                 self.updated_at = Some(Instant::now());
                 self.collect();
             }
-            Err(error) => log::warn!("call: the system's call was not updated: {error}"),
+            Err(_) => log::warn!("call: the system's call was not updated"),
         }
     }
 
@@ -1127,8 +1130,8 @@ impl Room {
             || phone.reactivate(),
             || match request_call_focus(&app) {
                 Ok(()) => true,
-                Err(error) => {
-                    log::warn!("call: the audio focus was not asked for again: {error}");
+                Err(_) => {
+                    log::warn!("call: the audio focus was not asked for again");
                     false
                 }
             },
