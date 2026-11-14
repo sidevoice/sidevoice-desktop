@@ -53,7 +53,6 @@
 
 use crate::data::PAIRINGS_FILE;
 use crate::platform::{account, app_data, reset_handoff};
-use log::Level;
 use serde::{Deserialize, Serialize};
 use sidevoice_desktop_core::call_controls::PLACEMENTS_FILE;
 use sidevoice_desktop_core::settings;
@@ -68,6 +67,7 @@ use std::{
     sync::OnceLock,
     time::SystemTime,
 };
+use tracing::Level;
 
 /// The bundle identifier of the builds before `ai.sidevoice.desktop`.
 const LEGACY: &str = "dev.sidevoice.desktop";
@@ -207,7 +207,10 @@ impl Report {
     /// Write the lines to the log, one per thing carried (or not).
     pub fn log(self) {
         for (level, line) in self.0 {
-            log::log!(level, "legacy identifier: {line}");
+            match level {
+                Level::Warn => tracing::warn!(line, "legacy identifier"),
+                _ => tracing::info!(line, "legacy identifier"),
+            }
         }
     }
 

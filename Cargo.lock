@@ -4705,6 +4705,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
+ "serde",
+ "zeroize",
+]
+
+[[package]]
 name = "secret-service"
 version = "5.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5071,11 +5081,11 @@ name = "sidevoice-desktop-core"
 version = "0.5.1"
 dependencies = [
  "global-hotkey",
- "log",
  "serde",
  "serde_json",
  "sidevoice-shared-headset",
  "sidevoice-shared-i18n",
+ "tracing",
  "url",
 ]
 
@@ -5157,6 +5167,7 @@ dependencies = [
  "getrandom 0.3.4",
  "p256",
  "reqwest",
+ "secrecy",
  "semver",
  "serde",
  "serde_json",
@@ -5254,6 +5265,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "keyring-core",
+ "log",
  "regex",
  "security-framework",
  "serde",
@@ -5289,7 +5301,6 @@ version = "0.3.0"
 dependencies = [
  "block2",
  "cpal",
- "log",
  "objc2",
  "objc2-av-foundation",
  "objc2-avf-audio",
@@ -5305,6 +5316,7 @@ dependencies = [
  "tauri-utils",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
+ "tracing",
  "windows-sys 0.61.2",
  "winreg",
 ]

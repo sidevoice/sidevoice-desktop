@@ -136,6 +136,7 @@
 //! version without `-nightly.N`).
 //!
 //! This tooling's own tests: `cargo test --manifest-path xtask/Cargo.toml`.
+#![allow(clippy::disallowed_macros, reason = "build tooling prints for people")]
 
 use std::process::ExitCode;
 

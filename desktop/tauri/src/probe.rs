@@ -60,6 +60,7 @@ pub fn memory_on(app: &tauri::AppHandle, line: &str) {
     }
     let phase = phase.trim().to_owned();
     if let Some(held) = diagnostics::voice_holds(app) {
+        #[allow(clippy::disallowed_macros, reason = "the probe's output, read by CI")]
         println!("memory-holds phase={phase} {held}");
     }
     std::thread::spawn(move || {

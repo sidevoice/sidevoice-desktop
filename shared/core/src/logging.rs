@@ -2,7 +2,9 @@
 //! (docs: the Sidevoice logging guideline, sidevoice/.github-private `docs/logging.md`). The process installs it once; libraries only
 //! emit.
 
+use std::cell::Cell;
 use std::io::{IsTerminal, Write};
+use std::sync::{Mutex, PoisonError};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -55,18 +57,59 @@ fn expand(level: &str, own: &[&str]) -> String {
         .join(",")
 }
 
-/// A `MakeWriter` that hands each formatted event, one whole line, to `sink` (the app's rotating file).
-pub struct Lines<F>(pub F);
+/// The home directory the process resolved, in every spelling it may print in (plain, `Debug`-escaped, with forward slashes),
+/// matched ignoring ASCII case: the writer's backstop for third-party lines and panic text, which shows it as `~`. The types
+/// that keep paths out of fields are the mechanism; this is defence in depth.
+#[derive(Clone, Default)]
+pub struct Home(Vec<String>);
+
+impl Home {
+    pub fn new(home: Option<&std::path::Path>) -> Home {
+        let plain =
+            home.map(|home| home.to_string_lossy().trim_end_matches(['/', '\\']).to_owned()).unwrap_or_default();
+        let mut spellings = vec![plain.clone(), plain.replace('\\', "\\\\"), plain.replace('\\', "/")];
+        spellings.retain(|spelling| spelling.len() > 1);
+        spellings.sort_by_key(|spelling| std::cmp::Reverse(spelling.len()));
+        spellings.dedup();
+        Home(spellings)
+    }
+
+    pub fn redact(&self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        'scan: while let Some(next) = rest.chars().next() {
+            for spelling in &self.0 {
+                if rest.len() >= spelling.len()
+                    && rest.is_char_boundary(spelling.len())
+                    && rest[..spelling.len()].eq_ignore_ascii_case(spelling)
+                {
+                    out.push('~');
+                    rest = &rest[spelling.len()..];
+                    continue 'scan;
+                }
+            }
+            out.push(next);
+            rest = &rest[next.len_utf8()..];
+        }
+        out
+    }
+}
+
+/// A `MakeWriter` that hands each formatted event, one whole line with the home directory shown as `~`, to `sink`.
+pub struct Lines<F> {
+    sink: F,
+    home: Home,
+}
 
 pub struct Line<'a, F: Fn(&str)> {
-    sink: &'a F,
+    lines: &'a Lines<F>,
     buffer: Vec<u8>,
 }
 
 impl<'a, F: Fn(&str) + 'a> MakeWriter<'a> for Lines<F> {
     type Writer = Line<'a, F>;
     fn make_writer(&'a self) -> Self::Writer {
-        Line { sink: &self.0, buffer: Vec::new() }
+        Line { lines: self, buffer: Vec::new() }
     }
 }
 
@@ -80,27 +123,54 @@ impl<F: Fn(&str)> Write for Line<'_, F> {
     }
 }
 
+/// One line at a time, whichever writer and thread: a writer waits for the previous line. Inside the panic hook (the thread
+/// that panicked may hold the lock) it only tries, and writes anyway when it cannot.
+static WRITING: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    static IN_HOOK: Cell<bool> = const { Cell::new(false) };
+}
+
 impl<F: Fn(&str)> Drop for Line<'_, F> {
     fn drop(&mut self) {
         let text = String::from_utf8_lossy(&self.buffer);
         let text = text.trim_end_matches('\n');
-        if !text.is_empty() {
-            (self.sink)(text);
+        if text.is_empty() {
+            return;
         }
+        let text = self.lines.home.redact(text);
+        let _held = if IN_HOOK.with(Cell::get) {
+            WRITING.try_lock().ok()
+        } else {
+            Some(WRITING.lock().unwrap_or_else(PoisonError::into_inner))
+        };
+        (self.lines.sink)(&text);
     }
 }
 
-/// Installs the process's subscriber: `SIDEVOICE_LOG` as the filter, one human `key=value` layer into `file`, and one into
-/// stderr when stderr is a terminal and `SIDEVOICE_DEBUG` is not on (that channel prints its own lines there). It also
-/// routes the `log` crate's records (tao, wry, tauri) into it. A second call does nothing.
-pub fn init<W>(own: &[&str], file: W)
+/// Installs the process's subscriber: `SIDEVOICE_LOG` as the filter, and one human `key=value` layer into `sink` (the file) and
+/// one into stderr when stderr is a terminal and `SIDEVOICE_DEBUG` is not on (that channel prints its own lines there). Both
+/// show `home` as `~`. It also routes the `log` crate's records (tao, wry, tauri) into it, and a panic goes to it through a
+/// hook. A second call does nothing.
+pub fn init<F>(own: &[&str], home: Option<&std::path::Path>, sink: F)
 where
-    W: for<'a> MakeWriter<'a> + Send + Sync + 'static,
+    F: Fn(&str) + Send + Sync + 'static,
 {
     let (filter, invalid) = filter(std::env::var(VARIABLE).ok().as_deref(), own);
-    let file = tracing_subscriber::fmt::layer().with_ansi(false).with_writer(file).log_internal_errors(false);
-    let stderr = (std::io::stderr().is_terminal() && !crate::debug::enabled())
-        .then(|| tracing_subscriber::fmt::layer().with_ansi(true).with_writer(std::io::stderr));
+    let home = Home::new(home);
+    let file = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(Lines { sink, home: home.clone() })
+        .log_internal_errors(false);
+    let stderr = (std::io::stderr().is_terminal() && !crate::debug::enabled()).then(|| {
+        let to_stderr = |line: &str| {
+            let _ = writeln!(std::io::stderr().lock(), "{line}");
+        };
+        tracing_subscriber::fmt::layer()
+            .with_ansi(true)
+            .with_writer(Lines { sink: to_stderr, home })
+            .log_internal_errors(false)
+    });
     let installed = tracing_subscriber::registry().with(file.and_then(stderr).with_filter(filter)).try_init().is_ok();
     if installed {
         install_panic_hook();
@@ -110,10 +180,11 @@ where
     }
 }
 
-/// A panic goes to the log (`target: "panic"`), then to the previous hook (stderr as before).
+/// A panic goes to the log once, through the subscriber (`target: "panic"`), and the default hook is not chained: it would
+/// write the raw message to stderr, past the writer's backstop.
 fn install_panic_hook() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
+    std::panic::set_hook(Box::new(|info| {
+        IN_HOOK.with(|flag| flag.set(true));
         let payload = info.payload();
         let message =
             payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str));
@@ -125,7 +196,7 @@ fn install_panic_hook() {
             panic = message.unwrap_or("non-string payload"),
             "panic"
         );
-        previous(info);
+        IN_HOOK.with(|flag| flag.set(false));
     }));
 }
 
@@ -187,12 +258,15 @@ mod tests {
     fn a_line_reaches_the_sink_whole() {
         use std::sync::Mutex;
         let seen = Mutex::new(Vec::new());
-        let lines = Lines(|line: &str| seen.lock().unwrap().push(line.to_owned()));
+        let lines = Lines {
+            sink: |line: &str| seen.lock().unwrap().push(line.to_owned()),
+            home: Home::new(Some(std::path::Path::new("/home/ana"))),
+        };
         let mut writer = lines.make_writer();
-        writer.write_all(b"one ").unwrap();
+        writer.write_all(b"one /HOME/ana/x ").unwrap();
         writer.write_all(b"line\n").unwrap();
         drop(writer);
-        assert_eq!(*seen.lock().unwrap(), ["one line"]);
+        assert_eq!(*seen.lock().unwrap(), ["one ~/x line"]);
     }
 
     #[test]
@@ -201,5 +275,13 @@ mod tests {
         for hostile in ["", "a b", "x\nINFO forged", &"a".repeat(65), "é"] {
             assert_eq!(client_id(hostile), "invalid");
         }
+    }
+
+    #[test]
+    fn the_home_is_redacted_in_every_spelling() {
+        let home = Home::new(Some(std::path::Path::new("C:\\Users\\Ana")));
+        assert_eq!(home.redact("a C:\\Users\\Ana\\x b C:\\\\Users\\\\Ana c c:/users/ana/y"), "a ~\\x b ~ c ~/y");
+        assert_eq!(Home::new(None).redact("/x"), "/x");
+        assert_eq!(Home::new(Some(std::path::Path::new("/"))).redact("/x"), "/x");
     }
 }

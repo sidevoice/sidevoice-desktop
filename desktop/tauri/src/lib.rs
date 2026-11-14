@@ -267,20 +267,17 @@ const OWN_TARGETS: &[&str] = &[
 
 /// The process's subscriber, first thing in `run`.
 fn init_logging() {
-    sidevoice_shared::logging::init(
-        OWN_TARGETS,
-        sidevoice_shared::logging::Lines(|line: &str| {
-            if let Some(file) = LOG_SINK.get() {
-                file.log(
-                    &log::Record::builder()
-                        .args(format_args!("{line}"))
-                        .level(log::Level::Info)
-                        .target("sidevoice")
-                        .build(),
-                );
-            }
-        }),
-    );
+    sidevoice_shared::logging::init(OWN_TARGETS, platform::account::home().ok().as_deref(), |line: &str| {
+        if let Some(file) = LOG_SINK.get() {
+            file.log(
+                &log::Record::builder()
+                    .args(format_args!("{line}"))
+                    .level(log::Level::Info)
+                    .target("sidevoice")
+                    .build(),
+            );
+        }
+    });
 }
 
 // Diagnostics on stderr with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them): sidevoice-shared's, shared with the
@@ -506,6 +503,10 @@ pub fn run() {
             // Before the log and the app state exist: the system's language is read here.
             let preferred = platform::locale::preferred();
             let language = sidevoice_desktop_core::i18n::language(&preferred);
+            #[allow(
+                clippy::disallowed_macros,
+                reason = "output for the person: the reset is busy, before any log exists"
+            )]
             eprintln!("{}", sidevoice_desktop_core::i18n::t(language, "startup.reset_busy"));
             return;
         }
@@ -664,5 +665,6 @@ pub fn run_reset_helper() {
 /// The fresh-process check of System Audio Recording (`--sidevoice-capture-check`, docs/MEDIA_DUCK.md): prints the system's
 /// answer for this process, which has only just started, and returns. Nothing of the app starts.
 pub fn run_capture_check() {
+    #[allow(clippy::disallowed_macros, reason = "the capture check's answer, read by the parent process")]
     println!("{}", platform::media_duck::capture_check().word());
 }

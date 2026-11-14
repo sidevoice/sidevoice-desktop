@@ -49,10 +49,10 @@ pub struct Node {
     pub host: Option<String>,
 }
 
-#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Paired {
     pub device_id: String,
-    pub token: String,
+    pub token: secrecy::SecretString,
     pub node: Node,
 }
 /// The device id only: the token is a secret, and the node holds the machine's name.

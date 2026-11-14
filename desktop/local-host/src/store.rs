@@ -4,6 +4,7 @@
 
 use crate::checks::Check;
 use crate::Refusal;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
 use std::io;
@@ -12,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const FILE_NAME: &str = "local-host.json";
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Pairing {
     /// The core's fingerprint when the app paired.
     pub fp: String,
@@ -20,12 +21,35 @@ pub struct Pairing {
     pub public_key: String,
     pub device_id: String,
     /// The device token: sent only over the core's socket, never to the page.
-    pub token: String,
+    #[serde(serialize_with = "save_token")]
+    pub token: SecretString,
     /// The machine's name, as the core calls itself.
     pub host: String,
     /// ISO-8601, UTC.
     pub paired_at: String,
 }
+
+/// The one place the token is written out: the private file.
+#[allow(clippy::disallowed_methods, reason = "storing the token in the 0600 pairing file")]
+fn save_token<S: serde::Serializer>(token: &SecretString, out: S) -> Result<S::Ok, S::Error> {
+    out.serialize_str(token.expose_secret())
+}
+
+impl PartialEq for Pairing {
+    #[allow(clippy::disallowed_methods, reason = "comparing two pairings")]
+    fn eq(&self, other: &Self) -> bool {
+        (&self.fp, &self.public_key, &self.device_id, self.token.expose_secret(), &self.host, &self.paired_at)
+            == (
+                &other.fp,
+                &other.public_key,
+                &other.device_id,
+                other.token.expose_secret(),
+                &other.host,
+                &other.paired_at,
+            )
+    }
+}
+impl Eq for Pairing {}
 
 impl Pairing {
     /// What may be logged of a pairing: not the token, the key or the machine's name.
@@ -109,7 +133,7 @@ mod tests {
             fp: "fp".into(),
             public_key: "key".into(),
             device_id: "dev".into(),
-            token: "secret-token".into(),
+            token: SecretString::from("secret-token"),
             host: "MacBook".into(),
             paired_at: now_iso(),
         }

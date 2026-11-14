@@ -93,7 +93,7 @@ fn scanner<O: Os>() -> impl FnMut() -> Devices {
         if last != Some(now) {
             last = Some(now);
             let default = host.default_input_device().map(|device| device.default_input_config());
-            log::info!("{}", seen(endpoints, now.1, default));
+            tracing::info!(devices = %seen(endpoints, now.1, default), "microphone devices");
         }
         Some(endpoints > 0)
     })

@@ -8,7 +8,7 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
-log = "0.4"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # The loader of the app's texts (src/i18n.rs): serde_json only, no Tauri.
 sidevoice-shared-i18n = { path = "../../shared/i18n" }
 sidevoice-shared-headset = { path = "../../shared/headset" }

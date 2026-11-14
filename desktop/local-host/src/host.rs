@@ -47,6 +47,7 @@ use crate::state::{self, Link, Observed, Report, State};
 use crate::store::{self, Pairing};
 use crate::update::{self, Facts, Update, Updates};
 use crate::Refusal;
+use secrecy::ExposeSecret;
 use serde_json::{json, Value};
 use std::io;
 use std::path::PathBuf;
@@ -395,7 +396,9 @@ impl LocalHost {
             inner.link = link;
             inner.pairing = pairing;
         }
-        let token = inner.pairing.as_ref().filter(|_| inner.link == Link::Paired).map(|p| p.token.clone());
+        #[allow(clippy::disallowed_methods, reason = "handed to the proxy, which sends it to the core")]
+        let token =
+            inner.pairing.as_ref().filter(|_| inner.link == Link::Paired).map(|p| p.token.expose_secret().to_owned());
         self.proxy.set_token(token);
     }
 
@@ -417,7 +420,9 @@ impl LocalHost {
             Ok(false) => return Some((Link::Failed(mismatch()), None)),
             Err(_) => return None,
         }
-        match self.core.accepts(&stored.token) {
+        #[allow(clippy::disallowed_methods, reason = "sent to the core to check it")]
+        let accepted = self.core.accepts(stored.token.expose_secret());
+        match accepted {
             Ok(true) => {
                 (self.log)(&format!("local-host paired (stored) {}", stored.redacted()));
                 Some((Link::Paired, Some(stored)))
@@ -432,7 +437,8 @@ impl LocalHost {
 
     /// Paired: the core still accepts the token (a revocation from another device shows here).
     fn recheck(&self) -> Option<(Link, Option<Pairing>)> {
-        let token = self.inner.lock().unwrap().pairing.as_ref()?.token.clone();
+        #[allow(clippy::disallowed_methods, reason = "sent to the core to check it")]
+        let token = self.inner.lock().unwrap().pairing.as_ref()?.token.expose_secret().to_owned();
         match self.core.accepts(&token) {
             Ok(false) => {
                 (self.log)("local-host token refused by the core");

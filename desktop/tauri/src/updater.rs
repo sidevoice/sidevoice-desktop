@@ -40,8 +40,8 @@ pub fn setup(app: &AppHandle) {
     if !host::updates_available(CHANNEL) {
         return;
     }
-    if let Err(e) = app.plugin(tauri_plugin_updater::Builder::new().build()) {
-        return log::error!("the updater did not start: {e}");
+    if app.plugin(tauri_plugin_updater::Builder::new().build()).is_err() {
+        return tracing::error!(code = "updater_start", "the updater did not start");
     }
     app.manage(Mutex::new(Updates::default()));
     // What a relaunch after an update came up as: the version and the bundle it runs from.
@@ -175,7 +175,7 @@ async fn download_task(app: AppHandle, update: Update, token: core::Token, _perm
             }
             Err(e) => {
                 let _ = &e;
-                log::error!("updater download failed (the updater's error text is not logged)");
+                tracing::error!(code = "download_failed", "updater download failed");
                 u.status = Status::new(State::Available, &update.version).failed(ErrorCode::DownloadFailed);
             }
         }
@@ -226,7 +226,7 @@ fn install(app: &AppHandle, restart: bool) {
     with(app, |u| {
         u.installing = false;
         if installed.is_err() {
-            log::error!("updater install failed (the updater's error text is not logged)");
+            tracing::error!(code = "install_failed", "updater install failed");
             (u.bytes, u.status) = (Some(bytes), u.status.clone().failed(ErrorCode::InstallFailed));
         }
     });

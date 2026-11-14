@@ -441,10 +441,7 @@ fn census(when: &str) {
     let info = unsafe { MPNowPlayingInfoCenter::defaultCenter().nowPlayingInfo() }.is_some();
     let handlers = *REGISTERED.lock().unwrap();
     let released = enabled.is_empty() && !handlers && !info;
-    log::info!(
-        "call: now playing {when}: released={released} enabled=[{}] handlers={handlers} info={info}",
-        enabled.join(",")
-    );
+    tracing::info!(when, released, enabled = %enabled.join(","), handlers, info, "now playing census");
 }
 
 /// Whether the double press's `nextTrackCommand` has its handler now. Only touched on the main thread.

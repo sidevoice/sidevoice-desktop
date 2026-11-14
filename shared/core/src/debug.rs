@@ -9,6 +9,7 @@ pub fn enabled() -> bool {
 pub fn debug(message: &str) {
     tracing::info!("{message}");
     if enabled() {
+        #[allow(clippy::disallowed_macros, reason = "the SIDEVOICE_DEBUG=1 lines CI's smoke tests read, byte for byte")]
         eprintln!("sidevoice: {message}");
     }
 }
@@ -22,6 +23,7 @@ pub fn debug_detail(message: impl FnOnce() -> String) {
     let message = message();
     tracing::debug!("{message}");
     if enabled() {
+        #[allow(clippy::disallowed_macros, reason = "the SIDEVOICE_DEBUG=1 lines CI's smoke tests read, byte for byte")]
         eprintln!("sidevoice: {message}");
     }
 }
