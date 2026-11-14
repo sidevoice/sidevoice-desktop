@@ -208,7 +208,7 @@ impl Report {
     pub fn log(self) {
         for (level, line) in self.0 {
             match level {
-                Level::Warn => tracing::warn!(line, "legacy identifier"),
+                Level::WARN => tracing::warn!(line, "legacy identifier"),
                 _ => tracing::info!(line, "legacy identifier"),
             }
         }
@@ -225,7 +225,7 @@ type Hook = Box<dyn FnOnce() -> bool + Send>;
 
 /// Carry the old identifier's folders and provider keys over to the app's own. See the module.
 pub fn carry_over() -> Report {
-    let said = |line: &str| Report(vec![(Level::Info, line.to_owned())]);
+    let said = |line: &str| Report(vec![(Level::INFO, line.to_owned())]);
     let Ok(control) = reset_handoff::state_dir() else { return said("no control directory: not looked at") };
     if !hold_instance(&control) {
         return said("another instance is running: left for a later launch");
@@ -273,7 +273,7 @@ fn run(
         Ok(state) if state.finished => return report,
         Ok(state) => state,
         Err(error) => {
-            report.say(Level::Warn, format!("the journal cannot be read ({}): nothing done", error.kind()));
+            report.say(Level::WARN, format!("the journal cannot be read ({}): nothing done", error.kind()));
             return report;
         }
     };
@@ -281,7 +281,7 @@ fn run(
         // Once, and written before anything is carried: carrying changes what this looks at.
         state.configured = Some(configured(&folders[0].1));
         if let Err(error) = io.save(control, &state) {
-            report.say(Level::Warn, format!("the journal cannot be written ({}): nothing done", error.kind()));
+            report.say(Level::WARN, format!("the journal cannot be written ({}): nothing done", error.kind()));
             return report;
         }
     }
@@ -294,7 +294,7 @@ fn run(
     let keys = keys(control, list, copy, &mut report);
     state.finished = state.folders && keys;
     if let Err(error) = io.save(control, &state) {
-        report.say(Level::Warn, format!("the journal cannot be written ({})", error.kind()));
+        report.say(Level::WARN, format!("the journal cannot be written ({})", error.kind()));
     }
     report
 }
@@ -305,7 +305,7 @@ fn folder(from: &Path, to: &Path, kept: bool, io: &Io, report: &mut Report) -> b
     let (shown_from, shown_to) = (from.display(), to.display());
     if kept {
         if exists(from).unwrap_or(true) {
-            report.say(Level::Info, format!("left {shown_from}: {shown_to} is set up"));
+            report.say(Level::INFO, format!("left {shown_from}: {shown_to} is set up"));
         }
         return true;
     }
@@ -316,11 +316,11 @@ fn folder(from: &Path, to: &Path, kept: bool, io: &Io, report: &mut Report) -> b
             format!("copied {shown_from} to {shown_to}; what was there is kept as {}", backup.display())
         }
         Err(error) => {
-            report.say(Level::Warn, format!("could not copy {shown_from} to {shown_to}: {}", error.kind()));
+            report.say(Level::WARN, format!("could not copy {shown_from} to {shown_to}: {}", error.kind()));
             return false;
         }
     };
-    report.say(Level::Info, line);
+    report.say(Level::INFO, line);
     true
 }
 
@@ -461,7 +461,7 @@ fn keys(
     let providers = match list() {
         Ok(providers) => providers,
         Err(error) => {
-            report.say(Level::Warn, format!("provider keys not looked at ({error:?})"));
+            report.say(Level::WARN, format!("provider keys not looked at ({error:?})"));
             return false;
         }
     };
@@ -480,12 +480,12 @@ fn keys(
         let may_write: Hook = Box::new(move || running(&control));
         let settled: Hook = Box::new(move || Files::write_private(&record, b"").is_ok());
         match copy(&provider, may_write, settled) {
-            Ok(true) => report.say(Level::Info, format!("copied the {provider} key to the new namespace")),
+            Ok(true) => report.say(Level::INFO, format!("copied the {provider} key to the new namespace")),
             Ok(false) => {
-                report.say(Level::Info, format!("nothing to copy for {provider}: the new namespace holds a key"))
+                report.say(Level::INFO, format!("nothing to copy for {provider}: the new namespace holds a key"))
             }
             Err(error) => {
-                report.say(Level::Warn, format!("could not copy the {provider} key: {error:?}"));
+                report.say(Level::WARN, format!("could not copy the {provider} key: {error:?}"));
                 all = false;
             }
         }
@@ -622,7 +622,7 @@ mod tests {
         assert!(root.join("new-data.first-start-backup/logs/log").exists());
         assert_eq!(read(&root.join("new-web.first-start-backup"), "note"), "first-start web");
         assert_eq!(report.0.len(), 2, "one line per folder");
-        assert!(report.0.iter().all(|(level, line)| *level == Level::Info && line.contains("first-start-backup")));
+        assert!(report.0.iter().all(|(level, line)| *level == Level::INFO && line.contains("first-start-backup")));
 
         // Finished: an old folder that changes later is not carried again.
         put(&folders[1].0, "note", "another old web");
@@ -644,7 +644,7 @@ mod tests {
         assert!(!root.join("new-data.first-start-backup").exists() && !root.join("new-data.migrating").exists());
         assert!(read_state(&control).unwrap().finished);
         assert_eq!(report.0.len(), 2);
-        assert!(report.0.iter().all(|(level, line)| *level == Level::Info && line.starts_with("left ")));
+        assert!(report.0.iter().all(|(level, line)| *level == Level::INFO && line.starts_with("left ")));
     }
 
     #[test]
@@ -818,7 +818,7 @@ mod tests {
         assert_eq!(read(new_data, store::FILE_NAME), "live token");
         assert!(copies_of(new_data).unwrap().is_empty(), "the copy is thrown away");
         assert_eq!(read(&folders[1].1, "note"), "old web", "the other folder goes on");
-        assert!(report.0.iter().any(|(level, line)| *level == Level::Warn && line.contains("resource busy")));
+        assert!(report.0.iter().any(|(level, line)| *level == Level::WARN && line.contains("resource busy")));
         assert!(!read_state(&control).unwrap().finished);
 
         healthy(&folders, &control);
@@ -874,7 +874,7 @@ mod tests {
 
         let report = run(&folders, &control, &Io::default(), || Err(KeyError::Unavailable), no_copy);
         assert_carried_but_open(&folders, &control);
-        assert!(report.0.iter().any(|(level, line)| *level == Level::Warn && line.contains("Unavailable")));
+        assert!(report.0.iter().any(|(level, line)| *level == Level::WARN && line.contains("Unavailable")));
 
         // Deleted by hand meanwhile: the folders are settled, so it does not come back.
         fs::remove_dir_all(&folders[1].1).unwrap();
@@ -1018,7 +1018,7 @@ mod tests {
         assert_eq!(read(&folders[0].1, "note"), "old");
         assert_eq!(read(&folders[2].1, "note"), "old");
         let levels: Vec<Level> = report.0.iter().map(|(level, _)| *level).collect();
-        assert_eq!(levels, vec![Level::Info, Level::Warn, Level::Info]);
+        assert_eq!(levels, vec![Level::INFO, Level::WARN, Level::INFO]);
         let state = read_state(&control).unwrap();
         assert!(!state.folders && !state.finished);
     }

@@ -1,21 +1,26 @@
-#![allow(clippy::disallowed_macros, reason = "a build script talks to cargo and the terminal")]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a build script talks to cargo and the terminal"
+)]
 fn main() {
     build_channel();
     // The app's own commands, declared so its capability can grant them: the page's number, its report of the call, the
     // creatures' stills its surfaces show (`call_page`, `call_state`, `call_still`, `call_forget`) and the developer
     // options' one (`developer_options`), the headset's presses' (`global_shortcuts`), the cues' player (`cue`), the system's output picker (`audio_route`) and whether the
     // screen is locked (`screen_locked`). What the apps share is the plugin's (sidevoice-shared-tauri).
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
-        "audio_route",
-        "call_page",
-        "call_state",
-        "call_still",
-        "call_forget",
-        "cue",
-        "developer_options",
-        "global_shortcuts",
-        "screen_locked",
-    ])))
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
+        tauri_build::AppManifest::new().commands(&[
+            "audio_route",
+            "call_page",
+            "call_state",
+            "call_still",
+            "call_forget",
+            "cue",
+            "developer_options",
+            "global_shortcuts",
+            "screen_locked",
+        ]),
+    ))
     .expect("failed to run tauri-build");
 }
 
@@ -33,9 +38,19 @@ fn build_channel() {
         std::env::var(name).unwrap_or_default()
     };
     let (channel, commit, date) = (var(CHANNEL), var(COMMIT), var(DATE));
-    let channel = if channel.is_empty() { "dev".to_owned() } else { channel };
-    assert!(matches!(channel.as_str(), "release" | "nightly" | "dev"), "{CHANNEL}={channel}: release, nightly or dev");
-    assert!(channel != "nightly" || (!commit.is_empty() && !date.is_empty()), "a nightly says its commit and date");
+    let channel = if channel.is_empty() {
+        "dev".to_owned()
+    } else {
+        channel
+    };
+    assert!(
+        matches!(channel.as_str(), "release" | "nightly" | "dev"),
+        "{CHANNEL}={channel}: release, nightly or dev"
+    );
+    assert!(
+        channel != "nightly" || (!commit.is_empty() && !date.is_empty()),
+        "a nightly says its commit and date"
+    );
     println!("cargo:rustc-env={CHANNEL}={channel}");
     println!("cargo:rustc-env={COMMIT}={commit}");
     println!("cargo:rustc-env={DATE}={date}");
