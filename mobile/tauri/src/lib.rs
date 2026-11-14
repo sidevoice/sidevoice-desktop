@@ -507,6 +507,8 @@ fn run_app() {
     // from aborts it before anything else is written (`panics`).
     panics::install();
     init_logging();
+    #[allow(clippy::disallowed_macros, reason = "the context Tauri generates prints its own diagnostics")]
+    let context = tauri::generate_context!();
     // Where the call's events go: over the channel the page opens (the shared plugin's `voice_events`).
     let pages = Pages::default();
     let events = pages.clone();
@@ -672,7 +674,7 @@ fn run_app() {
                 })?;
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building the Sidevoice mobile app")
         .run(|app, event| {
             // A link the app is opened with, from the call's surfaces (iOS: the Live Activity's stack,
