@@ -5104,6 +5104,7 @@ dependencies = [
  "p256",
  "process-wrap",
  "regex",
+ "secrecy",
  "security-framework",
  "serde",
  "serde_json",

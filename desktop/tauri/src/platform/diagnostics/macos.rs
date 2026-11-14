@@ -11,8 +11,8 @@ pub(super) struct Native;
 impl Os for Native {
     #[cfg(feature = "probe")]
     fn report_handlers_ran() {
+        #[allow(clippy::disallowed_macros, reason = "a SIDEVOICE_DEBUG line read by CI")]
         extern "C" fn ran() {
-            #[allow(clippy::disallowed_macros, reason = "a SIDEVOICE_DEBUG line read by CI")]
             eprintln!("sidevoice: probe: exit handlers ran");
         }
         // SAFETY: registers a plain function, which only writes to stderr.

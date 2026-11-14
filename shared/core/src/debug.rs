@@ -6,16 +6,17 @@ pub fn enabled() -> bool {
 }
 
 /// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
+#[allow(clippy::disallowed_macros, reason = "the SIDEVOICE_DEBUG=1 lines CI's smoke tests read, byte for byte")]
 pub fn debug(message: &str) {
     tracing::info!("{message}");
     if enabled() {
-        #[allow(clippy::disallowed_macros, reason = "the SIDEVOICE_DEBUG=1 lines CI's smoke tests read, byte for byte")]
         eprintln!("sidevoice: {message}");
     }
 }
 
 /// A line too frequent or too large for the log by default: in it at level `debug` (`SIDEVOICE_LOG`), and on stderr
 /// with `SIDEVOICE_DEBUG=1`.
+#[allow(clippy::disallowed_macros, reason = "the SIDEVOICE_DEBUG=1 lines CI's smoke tests read, byte for byte")]
 pub fn debug_detail(message: impl FnOnce() -> String) {
     if !enabled() && !tracing::enabled!(tracing::Level::DEBUG) {
         return;
@@ -23,7 +24,6 @@ pub fn debug_detail(message: impl FnOnce() -> String) {
     let message = message();
     tracing::debug!("{message}");
     if enabled() {
-        #[allow(clippy::disallowed_macros, reason = "the SIDEVOICE_DEBUG=1 lines CI's smoke tests read, byte for byte")]
         eprintln!("sidevoice: {message}");
     }
 }

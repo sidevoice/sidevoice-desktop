@@ -507,7 +507,7 @@ pub fn run() {
                 clippy::disallowed_macros,
                 reason = "output for the person: the reset is busy, before any log exists"
             )]
-            eprintln!("{}", sidevoice_desktop_core::i18n::t(language, "startup.reset_busy"));
+            tell_the_person(sidevoice_desktop_core::i18n::t(language, "startup.reset_busy"));
             return;
         }
     };
@@ -664,7 +664,13 @@ pub fn run_reset_helper() {
 
 /// The fresh-process check of System Audio Recording (`--sidevoice-capture-check`, docs/MEDIA_DUCK.md): prints the system's
 /// answer for this process, which has only just started, and returns. Nothing of the app starts.
+#[allow(clippy::disallowed_macros, reason = "the capture check's answer, read by the parent process")]
 pub fn run_capture_check() {
-    #[allow(clippy::disallowed_macros, reason = "the capture check's answer, read by the parent process")]
     println!("{}", platform::media_duck::capture_check().word());
+}
+
+/// Output meant for the person, when no log exists yet.
+#[allow(clippy::disallowed_macros, reason = "output for the person, before any log exists")]
+fn tell_the_person(text: impl std::fmt::Display) {
+    eprintln!("{text}");
 }

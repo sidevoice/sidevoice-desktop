@@ -53,6 +53,7 @@ pub fn watch_exit_handlers() {
 /// With `SIDEVOICE_DEBUG_PAGE=memory.html`, at each line `probe-memory PHASE` the page logs: the app's memory then,
 /// printed as `memory phase=PHASE ...` (core `memory`), on a thread of its own (`vmmap` takes a second or two; the page
 /// waits for it). `probe memory` reads the lines back (#145).
+#[allow(clippy::disallowed_macros, reason = "the probe's output, read by CI")]
 pub fn memory_on(app: &tauri::AppHandle, line: &str) {
     let Some(phase) = line.strip_prefix("probe-memory ") else { return };
     if !crate::debugging() {
@@ -60,7 +61,6 @@ pub fn memory_on(app: &tauri::AppHandle, line: &str) {
     }
     let phase = phase.trim().to_owned();
     if let Some(held) = diagnostics::voice_holds(app) {
-        #[allow(clippy::disallowed_macros, reason = "the probe's output, read by CI")]
         println!("memory-holds phase={phase} {held}");
     }
     std::thread::spawn(move || {
