@@ -13,9 +13,11 @@ fn nothing_seeded_reaches_the_log() {
     std::env::set_var("SIDEVOICE_LOG", "trace");
     let lines = Arc::new(Mutex::new(Vec::<String>::new()));
     let sink = Arc::clone(&lines);
-    sidevoice_shared::logging::init(&["sidevoice_shared"], Some(std::path::Path::new(HOME)), move |line| {
-        sink.lock().unwrap().push(line.to_owned())
-    });
+    sidevoice_shared::logging::init(
+        &["sidevoice_shared", "sidevoice_local_host", "sidevoice_desktop_lib", "panic"],
+        Some(std::path::Path::new(HOME)),
+        move |line| sink.lock().unwrap().push(line.to_owned()),
+    );
 
     // Our own target: a path the code was careless with, on this thread and on another.
     tracing::info!(target: "sidevoice_shared::canary", stage = "open", path = %format!("{HOME}/project"), "canary event");
@@ -24,6 +26,10 @@ fn nothing_seeded_reaches_the_log() {
     log::warn!(target: "sidevoice_shared::canary", "canary bridge {HOME}/log");
     log::info!(target: "tungstenite::handshake", "Request: {URL} {WORDS}");
     tracing::debug!(target: "reqwest::connect", "{URL} {WORDS}");
+    // Lifecycle lines, as the app and the local host emit them: fixed fields, and they reach the file.
+    tracing::info!(target: "sidevoice_local_host::host", state = "paired", "lifecycle local-host state");
+    tracing::info!(target: "sidevoice_desktop_lib", call_card = true, "lifecycle app launch");
+    tracing::warn!(target: "sidevoice_local_host::proxy", http_status = 503u16, reason = "not_paired", "lifecycle proxy refused");
     // The SIDEVOICE_DEBUG helpers are not the log: a voice event with a transcript goes through them in the call host.
     sidevoice_shared::debug::debug(&format!("voice event {{\"phase\":\"finished\",\"text\":\"{WORDS}\"}}"));
     sidevoice_shared::debug::debug_detail(|| format!("snapshot {WORDS}"));
@@ -46,8 +52,9 @@ fn nothing_seeded_reaches_the_log() {
         "canary bridge ~/log",
         "ERROR panic: panic",
         "canary-thread",
-        "~/panic",
-        "~/caught",
+        "lifecycle local-host state",
+        "lifecycle app launch",
+        "lifecycle proxy refused",
     ] {
         let found = text.contains(expected);
         assert!(found, "missing {expected:?} in:\n{text}");
@@ -58,4 +65,6 @@ fn nothing_seeded_reaches_the_log() {
         assert!(!text.contains(&decimal(seed)), "{seed:?} reached the log as bytes");
     }
     assert!(!text.contains(HOME), "the home directory reached the log:\n{text}");
+    // A panic keeps its place and thread, never its message.
+    assert!(!text.contains("failed at") && !text.contains("second"), "a panic message reached the log:\n{text}");
 }

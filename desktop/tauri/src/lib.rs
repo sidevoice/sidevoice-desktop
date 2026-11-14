@@ -168,19 +168,21 @@ fn bridge_state(
     let current_label = state.room_label.lock().unwrap().clone();
     if current_label.as_deref() != Some(webview.label()) {
         debug(&format!("bridge_state refused: window {}", webview.label()));
+        tracing::warn!(reason = "not_room_window", "bridge_state refused");
         return Err("not the room window".into());
     }
     let actual = webview.url().map(|u| settings::url_origin(&u)).ok();
     if actual.as_deref() != Some(APP_ORIGIN) {
         debug(&format!("bridge_state refused: origin {actual:?}"));
+        tracing::warn!(reason = "not_app_page", "bridge_state refused");
         return Err("not the app's own page".into());
     }
     let previous = std::mem::replace(&mut *state.call.lock().unwrap(), snapshot.clone());
     if let Some(changes) = snapshot.changes_since(&previous) {
         tracing::info!(changes, "bridge_state");
     }
-    // The whole snapshot only at level debug or with SIDEVOICE_DEBUG=1, and without the rest of the room's projection:
-    // its facts carry the conversation's words, which stay out of the log.
+    // The whole snapshot only on stderr with SIDEVOICE_DEBUG=1 (never the log), without the rest of the room's projection:
+    // its facts carry the conversation's words.
     debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
     media_controls::update(&app, &media_state(&snapshot, shortcuts::headset_press_keeps_mic(&app)));
@@ -436,12 +438,14 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         // wry grants every request when the app sets no handler; this one denies the microphone, the camera and the rest.
         .on_permission_request(|_webview, kind| {
             debug(&format!("media {kind:?}: denied"));
+            tracing::warn!(kind = ?kind, "media permission denied");
             PermissionResponse::Deny
         })
         .on_page_load(move |_webview, payload| {
             // `Started` is WebKit's didCommitNavigation: after redirects, main frame only.
             if payload.event() == PageLoadEvent::Started {
                 debug(&format!("page {}", url_path(payload.url())));
+                tracing::info!(url = %url_path(payload.url()), "page");
                 reset_call_state(&page_app);
             }
         })
@@ -560,6 +564,7 @@ pub fn run() {
             application::prepare(&handle)?;
             shortcuts::setup(&handle);
             debug(&format!("launch {}", app_report(&handle)));
+            tracing::info!(call_card = !call_card_disabled(), "app launch");
             tray::create(&handle)?;
             let media_app = handle.clone();
             media_controls::attach(
@@ -626,11 +631,15 @@ pub fn run() {
             application::activate(&handle);
             // How macOS sees the app once everything exists, and again once activation has settled (#117).
             debug(&format!("ready {}", app_report(&handle)));
+            tracing::info!("app ready");
             let later = handle.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 let report = later.clone();
-                let _ = later.run_on_main_thread(move || debug(&format!("settled {}", app_report(&report))));
+                let _ = later.run_on_main_thread(move || {
+                    debug(&format!("settled {}", app_report(&report)));
+                    tracing::info!("app settled");
+                });
             });
             data::finalize_relaunched_reset();
             reset_handoff::finish_startup(startup);

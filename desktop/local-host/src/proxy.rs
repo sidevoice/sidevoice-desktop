@@ -599,6 +599,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         Ok(upstream) => upstream,
         Err(e) => {
             (shared.log)(&format!("proxy 502 {} {path} (core not reachable: {})", head.method, e.code()));
+            tracing::warn!(http_status = 502u16, code = e.code(), "proxy core not reachable");
             return answer(client, 502, cors(&origin));
         }
     };
@@ -615,6 +616,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
     };
     let Some(token) = token else {
         (shared.log)(&format!("proxy 503 {} {path} (not paired)", head.method));
+        tracing::warn!(http_status = 503u16, reason = "not_paired", "proxy refused");
         return answer(client, 503, cors(&origin));
     };
 
@@ -639,6 +641,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         Ok(end) => end,
         Err(_) => {
             (shared.log)(&format!("proxy 502 {} {path} (no answer from the core)", head.method));
+            tracing::warn!(http_status = 502u16, reason = "no_answer", "proxy core did not answer");
             return answer(client, 502, cors(&origin));
         }
     };
@@ -646,6 +649,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         return answer(client, 502, cors(&origin));
     };
     (shared.log)(&format!("proxy forwarded {} {path} -> {}", head.method, response.status));
+    tracing::debug!(http_status = response.status, "proxy forwarded");
 
     if upgrade && response.status == 101 {
         // The core accepted the socket: its answer as it is, then bytes both ways until either side ends.

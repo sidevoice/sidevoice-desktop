@@ -5179,6 +5179,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -77,10 +77,12 @@ test("a key or code that is not a dotted code, and a name that is not an Error, 
   const { win, calls } = setup();
   win.console.error({ key: "sk_abcdefghijklmnop", code: "deadbeefdeadbeef", name: "canary words" });
   win.console.error({ key: "voice.failure.model", code: "UPPER.case", name: "NotAllowed" });
-  win.console.error({ name: "AbortError", code: "a.b" });
+  win.console.error({ name: "AbortError", code: "core.refused" });
+  win.console.error({ code: "john.doe", key: "a.b" });
   assert.equal(calls[0].message, "console.error: [object]");
   assert.equal(calls[1].message, "console.error: {key=voice.failure.model}");
-  assert.equal(calls[2].message, "console.error: {name=AbortError code=a.b}");
+  assert.equal(calls[2].message, "console.error: {name=AbortError code=core.refused}");
+  assert.equal(calls[3].message, "console.error: [object]", "two plain words are not a code");
 });
 
 test("only a line shaped like a frame is read as one", () => {

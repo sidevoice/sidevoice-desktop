@@ -17,7 +17,9 @@
   const MAX_PER_WINDOW = 50; // lines per 10 s
   const WINDOW_MS = 10000;
   const NAME = /^[A-Za-z]{1,40}(Error|Exception)$/;
-  const KEY = /^[a-z][a-z0-9_]{0,31}(\.[a-z0-9_]{1,32}){1,4}$/; // a dotted code: voice.failure.model
+  const KEY = /^[a-z][a-z0-9_]{0,31}(\.[a-z0-9_]{1,32}){2,4}$/; // a dotted code of three parts: voice.failure.model
+  const PREFIX = /^(voice|core|engine|app|call)\.[a-z0-9_]{1,32}(\.[a-z0-9_]{1,32}){0,3}$/; // or one of ours: core.refused
+  const isCode = (v) => KEY.test(v) || PREFIX.test(v);
   const KEY_FILE = /^[A-Za-z0-9_.-]{1,64}$/;
   const FRAME = /([A-Za-z0-9_.-]{1,64}):(\d{1,7})(?::(\d{1,7}))?\)?\s*$/;
 
@@ -39,7 +41,7 @@
     if (typeof value === "string") return "[string]";
     if (typeof value !== "object") return `[${typeof value}]`;
     const picked = [];
-    for (const [field, shape] of [["name", NAME], ["code", KEY], ["key", KEY]]) {
+    for (const [field, shape] of [["name", { test: (v) => NAME.test(v) }], ["code", { test: isCode }], ["key", { test: isCode }]]) {
       const v = value[field];
       if (typeof v === "string" && shape.test(v)) picked.push(`${field}=${v}`);
     }

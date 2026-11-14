@@ -923,6 +923,7 @@ fn forward(
                         take.samples.len(),
                         take.turns.len()
                     ));
+                    tracing::debug!(samples = take.samples.len(), turns = take.turns.len(), "voice take");
                     page_take(take)
                 }
                 _ => {

@@ -79,6 +79,7 @@ impl Headset {
     /// One event that arrived and what the app did with it, for the app log.
     fn record(&self, source: &str, action: &str) {
         sidevoice_shared::debug::debug(&format!("headset {source} → {action}"));
+        tracing::info!(source, action, "headset");
     }
 
     fn active(&self) -> bool {
@@ -426,6 +427,7 @@ fn setup<N: Os>(app: &AppHandle) {
     };
     // The app log, and stderr with SIDEVOICE_DEBUG=1, which CI's probe reads.
     sidevoice_shared::debug::debug(&format!("headset: press to mute {said}"));
+    tracing::info!(state = said, "headset press to mute");
 }
 
 /// What Now Playing holds now, for the app log (`call: now playing …`): `released`, whether the app's side holds nothing

@@ -193,20 +193,17 @@ where
     }
 }
 
-/// A panic goes to the log once, through the subscriber (`target: "panic"`), and its place (never its message) to stderr. The
+/// A panic goes to the log once, through the subscriber (`target: "panic"`: its place and thread, never its message, which `unwrap`
+/// and `assert` fill with `Debug` of values), and its place to stderr. The
 /// default hook is not chained: it would write the raw message to stderr, past the writer's backstop.
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         IN_HOOK.with(|flag| flag.set(true));
-        let payload = info.payload();
-        let message =
-            payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str));
         let thread = std::thread::current();
         tracing::error!(
             target: "panic",
             location = %info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default(),
             thread = thread.name().unwrap_or("unnamed"),
-            panic = message.unwrap_or("non-string payload"),
             "panic"
         );
         IN_HOOK.with(|flag| flag.set(false));
