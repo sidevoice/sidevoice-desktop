@@ -7,6 +7,7 @@ pub mod debug;
 pub mod engine;
 pub mod logging;
 pub mod platform;
+pub mod system_log;
 pub mod voice;
 
 /// The voice crate itself, for what the app handles of it (the audio devices): its pin is this crate's alone.

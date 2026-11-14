@@ -32,14 +32,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The creatures' stills reach the app as base64 (`call_still`, src/lib.rs), as the page's canvas gives them.
 base64 = "0.22"
-# The app's log (src/lib.rs, src/system_log.rs): `tracing` events through one subscriber: a file in the app's log folder (the plugin
+# The app's log (src/lib.rs, sidevoice-shared's `system_log`): `tracing` events through one subscriber: a file in the app's log folder (the plugin
 # writes it, `split`; its `log` command is the page's channel) and the system's (logcat, the unified log). `log` is what the
-# plugins and Tauri emit, which `tracing-log` bridges, and whose real target the system log reads back (`NormalizeEvent`).
+# plugins and Tauri emit, which `tracing-log` bridges.
 tauri-plugin-log = "2"
 log = "0.4"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
-tracing-log = "0.2.0"
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry"] }
 # The camera that scans the pairing QR code (`host.codeScanner`, js/mobile-bridge.js): Tauri's official barcode scanner, CameraX
 # and ML Kit on Android, AVFoundation on iOS, with the camera permission it asks for itself (docs/MOBILE.md -> "Scanning the pairing code").
 tauri-plugin-barcode-scanner = "2.5.3"

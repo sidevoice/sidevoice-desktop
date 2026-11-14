@@ -1,7 +1,7 @@
 import os
 
 /// The activity's diagnostics, in the unified log (`log show --predicate 'subsystem == "ai.sidevoice"'`), from the app and
-/// from the widget extension. Public strings only for what holds no conversation: ids, sizes, names, lengths. NSLog's strings are redacted on a device, and the Rust side's log
+/// from the widget extension. Public strings only for what holds no conversation: ids, sizes, names, lengths. NSLog's strings are said to be redacted on a device, which is unverified (check on a device before relying on it: send no content through NSLog), and the Rust side's log
 /// is a file, so what happens to the creatures' stills and to the buttons is written here.
 public enum CallLog {
     public static let subsystem = "ai.sidevoice"

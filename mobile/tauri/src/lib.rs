@@ -20,7 +20,6 @@ pub mod pairings;
 mod panics;
 mod platform;
 mod surface;
-mod system_log;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -563,24 +562,24 @@ fn run_app() {
             // A change of the audio route (AirPods in, the car's Bluetooth out) is told to the page, which asks `audio_route`
             // `current` for the name (`host.audioRoute.subscribe`).
             let route_app = handle.clone();
-            if let Err(error) = platform::audio_route_picker::observe(Arc::new(move || {
+            if platform::audio_route_picker::observe(Arc::new(move || {
                 if let Some(window) = route_app.get_webview_window(WINDOW) {
                     let _ = window.eval("window.dispatchEvent(new Event('sidevoice-audio-route'));");
                 }
-            })) {
-                log::warn!("audio route: {error}");
+            })).is_err() {
+                log::warn!("audio route: not observed");
             }
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
-            if let Err(error) = platform::tls::init() {
-                log::error!("tls: {error}");
+            if platform::tls::init().is_err() {
+                log::error!("tls: not initialised");
             }
             // The creatures' stills an earlier run kept for the call's surfaces: the page sends the ones it shows again.
             if let Err(error) = sidevoice_mobile_plugin::clear_stills(&handle) {
                 log::warn!(target: "stills", "call_still: the earlier stills were not removed (os error {:?})", error.raw_os_error());
             }
             // Declared now, activated only while a call's audio is open (`call::PhoneCall`).
-            if let Err(error) = call::configure() {
-                log::error!("audio session: {error}");
+            if call::configure().is_err() {
+                log::error!("audio session: not declared");
             }
             let phone = Arc::new(call::PhoneCall::new(handle.clone()));
             // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
@@ -778,7 +777,7 @@ const OWN_TARGETS: &[&str] = &[
 /// recreates the activity: the second call finds the subscriber installed and does nothing.
 fn init_logging() {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let system = system_log::SystemLog::new(
+    let system = sidevoice_shared::system_log::SystemLog::new(
         sidevoice_shared::logging::Home::new(home.as_deref()),
         platform::system_log::write,
     );

@@ -147,7 +147,7 @@ through `run` (the call's service hangs up through it).
   cargo the native project runs again from inside its build (Xcode's build phase, Gradle's `rust` task) gets from the
   Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
   (`mobile/tauri/frameworks/`, the `.so` files of `jniLibs`).
-- **The log**: `tracing`, as the [logging guideline](https://github.com/sidevoice/.github-private/blob/main/docs/logging.md) says: one subscriber (`mobile/tauri/src/lib.rs`, `SIDEVOICE_LOG`, default `info`; the Xcode scheme sets it, Android has no environment) with a file in the app's log folder (written by `tauri-plugin-log`'s file logger, 2 MB x 5) and the system's log (`src/system_log.rs`): the unified log on iOS through the Swift `SidevoiceLog`, logcat on Android with the tag `sidevoice`. The plugin itself only serves the page's `log` command. On iOS the category is the event's real target, also for `log` records: `stills`, `intent`, `cue` and `audio` are public and carry only codes, counts and the system's enum names (no port names, no error text, no ids named by the page); everything else, the page's lines included, is `app`, private. No layer writes to stdout or stderr.
+- **The log**: `tracing`, as the [logging guideline](https://github.com/sidevoice/.github-private/blob/main/docs/logging.md) says: one subscriber (`mobile/tauri/src/lib.rs`, `SIDEVOICE_LOG`, default `info`; the Xcode scheme sets it, Android has no environment) with a file in the app's log folder (written by `tauri-plugin-log`'s file logger, 2 MB x 5) and the system's log (`shared/core/src/system_log.rs`): the unified log on iOS through the Swift `SidevoiceLog`, logcat on Android with the tag `sidevoice`. The plugin itself only serves the page's `log` command. On iOS the category is the event's real target, also for `log` records: `stills`, `intent`, `cue` and `audio` are public and carry only codes, counts and the system's enum names (no port names, no error text, no ids named by the page); everything else, the page's lines included, is `app`, private. No layer writes to stdout or stderr.
   - **Panics** (`mobile/tauri/src/panics.rs`): a hook logs each one (its thread, place and message) and adds it to
     `last-panic.txt` beside the log file, at most 16 KB; the next launch logs that file's panics as the last run's
     (`the last run panicked:`) and removes it. The hook never logs itself: a panic inside a log call holds the logger's
@@ -451,17 +451,15 @@ its buttons need iOS 17 (before that it only shows the call).
   name in the audio switch's accessible name is the system's.
 - **Diagnostics.** The app's log (the Rust side's `log::`, and the page's console warnings and errors, uncaught errors and
   unhandled rejections through shared/tauri/js/webview-log.js, as on the desktop) is a file, which `log show` does not read; on
-  iOS every line also goes to the unified log (`SidevoiceLog`, subsystem `ai.sidevoice`, public strings, category `stills` for
-  the creatures' stills, `intent`, `cue` for the thinking sound (each start, play and refusal with its reason, at warn when it
-  does not play), `text`, `app`; `app` is private). A still the activity cannot draw is a placeholder, the
+  iOS every line also goes to the unified log (`SidevoiceLog`, subsystem `ai.sidevoice`; the public categories are `stills`, `intent`, `cue`
+  and `audio`, chosen by the event's real target and carrying only codes, counts and the system's names; every other line, the page's console
+  lines included, is `app`, private). A still the activity cannot draw is a placeholder, the
   Sidevoice mark (white, 56 % of its slot, on the slot's ground), never an empty slot, and the cause is logged once. A still's
   way is one public `stills` line per step, which `log show --predicate 'subsystem == "ai.sidevoice" AND category == "stills"'`
-  reads from a sysdiagnose or `log collect`:
-  - the page could not draw it (`console.warn: [sidevoice] call surface: no still for <id> at <px>px: <error>`, sidevoice-web),
-    or the app did not answer its `call_still` (`… call surface: call_still <id> failed: <error>`, js/mobile-bridge.js);
-  - the app received it (`call_still: <id> (<n> base64 bytes, <px> px) from page <n>`), refused it (`call_still: <id> refused:
-    …`, `call stills: refused …`, `call_still: not kept: …`) or kept it (`call stills: kept <path> (<n> bytes, <px> px)`), in
-    the folder said once (`call stills: folder <path> (shared container: true|false)`);
+  reads from a sysdiagnose or `log collect` (the page's own `console.warn` about a still is private now: the app's lines below cover each step):
+  - the app received it (`call_still: id of <n> bytes (<n> base64 bytes, <px> px) from page <n>`), refused it (`call_still: id of <n> bytes refused: …`,
+    `call stills: refused a still (id of <n> bytes, …): <code>`, `call_still: not kept`) or kept it (`call stills: kept a still (<n> bytes, <px> px)`),
+    in the folder said once (`call stills: folder kept (shared container: true|false)`), never with an id or a path;
   - the activity's state names it (`activity state names stills: <file> (there|<why not>), …`, the app's Swift);
   - the extension drew it (`still drawn: <file>`) or not (`still not drawn: <why>`, `no still named in the call's state`).
 

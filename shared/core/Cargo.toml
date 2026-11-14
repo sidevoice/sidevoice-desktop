@@ -29,7 +29,9 @@ sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = 
 base64 = "0.22"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # The app's logging (src/logging.rs): events and spans everywhere, one subscriber in the process; `tracing-log` routes the
-# `log` records of tao, wry and tauri into it.
+# `log` records of tao, wry and tauri into it (and `NormalizeEvent`, which gives the system log layer, src/system_log.rs, a
+# record's real target back).
+tracing-log = "0.2.0"
 tracing = { version = "0.1.44", default-features = false, features = ["std", "attributes"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter", "ansi", "std", "tracing-log"] }
 serde = { version = "1", features = ["derive"] }

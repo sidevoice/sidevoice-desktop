@@ -32,8 +32,8 @@ impl Os for Native {
     fn locked<R: Runtime>(app: &AppHandle<R>) -> bool {
         match kotlin::run::<_, Locked>(app, "screenLocked", ()) {
             Some(Ok(answer)) => answer.locked,
-            Some(Err(error)) => {
-                log::warn!("screen: whether it is locked, not answered: {error}");
+            Some(Err(_)) => {
+                log::warn!("screen: whether it is locked, not answered");
                 false
             }
             None => false,

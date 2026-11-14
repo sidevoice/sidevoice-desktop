@@ -5212,8 +5212,6 @@ dependencies = [
  "tauri-plugin-log",
  "tempfile",
  "tracing",
- "tracing-log",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -5281,6 +5279,7 @@ dependencies = [
  "sidevoice-voice",
  "tokio",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",

@@ -63,8 +63,9 @@ impl SurfaceReport {
         if value.is_null() {
             return SurfaceReport::default();
         }
-        serde_json::from_value(value.clone()).unwrap_or_else(|error| {
-            log::warn!("call_state: the call's surface was not read: {error}");
+        serde_json::from_value(value.clone()).unwrap_or_else(|_| {
+            // The parser's text can quote the page's: nothing of it is logged.
+            log::warn!("call_state: the call's surface was not read");
             SurfaceReport::default()
         })
     }
