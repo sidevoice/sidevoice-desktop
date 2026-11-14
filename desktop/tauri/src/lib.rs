@@ -537,7 +537,7 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             open_log_file(&handle);
-            tracing::info!(version = env!("CARGO_PKG_VERSION"), os = std::env::consts::OS, "app started");
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), "app started");
             carried.log();
             application::prepare(&handle)?;
             shortcuts::setup(&handle);

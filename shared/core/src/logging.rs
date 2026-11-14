@@ -65,8 +65,11 @@ pub struct Home(Vec<String>);
 
 impl Home {
     pub fn new(home: Option<&std::path::Path>) -> Home {
-        let plain =
-            home.map(|home| home.to_string_lossy().trim_end_matches(['/', '\\']).to_owned()).unwrap_or_default();
+        Home::of(&home.map(|home| home.to_string_lossy().into_owned()).unwrap_or_default())
+    }
+
+    fn of(plain: &str) -> Home {
+        let plain = plain.trim_end_matches(['/', '\\']).to_owned();
         let mut spellings = vec![plain.clone(), plain.replace('\\', "\\\\"), plain.replace('\\', "/")];
         spellings.retain(|spelling| spelling.len() > 1);
         spellings.sort_by_key(|spelling| std::cmp::Reverse(spelling.len()));
@@ -279,9 +282,9 @@ mod tests {
 
     #[test]
     fn the_home_is_redacted_in_every_spelling() {
-        let home = Home::new(Some(std::path::Path::new("C:\\Users\\Ana")));
+        let home = Home::of("C:\\Users\\Ana");
         assert_eq!(home.redact("a C:\\Users\\Ana\\x b C:\\\\Users\\\\Ana c c:/users/ana/y"), "a ~\\x b ~ c ~/y");
-        assert_eq!(Home::new(None).redact("/x"), "/x");
-        assert_eq!(Home::new(Some(std::path::Path::new("/"))).redact("/x"), "/x");
+        assert_eq!(Home::of("").redact("/x"), "/x");
+        assert_eq!(Home::of("/").redact("/x"), "/x");
     }
 }
