@@ -514,6 +514,7 @@ pub fn run() {
     // First thing under the launch lock: before the log, and before anything reads the app's data, credentials or
     // webview store. It logs once the log exists (`setup`).
     let carried = legacy_identifier::carry_over();
+    #[allow(clippy::disallowed_macros, reason = "the context Tauri generates prints its own diagnostics")]
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
