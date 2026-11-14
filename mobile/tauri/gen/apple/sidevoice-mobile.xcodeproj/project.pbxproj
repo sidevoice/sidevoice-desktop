@@ -127,7 +127,6 @@
 		60E823B63C0441A995C48233 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
 		61C7ECE496BB70EEFE453E6C /* SidevoiceActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SidevoiceActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		64394271D504A3167B6E3545 /* acl_tests.rs */ = {isa = PBXFileReference; path = acl_tests.rs; sourceTree = "<group>"; };
-		71D14C39641FBECE12465C06 /* system_log.rs */ = {isa = PBXFileReference; path = system_log.rs; sourceTree = "<group>"; };
 		749529AE2409B9FB50B39312 /* platform.rs */ = {isa = PBXFileReference; path = platform.rs; sourceTree = "<group>"; };
 		7717DC1AC675EE5C22703A85 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		78DA3D5C4ABD3C61CB5AAB0F /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
@@ -346,7 +345,6 @@
 				C61912EDD5E1D2FB29D11EDB /* panics.rs */,
 				749529AE2409B9FB50B39312 /* platform.rs */,
 				8609C7142CEC5C4009BB8B54 /* surface.rs */,
-				71D14C39641FBECE12465C06 /* system_log.rs */,
 				C8A96FD8F714BFFEBAC54283 /* platform */,
 			);
 			name = src;
