@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.5.1...v0.6.0) (2026-11-14)
+
+
+### Features
+
+* **logging:** adopt tracing in the desktop app per the shared guideline ([#524](https://github.com/sidevoice/sidevoice-desktop/issues/524)) ([ccf3466](https://github.com/sidevoice/sidevoice-desktop/commit/ccf34668f108fc45910778434dbf07c502611602))
+* **logging:** adopt tracing in the mobile app per the shared guideline ([#526](https://github.com/sidevoice/sidevoice-desktop/issues/526)) ([d8a6a04](https://github.com/sidevoice/sidevoice-desktop/commit/d8a6a041350f12bb278a0beec4bfb991b34800f8))
+
 ## [0.5.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.5.0...v0.5.1) (2026-11-13)
 
 
