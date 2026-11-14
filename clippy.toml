@@ -1,5 +1,6 @@
 # What only `platform` may call (each crate’s platform module): the OS goes through one module per crate.
 disallowed-methods = [
+    { path = "secrecy::ExposeSecret::expose_secret", reason = "expose a secret only where it is sent or stored: `#[allow]` there, with the reason", allow-invalid = true },
     { path = "libc::geteuid", reason = "use platform::user", allow-invalid = true },
     { path = "libc::getuid", reason = "use platform::user", allow-invalid = true },
     { path = "libc::gethostname", reason = "use platform::user", allow-invalid = true },
@@ -28,4 +29,12 @@ disallowed-types = [
     { path = "std::os::unix::net::UnixListener", reason = "use platform::ipc", allow-invalid = true },
     { path = "std::os::unix::net::UnixStream", reason = "use platform::ipc", allow-invalid = true },
     { path = "std::os::unix::net::UnixDatagram", reason = "use platform::ipc", allow-invalid = true },
+]
+
+# Diagnostics go through `tracing` (docs: the Sidevoice logging guideline, sidevoice/.github-private `docs/logging.md`). Output meant for
+# people (a CLI, a build script, the `sidevoice: ...` lines `SIDEVOICE_DEBUG=1` prints for CI) opts out with `#[allow]` and a reason.
+disallowed-macros = [
+    { path = "std::dbg", reason = "use a tracing event with fields" },
+    { path = "std::println", reason = "use a tracing event; real output opts out with #[allow] and a reason" },
+    { path = "std::eprintln", reason = "use a tracing event; real output opts out with #[allow] and a reason" },
 ]

@@ -172,7 +172,7 @@ pub enum AgentState {
 /// The call as the room page reports it: what the tray and the headset need, and what the call controls card shows.
 /// Mirrors the web UI's own views; `participants` and `devices` are relayed to the card as the page's bridge wrote
 /// them (the web UI owns their shape: `ParticipantView`, the card's `AudioDevices`).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CallSnapshot {
     pub version: u32,
@@ -200,6 +200,28 @@ pub struct CallSnapshot {
     /// card reads: relayed to it as the room wrote it, never read here.
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Flags and counts only: the title, the participants and the devices carry names and the conversation's words.
+impl std::fmt::Debug for CallSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallSnapshot")
+            .field("version", &self.version)
+            .field("ready", &self.ready)
+            .field("joined", &self.joined)
+            .field("busy", &self.busy)
+            .field("mic_enabled", &self.mic_enabled)
+            .field("mic_disabled", &self.mic_disabled)
+            .field("title", &format_args!("<{} chars>", self.title.chars().count()))
+            .field("agent", &self.agent)
+            .field("you_talking", &self.you_talking)
+            .field("can_skip", &self.can_skip)
+            .field("since", &self.since)
+            .field("participants", &format_args!("<{}>", self.participants.len()))
+            .field("devices", &self.devices.is_some())
+            .field("rest", &format_args!("<{} keys>", self.rest.len()))
+            .finish()
+    }
 }
 
 impl CallSnapshot {
@@ -810,5 +832,18 @@ mod tests {
         let s = tray_view(&CallSnapshot { title: "a".repeat(100), ..live(true) }, "en");
         assert!(s.status.ends_with('…'));
         assert!(s.status.chars().count() < 70);
+    }
+
+    #[test]
+    fn a_snapshot_debug_holds_no_title_participant_or_device() {
+        let snapshot = CallSnapshot {
+            title: "canary words 7f3a".into(),
+            participants: vec![serde_json::json!({ "name": "canary-person-7f3a" })],
+            devices: Some(serde_json::json!({ "label": "canary-mic-7f3a" })),
+            ..live(true)
+        };
+        let text = format!("{snapshot:?}");
+        assert!(!text.contains("canary"), "{text}");
+        assert!(text.contains("<17 chars>") && text.contains("<1>"), "{text}");
     }
 }

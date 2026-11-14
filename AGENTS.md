@@ -96,3 +96,7 @@ Operator decision (2026-10-30), amended 2026-11-01 (D-RULE-ROOT). Applies like t
   mobile target). They read tokens, manifests, workflows and resolution and build nothing;
   their limits are in the head of `xtask/src/platform_guard.rs` and `xtask/src/host_graph.rs`. They are convention guards,
   not sandboxes: they catch the honest mistake and the usual workaround, and a deliberate bypass is a matter for review.
+
+## Logging
+
+Logs follow the shared [logging guideline](https://github.com/sidevoice/.github-private/blob/main/docs/logging.md): `tracing` events and spans, `SIDEVOICE_LOG` as the one variable, and only allowlisted values in a field.

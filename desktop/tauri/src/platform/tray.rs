@@ -56,7 +56,7 @@ pub fn creation_failed(error: tauri::Error) -> tauri::Result<()> {
     if !Native::TRAY_OPTIONAL {
         return Err(error);
     }
-    log::warn!("Tray unavailable; continuing with the room window: {error}");
+    tracing::warn!(code = "tray_unavailable", "tray unavailable, continuing with the room window");
     Ok(())
 }
 

@@ -2,6 +2,7 @@
 //! the app's pairing with it and the startup cases (design §4.1), the proxy a page talks to — forwarding with the token
 //! swapped in, a socket spliced both ways, the refusals — and the service's state and actions through a stand-in
 //! connector and CLI.
+use secrecy::ExposeSecret;
 
 use serde_json::{json, Value};
 use sidevoice_desktop_test_support::fake_core::{self, FakeCore};
@@ -94,6 +95,7 @@ fn running(host: &LocalHost) -> (u16, String) {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "compares tokens in a test")]
 fn pairs_over_the_socket_and_the_page_gets_only_the_secret() {
     let world = World::new();
     let core = world.core(1);
@@ -112,7 +114,7 @@ fn pairs_over_the_socket_and_the_page_gets_only_the_secret() {
             "local": true,
         })
     );
-    assert_ne!(secret, stored.token, "the page never holds the device token");
+    assert_ne!(secret, stored.token.expose_secret(), "the page never holds the device token");
     assert_eq!(secret.len(), 43, "32 bytes, base64url");
 
     let state = serde_json::to_value(host.state()).unwrap();
@@ -342,6 +344,7 @@ fn a_stored_pairing_is_reused_after_proving_the_identity() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "compares tokens in a test")]
 fn a_pairing_below_traverse_only_ancestors_loads_saves_and_is_discovered() {
     let world = World::new();
     let core = world.core(1);
@@ -360,7 +363,7 @@ fn a_pairing_below_traverse_only_ancestors_loads_saves_and_is_discovered() {
         let host = world.host();
         running(&host);
         assert_eq!(core.local_device().as_deref(), Some(updated.device_id.as_str()));
-        assert_eq!(store::load(&world.app_dir).unwrap().token, updated.token);
+        assert_eq!(store::load(&world.app_dir).unwrap().token.expose_secret(), updated.token.expose_secret());
         host.shutdown();
         expected = updated;
     });

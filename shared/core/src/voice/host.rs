@@ -342,7 +342,7 @@ impl<A: LaneAudio> VoiceState<A> {
         let wait = self.minute.saturating_mul(minutes);
         #[cfg(feature = "probe")]
         PENDING_KEEPS.fetch_add(1, Ordering::SeqCst);
-        let task = tokio::spawn(async move {
+        let task = spawn_in_span(async move {
             tokio::time::sleep(wait).await;
             drop(held);
             #[cfg(feature = "probe")]
@@ -512,7 +512,7 @@ impl<A: LaneAudio> VoiceState<A> {
         lane.sayings.lock().unwrap().insert(say_key.clone(), saying.canceller());
         let sayings = Arc::clone(&lane.sayings);
         let key = key.to_owned();
-        let telling = tokio::spawn(async move {
+        let telling = spawn_in_span(async move {
             while let Some(event) = saying.next().await {
                 if matches!(event, SayEvent::Done { .. }) {
                     sayings.lock().unwrap().remove(&say_key);
@@ -903,7 +903,7 @@ fn forward(
     released: Arc<Mutex<bool>>,
     ended: Ended,
 ) {
-    tokio::spawn(async move {
+    spawn_in_span(async move {
         let mut meters = Meters::default();
         // Whether the call's first idle is still to come: the one before it goes on ([`Ended`]).
         let mut first_idle = true;
@@ -923,16 +923,15 @@ fn forward(
                         take.samples.len(),
                         take.turns.len()
                     ));
+                    tracing::debug!(samples = take.samples.len(), turns = take.turns.len(), "voice take");
                     page_take(take)
                 }
                 _ => {
+                    let value = serde_json::to_value(&event).unwrap_or(Value::Null);
                     if !matches!(event, VoiceEvent::Level(_) | VoiceEvent::PlaybackLevel(_)) {
-                        crate::debug::debug(&format!(
-                            "voice event {}",
-                            serde_json::to_string(&event).unwrap_or_default()
-                        ));
+                        log_event(&value);
                     }
-                    serde_json::to_value(&event).unwrap_or(Value::Null)
+                    value
                 }
             };
             if !value.is_null() {
@@ -977,4 +976,27 @@ fn page_take(take: &Take) -> Value {
         take.ended_at,
         serde_json::to_value(&take.turns).unwrap_or_default(),
     )
+}
+
+/// What the log keeps of a voice event: its kind, its phase and the turn's id, as fields; never its words or its error text.
+fn log_event(value: &Value) {
+    let word = |name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|word| word.len() <= 24 && word.bytes().all(|b| b.is_ascii_lowercase() || b == b'_' || b == b'-'))
+            .unwrap_or("other")
+    };
+    let turn = value.get("turn_id").and_then(Value::as_str).map_or("none", crate::logging::client_id);
+    tracing::debug!(kind = word("type"), phase = word("phase"), turn, "voice event");
+}
+
+/// `tokio::spawn` that keeps the span of the call it belongs to: a spawned future starts with none, and its lines would lose the call's id.
+fn spawn_in_span<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    use tracing::Instrument;
+    tokio::spawn(future.in_current_span())
 }

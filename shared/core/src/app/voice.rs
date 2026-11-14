@@ -108,6 +108,7 @@ impl<A: LaneAudio> AppHost<A> {
         self.detached(async move { host.started(page, &key, settings, take).await }).await
     }
 
+    #[tracing::instrument(skip_all, name = "call", fields(call_key = crate::logging::client_id(key)))]
     async fn started(
         &self,
         page: PageGeneration,

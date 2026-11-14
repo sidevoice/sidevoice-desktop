@@ -40,8 +40,8 @@ pub fn setup(app: &AppHandle) {
     if !host::updates_available(CHANNEL) {
         return;
     }
-    if let Err(e) = app.plugin(tauri_plugin_updater::Builder::new().build()) {
-        return log::error!("the updater did not start: {e}");
+    if app.plugin(tauri_plugin_updater::Builder::new().build()).is_err() {
+        return tracing::error!(code = "updater_start", "the updater did not start");
     }
     app.manage(Mutex::new(Updates::default()));
     // What a relaunch after an update came up as: the version and the bundle it runs from.
@@ -151,6 +151,7 @@ fn download(app: &AppHandle, asked: bool) {
 /// The download itself, in memory (the plugin hands back the bytes; there is no partial file). Aborting only stops it
 /// at its next await, so what it writes (progress, bytes, result) is accepted only while its `token` is the current
 /// one: a cancel, and any download after it, make a late write a no-op.
+#[tracing::instrument(skip_all, name = "update_download", fields(version = %update.version))]
 async fn download_task(app: AppHandle, update: Update, token: core::Token, _permit: crate::data::Permit) {
     let mut received = 0;
     let progress = |chunk: usize, total: Option<u64>| {
@@ -174,7 +175,7 @@ async fn download_task(app: AppHandle, update: Update, token: core::Token, _perm
             }
             Err(e) => {
                 let _ = &e;
-                log::error!("updater download failed (the updater's error text is not logged)");
+                tracing::error!(code = "download_failed", "updater download failed");
                 u.status = Status::new(State::Available, &update.version).failed(ErrorCode::DownloadFailed);
             }
         }
@@ -225,7 +226,7 @@ fn install(app: &AppHandle, restart: bool) {
     with(app, |u| {
         u.installing = false;
         if installed.is_err() {
-            log::error!("updater install failed (the updater's error text is not logged)");
+            tracing::error!(code = "install_failed", "updater install failed");
             (u.bytes, u.status) = (Some(bytes), u.status.clone().failed(ErrorCode::InstallFailed));
         }
     });

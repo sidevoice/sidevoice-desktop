@@ -1,3 +1,4 @@
+#![allow(clippy::disallowed_macros, reason = "a build script talks to cargo and the terminal")]
 include!("commands.rs");
 
 #[path = "build/platform.rs"]

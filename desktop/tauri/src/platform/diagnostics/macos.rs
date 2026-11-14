@@ -11,6 +11,7 @@ pub(super) struct Native;
 impl Os for Native {
     #[cfg(feature = "probe")]
     fn report_handlers_ran() {
+        #[allow(clippy::disallowed_macros, reason = "a SIDEVOICE_DEBUG line read by CI")]
         extern "C" fn ran() {
             eprintln!("sidevoice: probe: exit handlers ran");
         }

@@ -52,12 +52,14 @@ tauri-plugin-updater = "2.13"
 tokio = { version = "1", features = ["time", "sync", "rt", "rt-multi-thread", "net", "io-util", "process", "macros"] }
 # A one-use helper capability, delivered only through its inherited stdin pipe.
 getrandom = "0.3"
-# The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
-# by the room page's console errors (shared/tauri/js/webview-log.js).
+# The app log file (src/lib.rs `open_log_file`): its rotating, size-capped file in the platform's log directory, fed by the subscriber, and the room page's `log` command
+# (shared/tauri/js/webview-log.js). The plugin installs no logger.
 tauri-plugin-log = "2"
 # The system privacy pages, from Rust only: the opener plugin the app registers (the microphone's, sidevoice-shared-tauri).
 tauri-plugin-opener = "2"
 log = "0.4"
+# Events and spans (sidevoice-shared installs the subscriber, `logging::init`).
+tracing = { version = "0.1.44", default-features = false, features = ["std", "attributes"] }
 # This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md), on every OS: the
 # crate's `platform` speaks a Unix socket or a Windows named pipe.
 # `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).

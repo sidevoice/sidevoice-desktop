@@ -78,7 +78,7 @@ fn parse_kept(action: Action, text: &str) -> Option<Parsed> {
         Some(Some(parsed)) if shortcuts::suits(action, &parsed) && shortcut_access::accepts(&parsed) => Some(parsed),
         Some(None) => None,
         _ => {
-            log::warn!("the {} shortcut {text:?} is not one the app can register: none", action.name());
+            tracing::warn!(action = action.name(), "shortcut not one the app can register");
             None
         }
     }
@@ -723,7 +723,7 @@ fn release(app: &AppHandle, why: Release) {
         current.hold.end()
     };
     if was_on {
-        log::info!("hold to talk let go: {why:?}");
+        tracing::info!(reason = ?why, "hold to talk let go");
         crate::send(app, Command::HoldEnd);
     }
 }

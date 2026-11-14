@@ -168,19 +168,21 @@ fn bridge_state(
     let current_label = state.room_label.lock().unwrap().clone();
     if current_label.as_deref() != Some(webview.label()) {
         debug(&format!("bridge_state refused: window {}", webview.label()));
+        tracing::warn!(reason = "not_room_window", "bridge_state refused");
         return Err("not the room window".into());
     }
     let actual = webview.url().map(|u| settings::url_origin(&u)).ok();
     if actual.as_deref() != Some(APP_ORIGIN) {
         debug(&format!("bridge_state refused: origin {actual:?}"));
+        tracing::warn!(reason = "not_app_page", "bridge_state refused");
         return Err("not the app's own page".into());
     }
     let previous = std::mem::replace(&mut *state.call.lock().unwrap(), snapshot.clone());
     if let Some(changes) = snapshot.changes_since(&previous) {
-        log::info!("bridge_state: {changes}");
+        tracing::info!(changes, "bridge_state");
     }
-    // The whole snapshot only at level debug or with SIDEVOICE_DEBUG=1, and without the rest of the room's projection:
-    // its facts carry the conversation's words, which stay out of the log.
+    // The whole snapshot only on stderr with SIDEVOICE_DEBUG=1 (never the log), without the rest of the room's projection:
+    // its facts carry the conversation's words.
     debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
     media_controls::update(&app, &media_state(&snapshot, shortcuts::headset_press_keeps_mic(&app)));
@@ -222,29 +224,80 @@ pub(crate) fn app_log_file(app: &AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_log_dir().ok().map(|dir| dir.join(format!("{LOG_FILE}.log")))
 }
 
+/// The webview's `log` command only (its lines have target `webview`): the plugin installs no logger. Its records reach the
+/// subscriber through `log`'s bridge, so one filter and one writer serve every line.
 fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri_plugin_log::Builder::new().skip_logger().build()
+}
+
+/// The file logger of the app log, held once `setup` knows the log folder (`app_log_dir` needs the app). The subscriber's
+/// file layer hands it each finished line.
+static LOG_SINK: std::sync::OnceLock<Box<dyn log::Log>> = std::sync::OnceLock::new();
+
+/// The lines written before [`LOG_SINK`] exists (the first `EARLY_LINES`), kept for [`open_log_file`] to write.
+static EARLY: Mutex<Vec<String>> = Mutex::new(Vec::new());
+const EARLY_LINES: usize = 200;
+
+fn write_line(file: &dyn log::Log, line: &str) {
+    file.log(&log::Record::builder().args(format_args!("{line}")).level(log::Level::Info).target("sidevoice").build());
+}
+
+/// tauri-plugin-log's file logger, built but not installed (`split`): it keeps the file's name, place and rotation.
+fn open_log_file(app: &AppHandle) {
     use tauri_plugin_log::{FileOpenStrategy, RotationStrategy, Target, TargetKind};
-    tauri_plugin_log::Builder::new()
+    let built = tauri_plugin_log::Builder::new()
         .clear_targets()
         .target(Target::new(TargetKind::LogDir { file_name: Some(LOG_FILE.into()) }))
-        .level(sidevoice_desktop_core::logging::level(
-            std::env::var(sidevoice_desktop_core::logging::LEVEL_VARIABLE).ok().as_deref(),
-        ))
-        .level_for("tao", log::LevelFilter::Warn)
-        .level_for("wry", log::LevelFilter::Warn)
+        .format(|out, message, _| out.finish(*message))
         .max_file_size(LOG_MAX_BYTES)
         .rotation_strategy(RotationStrategy::KeepSome(LOG_KEPT))
         .file_open_strategy(FileOpenStrategy::Rotate)
-        .build()
+        .split(app);
+    if let Ok((_, _, logger)) = built {
+        // Under the buffer's lock, so a line is either in the buffer to flush or written by the sink, never lost.
+        let mut early = EARLY.lock().unwrap_or_else(|e| e.into_inner());
+        if LOG_SINK.set(logger).is_ok() {
+            if let Some(file) = LOG_SINK.get() {
+                for line in early.drain(..) {
+                    write_line(file.as_ref(), &line);
+                }
+            }
+        }
+    }
 }
 
-/// A panic goes to the log too (then to stderr as before).
-fn log_panics() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        log::error!("panic: {info}");
-        previous(info);
-    }));
+/// The targets a bare `SIDEVOICE_LOG` level applies to: our crates and the fixed targets (`panic`, the page's `webview`).
+/// Every other target stays at `warn` unless the variable names it.
+const OWN_TARGETS: &[&str] = &[
+    "sidevoice_desktop_lib",
+    "sidevoice_desktop_core",
+    "sidevoice_local_host",
+    "sidevoice_shared",
+    "sidevoice_shared_tauri",
+    "sidevoice_shared_i18n",
+    "sidevoice_shared_headset",
+    "sidevoice_voice",
+    "sidevoice_engine",
+    "sidevoice_platform",
+    "panic",
+    "webview",
+];
+
+/// The process's subscriber, first thing in `run`.
+fn init_logging() {
+    sidevoice_shared::logging::init(OWN_TARGETS, platform::account::home().ok().as_deref(), |line: &str| {
+        // In the panic hook the thread may already hold the buffer: only try.
+        let early = if sidevoice_shared::logging::in_panic_hook() {
+            EARLY.try_lock().ok()
+        } else {
+            Some(EARLY.lock().unwrap_or_else(|e| e.into_inner()))
+        };
+        match (LOG_SINK.get(), early) {
+            (Some(file), _) => write_line(file.as_ref(), line),
+            (None, Some(mut early)) if early.len() < EARLY_LINES => early.push(line.to_owned()),
+            _ => {}
+        }
+    });
 }
 
 // Diagnostics on stderr with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them): sidevoice-shared's, shared with the
@@ -253,14 +306,16 @@ fn log_panics() {
 use sidevoice_shared::debug::enabled as debugging;
 pub(crate) use sidevoice_shared::debug::{debug, debug_detail};
 
-/// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
+/// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`. Only a probe build reads it: in any
+/// other the command does nothing, so page text never reaches a log at any level.
 #[tauri::command]
 fn debug_log(app: AppHandle, line: String) {
-    debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
     #[cfg(feature = "probe")]
-    probe::exit_on(&app, &line);
-    #[cfg(feature = "probe")]
-    probe::memory_on(&app, &line);
+    {
+        debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
+        probe::exit_on(&app, &line);
+        probe::memory_on(&app, &line);
+    }
     let _ = (app, line);
 }
 
@@ -383,12 +438,14 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         // wry grants every request when the app sets no handler; this one denies the microphone, the camera and the rest.
         .on_permission_request(|_webview, kind| {
             debug(&format!("media {kind:?}: denied"));
+            tracing::warn!(kind = ?kind, "media permission denied");
             PermissionResponse::Deny
         })
         .on_page_load(move |_webview, payload| {
             // `Started` is WebKit's didCommitNavigation: after redirects, main frame only.
             if payload.event() == PageLoadEvent::Started {
-                debug(&format!("page {}", payload.url()));
+                debug(&format!("page {}", url_path(payload.url())));
+                tracing::info!(url = %url_path(payload.url()), "page");
                 reset_call_state(&page_app);
             }
         })
@@ -468,19 +525,24 @@ pub fn run() {
             // Before the log and the app state exist: the system's language is read here.
             let preferred = platform::locale::preferred();
             let language = sidevoice_desktop_core::i18n::language(&preferred);
-            eprintln!("{}", sidevoice_desktop_core::i18n::t(language, "startup.reset_busy"));
+            #[allow(
+                clippy::disallowed_macros,
+                reason = "output for the person: the reset is busy, before any log exists"
+            )]
+            tell_the_person(sidevoice_desktop_core::i18n::t(language, "startup.reset_busy"));
             return;
         }
     };
     // First thing under the launch lock: before the log, and before anything reads the app's data, credentials or
     // webview store. It logs once the log exists (`setup`).
     let carried = legacy_identifier::carry_over();
+    #[allow(clippy::disallowed_macros, reason = "the context Tauri generates prints its own diagnostics")]
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
     #[cfg(feature = "probe")]
     probe::watch_exit_handlers();
-    log_panics();
+    init_logging();
     // First, so everything after it is logged.
     // Where the call's events go: over the channel the room page opens (the shared plugin's `voice_events`).
     let pages = sidevoice_shared_tauri::Pages::default();
@@ -496,10 +558,13 @@ pub fn run() {
         .invoke_handler(handler())
         .setup(move |app| {
             let handle = app.handle().clone();
+            open_log_file(&handle);
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), "app started");
             carried.log();
             application::prepare(&handle)?;
             shortcuts::setup(&handle);
             debug(&format!("launch {}", app_report(&handle)));
+            tracing::info!(call_card = !call_card_disabled(), "app launch");
             tray::create(&handle)?;
             let media_app = handle.clone();
             media_controls::attach(
@@ -566,11 +631,15 @@ pub fn run() {
             application::activate(&handle);
             // How macOS sees the app once everything exists, and again once activation has settled (#117).
             debug(&format!("ready {}", app_report(&handle)));
+            tracing::info!("app ready");
             let later = handle.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 let report = later.clone();
-                let _ = later.run_on_main_thread(move || debug(&format!("settled {}", app_report(&report))));
+                let _ = later.run_on_main_thread(move || {
+                    debug(&format!("settled {}", app_report(&report)));
+                    tracing::info!("app settled");
+                });
             });
             data::finalize_relaunched_reset();
             reset_handoff::finish_startup(startup);
@@ -623,6 +692,34 @@ pub fn run_reset_helper() {
 
 /// The fresh-process check of System Audio Recording (`--sidevoice-capture-check`, docs/MEDIA_DUCK.md): prints the system's
 /// answer for this process, which has only just started, and returns. Nothing of the app starts.
+#[allow(clippy::disallowed_macros, reason = "the capture check's answer, read by the parent process")]
 pub fn run_capture_check() {
     println!("{}", platform::media_duck::capture_check().word());
+}
+
+/// Output meant for the person, when no log exists yet.
+#[allow(clippy::disallowed_macros, reason = "output for the person, before any log exists")]
+fn tell_the_person(text: impl std::fmt::Display) {
+    eprintln!("{text}");
+}
+
+/// A url as the log may show one of ours: scheme, host, port and path; never userinfo, query or fragment.
+fn url_path(url: &tauri::Url) -> String {
+    let port = url.port().map(|port| format!(":{port}")).unwrap_or_default();
+    format!("{}://{}{port}{}", url.scheme(), url.host_str().unwrap_or(""), url.path())
+}
+
+#[cfg(test)]
+mod url_path_tests {
+    use super::url_path;
+
+    #[test]
+    fn a_url_loses_userinfo_query_and_fragment() {
+        let url = tauri::Url::parse("https://u:canary-pass@x.example:8443/a/b?canary-q=1#frag").unwrap();
+        assert_eq!(url_path(&url), "https://x.example:8443/a/b");
+        assert_eq!(
+            url_path(&tauri::Url::parse("tauri://localhost/probe.html").unwrap()),
+            "tauri://localhost/probe.html"
+        );
+    }
 }

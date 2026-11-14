@@ -1,3 +1,7 @@
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a build script talks to cargo and the terminal"
+)]
 fn main() {
     build_channel();
     // The app's own commands, declared so its capability can grant them: the page's number, its report of the call, the

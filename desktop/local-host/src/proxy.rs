@@ -27,6 +27,7 @@
 use crate::core_socket::CoreSocket;
 use crate::http::{self, Headers, RequestHead};
 use crate::identity;
+use secrecy::{ExposeSecret, SecretString};
 use sidevoice_platform::ipc::blocking;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -378,7 +379,7 @@ impl Shared {
 /// The running proxy. Dropping it stops it.
 pub struct Proxy {
     port: u16,
-    secret: String,
+    secret: SecretString,
     shared: Arc<Shared>,
 }
 
@@ -388,7 +389,7 @@ impl Proxy {
     pub fn start(core: CoreSocket, log: impl Fn(&str) + Send + Sync + 'static) -> io::Result<Proxy> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
-        let secret = identity::random(32);
+        let secret = SecretString::from(identity::random(32));
         let shared = Arc::new(Shared {
             inner: Mutex::default(),
             pending: Mutex::default(),
@@ -421,6 +422,8 @@ impl Proxy {
                 };
                 let (shared, secret) = (accepting.clone(), accept_secret.clone());
                 let spawned = thread::Builder::new().name("local-host-tunnel".into()).spawn(move || {
+                    #[allow(clippy::disallowed_methods, reason = "checked against what each request offers")]
+                    let secret = secret.expose_secret().to_owned();
                     serve(&shared, stream, id, &progress, port, &secret);
                     shared.active.fetch_sub(1, Ordering::SeqCst);
                 });
@@ -438,8 +441,9 @@ impl Proxy {
     }
 
     /// The page's credential for this launch: in memory only, never written anywhere.
+    #[allow(clippy::disallowed_methods, reason = "handed to the page, which presents it back")]
     pub fn secret(&self) -> &str {
-        &self.secret
+        self.secret.expose_secret()
     }
 
     /// `http://127.0.0.1:<port>`: the local host's only URL, as the page knows it.
@@ -573,7 +577,11 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
     let decision = decide(&head, port, secret);
     let (upgrade, length) = match decision {
         Decision::Answer { status, headers, why } => {
-            (shared.log)(&format!("proxy {} {status} {} {path} ({why})", verb(status), head.method));
+            if status == 204 {
+                (shared.log)(&format!("proxy {} {status} {} {path} ({why})", verb(status), head.method));
+            } else {
+                (shared.log)(&format!("proxy {} {status} ({why})", verb(status)));
+            }
             return answer(client, status, headers);
         }
         Decision::Forward { length } => (false, length),
@@ -590,7 +598,8 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
     let upstream = match shared.core.connect(Some(CORE_TIMEOUT)) {
         Ok(upstream) => upstream,
         Err(e) => {
-            (shared.log)(&format!("proxy 502 {} {path} (core not reachable: {e:?})", head.method));
+            (shared.log)(&format!("proxy 502 {} {path} (core not reachable: {})", head.method, e.code()));
+            tracing::warn!(http_status = 502u16, code = e.code(), "proxy core not reachable");
             return answer(client, 502, cors(&origin));
         }
     };
@@ -607,6 +616,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
     };
     let Some(token) = token else {
         (shared.log)(&format!("proxy 503 {} {path} (not paired)", head.method));
+        tracing::warn!(http_status = 503u16, reason = "not_paired", "proxy refused");
         return answer(client, 503, cors(&origin));
     };
 
@@ -631,6 +641,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         Ok(end) => end,
         Err(_) => {
             (shared.log)(&format!("proxy 502 {} {path} (no answer from the core)", head.method));
+            tracing::warn!(http_status = 502u16, reason = "no_answer", "proxy core did not answer");
             return answer(client, 502, cors(&origin));
         }
     };
@@ -638,6 +649,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         return answer(client, 502, cors(&origin));
     };
     (shared.log)(&format!("proxy forwarded {} {path} -> {}", head.method, response.status));
+    tracing::debug!(http_status = response.status, "proxy forwarded");
 
     if upgrade && response.status == 101 {
         // The core accepted the socket: its answer as it is, then bytes both ways until either side ends.

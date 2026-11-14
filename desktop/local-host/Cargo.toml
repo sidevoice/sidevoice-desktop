@@ -19,6 +19,10 @@ fetch = ["dep:reqwest"]
 # whether a recorded process is there (`process`); private files, trusted programs and which file a handle is (`fs`).
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.16.1" }
 serde = { version = "1", features = ["derive"] }
+# Events at the local host's boundaries (the app owns the subscriber).
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# The device token, held so it cannot be printed by accident (the Sidevoice logging guideline, section 8.2).
+secrecy = { version = "0.10", features = ["serde"] }
 serde_json = "1"
 # The computer's kernel hostname, used when naming the core's local pairing.
 gethostname = "1.1"

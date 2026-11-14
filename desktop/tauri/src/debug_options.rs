@@ -72,8 +72,8 @@ pub(crate) fn apply(app: &AppHandle) {
         }
     }
     for window in [crate::room_window(app), app.get_webview_window(crate::call_controls::LABEL)].into_iter().flatten() {
-        if let Err(error) = diagnostics::apply_webview_switches(&window, options) {
-            log::warn!("webview diagnostics: {error}");
+        if diagnostics::apply_webview_switches(&window, options).is_err() {
+            tracing::warn!(code = "webview_switches", "webview diagnostics");
         }
     }
 }

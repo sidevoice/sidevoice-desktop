@@ -47,6 +47,7 @@ use crate::state::{self, Link, Observed, Report, State};
 use crate::store::{self, Pairing};
 use crate::update::{self, Facts, Update, Updates};
 use crate::Refusal;
+use secrecy::ExposeSecret;
 use serde_json::{json, Value};
 use std::io;
 use std::path::PathBuf;
@@ -200,6 +201,7 @@ impl LocalHost {
         let proxy_log = log.clone();
         let proxy = Proxy::start(core.clone(), move |line| proxy_log(line))?;
         log(&format!("local-host proxy on {}", proxy.url()));
+        tracing::info!(port = proxy.port(), "local-host proxy listening");
         Ok(Arc::new(LocalHost {
             config,
             core,
@@ -319,6 +321,7 @@ impl LocalHost {
         }
         if report.state != inner.report.state {
             (self.log)(&format!("local-host state {}", json!(report.state).as_str().unwrap_or("?")));
+            tracing::info!(state = json!(report.state).as_str().unwrap_or("?"), "local-host state");
         }
         inner.report = report.clone();
         inner.core_up = health.is_ok();
@@ -395,7 +398,9 @@ impl LocalHost {
             inner.link = link;
             inner.pairing = pairing;
         }
-        let token = inner.pairing.as_ref().filter(|_| inner.link == Link::Paired).map(|p| p.token.clone());
+        #[allow(clippy::disallowed_methods, reason = "handed to the proxy, which sends it to the core")]
+        let token =
+            inner.pairing.as_ref().filter(|_| inner.link == Link::Paired).map(|p| p.token.expose_secret().to_owned());
         self.proxy.set_token(token);
     }
 
@@ -417,13 +422,17 @@ impl LocalHost {
             Ok(false) => return Some((Link::Failed(mismatch()), None)),
             Err(_) => return None,
         }
-        match self.core.accepts(&stored.token) {
+        #[allow(clippy::disallowed_methods, reason = "sent to the core to check it")]
+        let accepted = self.core.accepts(stored.token.expose_secret());
+        match accepted {
             Ok(true) => {
                 (self.log)(&format!("local-host paired (stored) {}", stored.redacted()));
+                tracing::info!(device_id = %stored.device_id, fp = %stored.fp, "local-host paired (stored)");
                 Some((Link::Paired, Some(stored)))
             }
             Ok(false) => {
                 (self.log)("local-host token refused by the core");
+                tracing::warn!(reason = "token_refused", "local-host token refused");
                 Some((Link::Refused, None))
             }
             Err(_) => None,
@@ -432,10 +441,12 @@ impl LocalHost {
 
     /// Paired: the core still accepts the token (a revocation from another device shows here).
     fn recheck(&self) -> Option<(Link, Option<Pairing>)> {
-        let token = self.inner.lock().unwrap().pairing.as_ref()?.token.clone();
+        #[allow(clippy::disallowed_methods, reason = "sent to the core to check it")]
+        let token = self.inner.lock().unwrap().pairing.as_ref()?.token.expose_secret().to_owned();
         match self.core.accepts(&token) {
             Ok(false) => {
                 (self.log)("local-host token refused by the core");
+                tracing::warn!(reason = "token_refused", "local-host token refused");
                 Some((Link::Refused, None))
             }
             _ => None,
@@ -468,11 +479,13 @@ impl LocalHost {
         if let Err(e) = store::save(&self.config.app_dir, &pairing) {
             // Never a device the app cannot remember: revoke it at once.
             let _ = self.core.unpair();
-            (self.log)(&format!("local-host could not store its pairing: {e}"));
+            (self.log)(&format!("local-host could not store its pairing: {:?}", e.kind()));
+            tracing::warn!(kind = ?e.kind(), os_error = e.raw_os_error(), "local-host pairing not stored");
             let refusal = Refusal::new("app.storage", format!("The app could not store its pairing: {e}"));
             return Some((Link::Failed(refusal), None));
         }
         (self.log)(&format!("local-host paired {}", pairing.redacted()));
+        tracing::info!(device_id = %pairing.device_id, fp = %pairing.fp, "local-host paired");
         Some((Link::Paired, Some(pairing)))
     }
 
@@ -545,6 +558,7 @@ impl LocalHost {
             inner.report.failure = None;
         }
         (self.log)(&format!("local-host install {} started", install::loggable_job(job.id())));
+        tracing::info!(job = install::loggable_job(job.id()), "local-host install started");
         Ok(Installing { host: self.clone(), job })
     }
 
@@ -617,6 +631,7 @@ impl LocalHost {
         let answer = npm::latest_in_minor(fetch, pinned);
         if let Err(failure) = &answer {
             (self.log)(&format!("local-host service check failed: {}", failure.log_report()));
+            tracing::error!(report = %failure.log_report(), "local-host service check failed");
         }
         self.inner.lock().unwrap().updates.checked(Instant::now(), answer.ok());
     }
@@ -676,6 +691,7 @@ impl LocalHost {
                     if let Err(failed) = self.run_update(fetch, base) {
                         if failed.is_failure() {
                             (self.log)(&format!("local-host service update failed: {}", failed.failure.log_report()));
+                            tracing::error!(report = %failed.failure.log_report(), "local-host service update failed");
                         }
                     }
                 }
@@ -826,6 +842,12 @@ impl LocalHost {
         let outcome = install::prepare(job, fetch, &self.config.dirs.data, &options);
         // A failure is logged in full, at error level, by the app (`run_install` in `src/local_host.rs`).
         if let Ok(answer) = &outcome {
+            tracing::info!(
+                job = install::loggable_job(job.id()),
+                action = plain(answer["action"].as_str()),
+                version = plain(answer["version"].as_str()),
+                "local-host install finished"
+            );
             (self.log)(&format!(
                 "local-host install {}: {} {}",
                 install::loggable_job(job.id()),
@@ -975,6 +997,13 @@ fn mismatch() -> Refusal {
     Refusal::new("identity.mismatch", "The core on this computer did not prove the identity the app paired with.")
 }
 
+/// A word the log may keep of an install's answer (an action or a version): short and of a plain alphabet, else `other`.
+fn plain(word: Option<&str>) -> &str {
+    word.filter(|word| {
+        (1..=32).contains(&word.len()) && word.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-+".contains(&b))
+    })
+    .unwrap_or("other")
+}
 #[cfg(test)]
 mod tests {
     use super::*;

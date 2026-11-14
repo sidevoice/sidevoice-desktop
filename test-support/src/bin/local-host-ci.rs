@@ -11,6 +11,7 @@
 //   connector link, a WebSocket). Prints one line per attempt; exits 1 if any of them got through.
 //
 // `serve` and `attack` need the local host, which a host without it answers as unsupported (exit 2).
+#![allow(clippy::disallowed_macros, reason = "a test tool printing for CI")]
 
 use sidevoice_desktop_test_support::fake_core::FakeCore;
 use sidevoice_desktop_test_support::platform::local_host;

@@ -1,4 +1,5 @@
 //! Native stand-in connector. Configuration lives beside the executable, never in shell text.
+#![allow(clippy::disallowed_macros, reason = "a test tool printing for CI")]
 use process_wrap::std::ChildWrapper;
 use serde_json::{json, Value};
 use sidevoice_desktop_test_support::{fixture, platform::process};

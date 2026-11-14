@@ -7,7 +7,6 @@ pub mod call_controls;
 pub mod computer_name;
 pub mod debug_options;
 pub mod i18n;
-pub mod logging;
 pub mod media;
 pub mod media_duck;
 pub mod memory;

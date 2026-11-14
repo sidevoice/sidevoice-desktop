@@ -26,6 +26,8 @@ tokio-tungstenite = { version = "0.30", default-features = false }
 futures-util = { version = "0.3", features = ["sink"] }
 # The local host the fixtures drive (`fake_registry`'s `Fetch`, `local-host-ci`'s serve mode) and the tests exercise.
 sidevoice-local-host = { path = "../desktop/local-host" }
+# The pairing's token is a secret (`expose_secret` in the tests that compare it).
+secrecy = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 # The core's socket opened raw, without the peer check `sidevoice_platform::ipc` adds (local_host's attack); already
