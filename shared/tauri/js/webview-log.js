@@ -3,7 +3,8 @@
 // `log` command, and leaves the console as it was.
 //
 // What it writes is an allowlist, never free text (a log line is written as if it will be published): numbers, booleans and
-// null; for an Error or any other object, its `name`, `code` and `key` (each only if it has the shape of an identifier) and
+// null; for an Error or any other object, its `name` (only `...Error` or `...Exception`), its `code` and `key` (only a dotted
+// code such as `voice.failure.model`) and
 // the first frame of its stack as `file:line:column`. Every string, an Error's `message` included, is written as `[string]`.
 // A flood is dropped (a count is written instead).
 (function (factory) {
@@ -15,14 +16,18 @@
   const ERROR = 5;
   const MAX_PER_WINDOW = 50; // lines per 10 s
   const WINDOW_MS = 10000;
-  const NAME = /^[A-Za-z][A-Za-z0-9_.]{0,63}$/;
-  const KEY = /^[a-z0-9_.-]{1,64}$/;
+  const NAME = /^[A-Za-z]{1,40}(Error|Exception)$/;
+  const KEY = /^[a-z][a-z0-9_]{0,31}(\.[a-z0-9_]{1,32}){1,4}$/; // a dotted code: voice.failure.model
   const KEY_FILE = /^[A-Za-z0-9_.-]{1,64}$/;
   const FRAME = /([A-Za-z0-9_.-]{1,64}):(\d{1,7})(?::(\d{1,7}))?\)?\s*$/;
 
+  // The first frame of a stack, from a line that is one: WebKit's `fn@file:line:col` or V8's `at fn (file:line:col)`. A
+  // message that spills onto lines of its own is not a frame, so only those shapes count.
   function frameOf(stack) {
     if (typeof stack !== "string") return "";
-    for (const line of stack.split("\n").slice(0, 4)) {
+    for (const line of stack.split("\n").slice(0, 6)) {
+      const v8 = line.trimStart().startsWith("at ") && (line.trimEnd().endsWith(")") || line.includes("://"));
+      if (!line.includes("@") && !v8) continue;
       const found = FRAME.exec(line);
       if (found) return found[1] + ":" + found[2] + (found[3] ? ":" + found[3] : "");
     }

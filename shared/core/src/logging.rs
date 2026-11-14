@@ -46,12 +46,13 @@ pub fn filter(value: Option<&str>, own: &[&str]) -> (EnvFilter, bool) {
     }
 }
 
-/// `warn` for everything, `level` for each of `own` (`off` is off for everything).
+/// For each of `own` the `level`; for everything else the quieter of it and `warn` (`off` is off for everything).
 fn expand(level: &str, own: &[&str]) -> String {
     if level == "off" {
         return "off".to_owned();
     }
-    std::iter::once("warn".to_owned())
+    let others = if level == "error" { "error" } else { "warn" };
+    std::iter::once(others.to_owned())
         .chain(own.iter().map(|target| format!("{target}={level}")))
         .collect::<Vec<_>>()
         .join(",")
@@ -130,6 +131,14 @@ impl<F: Fn(&str)> Write for Line<'_, F> {
 /// that panicked may hold the lock) it only tries, and writes anyway when it cannot.
 static WRITING: Mutex<()> = Mutex::new(());
 
+/// Whether this thread is inside the panic hook: a writer of its own must only try its locks then.
+pub fn in_panic_hook() -> bool {
+    IN_HOOK.with(Cell::get)
+}
+
+/// The home the writers redact, for the one line the panic hook writes itself.
+static HOME: std::sync::OnceLock<Home> = std::sync::OnceLock::new();
+
 thread_local! {
     static IN_HOOK: Cell<bool> = const { Cell::new(false) };
 }
@@ -161,6 +170,7 @@ where
 {
     let (filter, invalid) = filter(std::env::var(VARIABLE).ok().as_deref(), own);
     let home = Home::new(home);
+    let _ = HOME.set(home.clone());
     let file = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_writer(Lines { sink, home: home.clone() })
@@ -183,8 +193,8 @@ where
     }
 }
 
-/// A panic goes to the log once, through the subscriber (`target: "panic"`), and the default hook is not chained: it would
-/// write the raw message to stderr, past the writer's backstop.
+/// A panic goes to the log once, through the subscriber (`target: "panic"`), and its place (never its message) to stderr. The
+/// default hook is not chained: it would write the raw message to stderr, past the writer's backstop.
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         IN_HOOK.with(|flag| flag.set(true));
@@ -200,6 +210,10 @@ fn install_panic_hook() {
             "panic"
         );
         IN_HOOK.with(|flag| flag.set(false));
+        // However the log is set up, a panic must not vanish: the place, never the message, on stderr as well.
+        let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let location = HOME.get().map_or(location.clone(), |home| home.redact(&location));
+        let _ = writeln!(std::io::stderr().lock(), "sidevoice: panic at {location}");
     }));
 }
 
@@ -240,6 +254,7 @@ mod tests {
         assert_eq!(text(Some(" DEBUG ")), "panic=debug,sidevoice_shared=debug,warn");
         assert_eq!(text(Some("info,reqwest=debug")), "panic=info,reqwest=debug,sidevoice_shared=info,warn");
         assert_eq!(text(Some("off")), "off");
+        assert_eq!(text(Some("error")), "error,panic=error,sidevoice_shared=error");
     }
 
     #[test]

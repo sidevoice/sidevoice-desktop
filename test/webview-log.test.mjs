@@ -72,3 +72,23 @@ test("a flood is cut", () => {
   for (let i = 0; i < 100; i++) win.console.error("again");
   assert.equal(calls.length, 50);
 });
+
+test("a key or code that is not a dotted code, and a name that is not an Error, are dropped", () => {
+  const { win, calls } = setup();
+  win.console.error({ key: "sk_abcdefghijklmnop", code: "deadbeefdeadbeef", name: "canary words" });
+  win.console.error({ key: "voice.failure.model", code: "UPPER.case", name: "NotAllowed" });
+  win.console.error({ name: "AbortError", code: "a.b" });
+  assert.equal(calls[0].message, "console.error: [object]");
+  assert.equal(calls[1].message, "console.error: {key=voice.failure.model}");
+  assert.equal(calls[2].message, "console.error: {name=AbortError code=a.b}");
+});
+
+test("only a line shaped like a frame is read as one", () => {
+  const { win, calls } = setup();
+  win.console.error({ stack: "Error: canary\nat canary.txt:9\nfn@http://h/app.js:3:4" });
+  win.console.error({ stack: "Error: x\n    at render (http://h/main.js:7:8)" });
+  win.console.error({ stack: "canary spill\nmore words.txt:5" });
+  assert.equal(calls[0].message, "console.error: {at=app.js:3:4}");
+  assert.equal(calls[1].message, "console.error: {at=main.js:7:8}");
+  assert.equal(calls[2].message, "console.error: [object]");
+});

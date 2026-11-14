@@ -474,7 +474,7 @@ impl LocalHost {
         if let Err(e) = store::save(&self.config.app_dir, &pairing) {
             // Never a device the app cannot remember: revoke it at once.
             let _ = self.core.unpair();
-            (self.log)(&format!("local-host could not store its pairing: {e}"));
+            (self.log)(&format!("local-host could not store its pairing: {:?}", e.kind()));
             let refusal = Refusal::new("app.storage", format!("The app could not store its pairing: {e}"));
             return Some((Link::Failed(refusal), None));
         }

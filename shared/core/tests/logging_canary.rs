@@ -24,6 +24,9 @@ fn nothing_seeded_reaches_the_log() {
     log::warn!(target: "sidevoice_shared::canary", "canary bridge {HOME}/log");
     log::info!(target: "tungstenite::handshake", "Request: {URL} {WORDS}");
     tracing::debug!(target: "reqwest::connect", "{URL} {WORDS}");
+    // The SIDEVOICE_DEBUG helpers are not the log: a voice event with a transcript goes through them in the call host.
+    sidevoice_shared::debug::debug(&format!("voice event {{\"phase\":\"finished\",\"text\":\"{WORDS}\"}}"));
+    sidevoice_shared::debug::debug_detail(|| format!("snapshot {WORDS}"));
     // A panic that carries the path, on another thread and caught on this one.
     let _ = std::thread::Builder::new()
         .name("canary-thread".into())

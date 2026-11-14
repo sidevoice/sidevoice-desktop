@@ -229,8 +229,16 @@ fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 }
 
 /// The file logger of the app log, held once `setup` knows the log folder (`app_log_dir` needs the app). The subscriber's
-/// file layer hands it each finished line; the lines before that are not kept.
+/// file layer hands it each finished line.
 static LOG_SINK: std::sync::OnceLock<Box<dyn log::Log>> = std::sync::OnceLock::new();
+
+/// The lines written before [`LOG_SINK`] exists (the first `EARLY_LINES`), kept for [`open_log_file`] to write.
+static EARLY: Mutex<Vec<String>> = Mutex::new(Vec::new());
+const EARLY_LINES: usize = 200;
+
+fn write_line(file: &dyn log::Log, line: &str) {
+    file.log(&log::Record::builder().args(format_args!("{line}")).level(log::Level::Info).target("sidevoice").build());
+}
 
 /// tauri-plugin-log's file logger, built but not installed (`split`): it keeps the file's name, place and rotation.
 fn open_log_file(app: &AppHandle) {
@@ -244,7 +252,15 @@ fn open_log_file(app: &AppHandle) {
         .file_open_strategy(FileOpenStrategy::Rotate)
         .split(app);
     if let Ok((_, _, logger)) = built {
-        let _ = LOG_SINK.set(logger);
+        // Under the buffer's lock, so a line is either in the buffer to flush or written by the sink, never lost.
+        let mut early = EARLY.lock().unwrap_or_else(|e| e.into_inner());
+        if LOG_SINK.set(logger).is_ok() {
+            if let Some(file) = LOG_SINK.get() {
+                for line in early.drain(..) {
+                    write_line(file.as_ref(), &line);
+                }
+            }
+        }
     }
 }
 
@@ -268,14 +284,16 @@ const OWN_TARGETS: &[&str] = &[
 /// The process's subscriber, first thing in `run`.
 fn init_logging() {
     sidevoice_shared::logging::init(OWN_TARGETS, platform::account::home().ok().as_deref(), |line: &str| {
-        if let Some(file) = LOG_SINK.get() {
-            file.log(
-                &log::Record::builder()
-                    .args(format_args!("{line}"))
-                    .level(log::Level::Info)
-                    .target("sidevoice")
-                    .build(),
-            );
+        // In the panic hook the thread may already hold the buffer: only try.
+        let early = if sidevoice_shared::logging::in_panic_hook() {
+            EARLY.try_lock().ok()
+        } else {
+            Some(EARLY.lock().unwrap_or_else(|e| e.into_inner()))
+        };
+        match (LOG_SINK.get(), early) {
+            (Some(file), _) => write_line(file.as_ref(), line),
+            (None, Some(mut early)) if early.len() < EARLY_LINES => early.push(line.to_owned()),
+            _ => {}
         }
     });
 }
@@ -423,7 +441,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .on_page_load(move |_webview, payload| {
             // `Started` is WebKit's didCommitNavigation: after redirects, main frame only.
             if payload.event() == PageLoadEvent::Started {
-                debug(&format!("page {}", payload.url()));
+                debug(&format!("page {}", url_path(payload.url())));
                 reset_call_state(&page_app);
             }
         })
@@ -674,4 +692,25 @@ pub fn run_capture_check() {
 #[allow(clippy::disallowed_macros, reason = "output for the person, before any log exists")]
 fn tell_the_person(text: impl std::fmt::Display) {
     eprintln!("{text}");
+}
+
+/// A url as the log may show one of ours: scheme, host, port and path; never userinfo, query or fragment.
+fn url_path(url: &tauri::Url) -> String {
+    let port = url.port().map(|port| format!(":{port}")).unwrap_or_default();
+    format!("{}://{}{port}{}", url.scheme(), url.host_str().unwrap_or(""), url.path())
+}
+
+#[cfg(test)]
+mod url_path_tests {
+    use super::url_path;
+
+    #[test]
+    fn a_url_loses_userinfo_query_and_fragment() {
+        let url = tauri::Url::parse("https://u:canary-pass@x.example:8443/a/b?canary-q=1#frag").unwrap();
+        assert_eq!(url_path(&url), "https://x.example:8443/a/b");
+        assert_eq!(
+            url_path(&tauri::Url::parse("tauri://localhost/probe.html").unwrap()),
+            "tauri://localhost/probe.html"
+        );
+    }
 }

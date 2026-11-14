@@ -2,7 +2,6 @@
 //! the app's pairing with it and the startup cases (design §4.1), the proxy a page talks to — forwarding with the token
 //! swapped in, a socket spliced both ways, the refusals — and the service's state and actions through a stand-in
 //! connector and CLI.
-#![allow(clippy::disallowed_methods, reason = "the tests compare tokens")]
 use secrecy::ExposeSecret;
 
 use serde_json::{json, Value};
@@ -96,6 +95,7 @@ fn running(host: &LocalHost) -> (u16, String) {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "compares tokens in a test")]
 fn pairs_over_the_socket_and_the_page_gets_only_the_secret() {
     let world = World::new();
     let core = world.core(1);
@@ -344,6 +344,7 @@ fn a_stored_pairing_is_reused_after_proving_the_identity() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "compares tokens in a test")]
 fn a_pairing_below_traverse_only_ancestors_loads_saves_and_is_discovered() {
     let world = World::new();
     let core = world.core(1);

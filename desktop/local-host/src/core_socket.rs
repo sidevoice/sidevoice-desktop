@@ -80,6 +80,16 @@ impl From<Check> for CoreError {
         }
     }
 }
+impl CoreError {
+    /// What the log keeps of it: a fixed word, never the refusal's text.
+    pub fn code(&self) -> &'static str {
+        match self {
+            CoreError::Absent => "absent",
+            CoreError::Unsafe(_) => "unsafe",
+            CoreError::Failed(_) => "failed",
+        }
+    }
+}
 
 fn failed(why: impl Into<String>) -> CoreError {
     CoreError::Failed(Refusal::new("core.unexpected", why))
