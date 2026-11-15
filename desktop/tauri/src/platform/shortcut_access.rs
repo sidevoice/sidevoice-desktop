@@ -76,7 +76,7 @@ struct Bindings(Mutex<Vec<(u32, Action)>>);
 /// Install the maintained global-shortcut plugin on the UI thread. A missing backend must not stop startup.
 pub fn configure(app: &AppHandle, sink: HotKeySink) {
     if !Native::backend_available() {
-        tracing::info!(reason = "no_backend", "global shortcuts unavailable");
+        tracing::info!(reason = "no_backend", "global shortcuts are unavailable on this system");
         return;
     }
     app.manage(Bindings::default());
@@ -96,7 +96,10 @@ pub fn configure(app: &AppHandle, sink: HotKeySink) {
         })
         .build();
     if app.plugin(plugin).is_err() {
-        tracing::warn!(code = "plugin_failed", "global shortcuts unavailable");
+        tracing::warn!(
+            error.type = crate::error::DesktopError::ShortcutPluginFailed.code(),
+            "the global shortcut plugin did not start, so global shortcuts are unavailable"
+        );
     }
 }
 
@@ -107,13 +110,13 @@ impl<R: Runtime> Registrar for Plugin<'_, R> {
     fn register(&mut self, hot_key: &str) -> bool {
         // The backend would bind another key for these (Windows: Ctrl+NumpadEqual as Ctrl+E) or none.
         if shortcuts::hot_key_reach(platform(), hot_key) == KeyReach::Never {
-            tracing::debug!(reason = "unreachable", "shortcut not registered");
+            tracing::debug!(reason = "unreachable", "a shortcut was not registered because the system cannot bind it");
             return false;
         }
         match self.0.register(hot_key) {
             Ok(()) => true,
             Err(_) => {
-                tracing::debug!(reason = "refused", "shortcut not registered");
+                tracing::debug!(reason = "refused", "a shortcut was not registered because the system refused it");
                 false
             }
         }

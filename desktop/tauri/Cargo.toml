@@ -58,6 +58,8 @@ tauri-plugin-log = "2"
 # The system privacy pages, from Rust only: the opener plugin the app registers (the microphone's, sidevoice-shared-tauri).
 tauri-plugin-opener = "2"
 log = "0.4"
+# Per-crate error enum with stable codes for the log (src/error.rs, the logging guideline, section 6).
+thiserror = "2"
 # Events and spans (sidevoice-shared installs the subscriber, `logging::init`).
 tracing = { version = "0.1.44", default-features = false, features = ["std", "attributes"] }
 # This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md), on every OS: the

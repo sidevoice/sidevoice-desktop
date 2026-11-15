@@ -56,7 +56,10 @@ pub fn creation_failed(error: tauri::Error) -> tauri::Result<()> {
     if !Native::TRAY_OPTIONAL {
         return Err(error);
     }
-    tracing::warn!(code = "tray_unavailable", "tray unavailable, continuing with the room window");
+    tracing::warn!(
+        error.type = crate::error::DesktopError::TrayUnavailable.code(),
+        "the tray is unavailable; the app goes on with the room window only"
+    );
     Ok(())
 }
 

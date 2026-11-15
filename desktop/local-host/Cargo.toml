@@ -21,6 +21,8 @@ sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag 
 serde = { version = "1", features = ["derive"] }
 # Events at the local host's boundaries (the app owns the subscriber).
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# Per-crate error enum with stable codes for the log (src/error.rs, the logging guideline, section 6).
+thiserror = "2"
 # The device token, held so it cannot be printed by accident (the Sidevoice logging guideline, section 8.2).
 secrecy = { version = "0.10", features = ["serde"] }
 serde_json = "1"
@@ -52,3 +54,5 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 
 [dev-dependencies]
 sidevoice-desktop-test-support = { path = "../../test-support" }
+# Captures the one event a failure writes, to check what reaches the log.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }

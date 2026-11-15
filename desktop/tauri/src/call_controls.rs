@@ -190,7 +190,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     watch_view(app.clone());
     crate::debug_options::apply(app);
     debug("call-controls created");
-    tracing::info!("call-controls created");
+    tracing::info!("the call controls card was created");
     Ok(())
 }
 
@@ -279,7 +279,7 @@ fn watch_display(app: &AppHandle) {
     let Some(now) = desktop_geometry::display(app, crate::room_window(app).as_ref(), Some(&key), None) else { return };
     if now != before {
         debug(&format!("call-controls display changed: {} -> {}", before.key, now.key));
-        tracing::debug!("call-controls display changed");
+        tracing::debug!("the display of the call controls card changed");
         place(app);
     }
 }
@@ -352,11 +352,11 @@ pub fn update(app: &AppHandle) {
         settle_size(app);
         apply_visible(app, true, decision);
         debug(&format!("call-controls shown: {reason}"));
-        tracing::info!(reason, "call-controls shown");
+        tracing::info!(reason, "the call controls card was shown");
     } else if hide {
         apply_visible(app, false, decision);
         debug(&format!("call-controls hidden: {reason}"));
-        tracing::info!(reason, "call-controls hidden");
+        tracing::info!(reason, "the call controls card was hidden");
     }
     if unhidden {
         crate::tray::update(app, &call);
@@ -762,14 +762,14 @@ pub fn call_controls_run(app: AppHandle, webview: Webview, command: serde_json::
         }
         Some("hide") => {
             debug("call-controls run hide");
-            tracing::debug!(command = "hide", "call-controls run");
+            tracing::debug!(command = "hide", "the call controls card was asked to run a command");
             hide(&app);
             return Ok(());
         }
         // The exit notice's Close, once a call ended by itself: the card goes at once (it never outlasts the call).
         Some("dismiss") => {
             debug("call-controls run dismiss");
-            tracing::debug!(command = "dismiss", "call-controls run");
+            tracing::debug!(command = "dismiss", "the call controls card was asked to run a command");
             update(&app);
             return Ok(());
         }

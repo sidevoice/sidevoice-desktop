@@ -317,6 +317,55 @@ impl Failure {
     }
 }
 
+impl Failure {
+    /// The app log's one `error` event for this failure, with `error_type` from the caller's enum and `message` its fixed
+    /// sentence: the key (when shaped like one), the step and the allowlisted params ([`param_value_ok`]) as fields of their
+    /// own, and how many params were withheld. Never the installer's message, its other params or its output.
+    pub fn log(&self, error_type: &'static str, message: &'static str) {
+        let key_ok = !self.key.is_empty()
+            && self.key.len() <= 64
+            && self.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '_'));
+        let step = self.step.map(|step| json!(step).as_str().unwrap_or("invalid").to_owned());
+        let params = self.params.as_ref().and_then(Value::as_object);
+        let text = |name: &str| {
+            params.and_then(|params| params.get(name)).and_then(Value::as_str).filter(|text| param_value_ok(name, text))
+        };
+        let number = |name: &str| params.and_then(|params| params.get(name)).and_then(Value::as_i64);
+        let status = params.and_then(|params| params.get("status")).and_then(Value::as_u64);
+        let logged = [
+            text("check"),
+            text("version"),
+            text("expected"),
+            text("found"),
+            text("where"),
+            text("reason"),
+            text("root"),
+        ]
+        .iter()
+        .flatten()
+        .count()
+            + usize::from(status.is_some())
+            + usize::from(number("os_error").is_some());
+        let withheld = params.map_or(0, |params| params.len().saturating_sub(logged));
+        tracing::error!(
+            error.type = error_type,
+            failure_key = if key_ok { self.key.as_str() } else { "invalid" },
+            step = step.as_deref(),
+            check = text("check"),
+            peer_version = text("version"),
+            expected = text("expected"),
+            found = text("found"),
+            place = text("where"),
+            reason = text("reason"),
+            root = text("root"),
+            http.response.status_code = status,
+            os_error = number("os_error"),
+            withheld,
+            "{message}"
+        );
+    }
+}
+
 /// The `check` values a failure carries: sidevoice-web's `INSTALL_CHECKS`, the closed set the installer emits.
 const CHECKS: &[&str] = &[
     "sha256",
@@ -376,13 +425,13 @@ fn param_value_ok(name: &str, text: &str) -> bool {
 }
 
 /// The install id as logged: the page's id is caller-supplied, so it is logged only if it has the shape of an id
-/// (`[A-Za-z0-9_-]{1,64}`), else `[invalid job]`.
+/// (`[A-Za-z0-9_-]{1,64}`), else `invalid`.
 pub fn loggable_job(id: &str) -> &str {
     let ok = (1..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
     if ok {
         id
     } else {
-        "[invalid job]"
+        "invalid"
     }
 }
 
@@ -940,8 +989,8 @@ mod tests {
     #[test]
     fn a_job_id_is_logged_only_if_it_is_shaped_like_one() {
         assert_eq!(loggable_job("3f2a-9c_1"), "3f2a-9c_1");
-        assert_eq!(loggable_job("https://example.invalid/?token=secret"), "[invalid job]");
-        assert_eq!(loggable_job("/home/alice/private"), "[invalid job]");
+        assert_eq!(loggable_job("https://example.invalid/?token=secret"), "invalid");
+        assert_eq!(loggable_job("/home/alice/private"), "invalid");
     }
 
     #[test]
@@ -1155,5 +1204,44 @@ mod tests {
         let options = Options::standard();
         assert_eq!(options.temp_often_redirected, crate::platform::staging::temp_often_redirected());
         assert_eq!(options.temp, std::env::temp_dir());
+    }
+
+    /// A failure logs one event: the code from the caller, fields of their own and none of the free text.
+    #[test]
+    fn a_failure_logs_fixed_fields_and_none_of_its_free_text() {
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone, Default)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Capture::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt().with_writer(move || writer.clone()).with_ansi(false).finish();
+        let mut failure = Failure::new("install.failed", Step::Staging, "canary words 7f3a in /home/canary-user-7f3a");
+        failure.params = Some(json!({"check": "manifest", "detail": "https://u:canary-pass@x/?q=1", "os_error": 28}));
+        tracing::subscriber::with_default(subscriber, || {
+            failure.log("local-host.install-failed", "the local host install failed");
+        });
+        let line = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        for expected in [
+            "the local host install failed",
+            "error.type=\"local-host.install-failed\"",
+            "failure_key=\"install.failed\"",
+            "step=\"staging\"",
+            "os_error=28",
+            "withheld=1",
+        ] {
+            assert!(line.contains(expected), "{expected} missing: {line}");
+        }
+        for seed in ["canary", "https://", "/home/"] {
+            assert!(!line.contains(seed), "{seed} reached the log: {line}");
+        }
     }
 }

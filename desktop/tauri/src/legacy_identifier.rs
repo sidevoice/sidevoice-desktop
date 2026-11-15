@@ -52,6 +52,7 @@
 //! (the system keys it by bundle id) and the reset's control directory.
 
 use crate::data::PAIRINGS_FILE;
+use crate::error::DesktopError;
 use crate::platform::{account, app_data, reset_handoff};
 use serde::{Deserialize, Serialize};
 use sidevoice_desktop_core::call_controls::PLACEMENTS_FILE;
@@ -199,23 +200,98 @@ impl Io {
     }
 }
 
+/// What a carry-over says, as fixed fields (the logging guideline, sections 5.4 and 7): a fixed sentence, a closed `result`,
+/// which folder or provider it is about, and the controlled facts of a failure (an `io::ErrorKind`, a `KeyError`, never a
+/// path or a message). Paths are not logged: the folders are the app's two, named `app_data` and `webview`.
+pub struct Entry {
+    level: Level,
+    message: &'static str,
+    result: &'static str,
+    error: Option<DesktopError>,
+    folder: Option<&'static str>,
+    provider: Option<String>,
+    kind: Option<io::ErrorKind>,
+    key_error: Option<KeyError>,
+    backup: bool,
+}
+
+impl Entry {
+    fn info(result: &'static str, message: &'static str) -> Entry {
+        Entry {
+            level: Level::INFO,
+            message,
+            result,
+            error: None,
+            folder: None,
+            provider: None,
+            kind: None,
+            key_error: None,
+            backup: false,
+        }
+    }
+
+    fn warn(error: DesktopError, result: &'static str, message: &'static str) -> Entry {
+        Entry { level: Level::WARN, error: Some(error), ..Entry::info(result, message) }
+    }
+
+    fn folder(self, folder: &'static str) -> Entry {
+        Entry { folder: Some(folder), ..self }
+    }
+
+    fn provider(self, provider: &str) -> Entry {
+        Entry { provider: Some(sidevoice_shared::logging::client_id(provider).to_owned()), ..self }
+    }
+
+    fn kind(self, kind: io::ErrorKind) -> Entry {
+        Entry { kind: Some(kind), ..self }
+    }
+
+    fn key_error(self, key_error: KeyError) -> Entry {
+        Entry { key_error: Some(key_error), ..self }
+    }
+
+    fn backup(self, backup: bool) -> Entry {
+        Entry { backup, ..self }
+    }
+}
+
 /// The log lines of a carry-over. The log does not exist yet when it runs (the carry-over must come first, before the
 /// log plugin writes into the folders it carries), so they wait for [`Report::log`].
-pub struct Report(Vec<(Level, String)>);
+pub struct Report(Vec<Entry>);
 
 impl Report {
-    /// Write the lines to the log, one per thing carried (or not).
+    /// Write the entries to the log, one per thing carried (or not).
     pub fn log(self) {
-        for (level, line) in self.0 {
-            match level {
-                Level::WARN => tracing::warn!(line, "legacy identifier"),
-                _ => tracing::info!(line, "legacy identifier"),
+        for entry in self.0 {
+            let (error_type, kind, key_error) = (
+                entry.error.map(|error| error.code()),
+                entry.kind.as_ref().map(tracing::field::debug),
+                entry.key_error.as_ref().map(tracing::field::debug),
+            );
+            macro_rules! emit {
+                ($level:ident) => {
+                    tracing::$level!(
+                        error.type = error_type,
+                        result = entry.result,
+                        folder = entry.folder,
+                        provider = entry.provider.as_deref(),
+                        kind,
+                        key_error,
+                        backup = entry.backup,
+                        "{}",
+                        entry.message
+                    )
+                };
+            }
+            match entry.level {
+                Level::WARN => emit!(warn),
+                _ => emit!(info),
             }
         }
     }
 
-    fn say(&mut self, level: Level, line: String) {
-        self.0.push((level, line));
+    fn say(&mut self, entry: Entry) {
+        self.0.push(entry);
     }
 }
 
@@ -225,10 +301,18 @@ type Hook = Box<dyn FnOnce() -> bool + Send>;
 
 /// Carry the old identifier's folders and provider keys over to the app's own. See the module.
 pub fn carry_over() -> Report {
-    let said = |line: &str| Report(vec![(Level::INFO, line.to_owned())]);
-    let Ok(control) = reset_handoff::state_dir() else { return said("no control directory: not looked at") };
+    let Ok(control) = reset_handoff::state_dir() else {
+        return Report(vec![Entry::warn(
+            DesktopError::LegacyNotLooked,
+            "no_control_directory",
+            "the carry-over from the previous app identifier was not looked at because there is no control directory; it is tried again at the next launch",
+        )]);
+    };
     if !hold_instance(&control) {
-        return said("another instance is running: left for a later launch");
+        return Report(vec![Entry::info(
+            "another_instance",
+            "another instance of the app is running, so the carry-over from the previous identifier is left for a later launch",
+        )]);
     }
     match account::home().and_then(|home| app_data::carried_from(&home, LEGACY)) {
         Ok(folders) => {
@@ -241,7 +325,11 @@ pub fn carry_over() -> Report {
                 |provider, may_write, settled| keychain.copy_key_from(LEGACY_KEYS, provider, may_write, settled),
             )
         }
-        Err(key) => said(&format!("not looked at ({key})")),
+        Err(_) => Report(vec![Entry::warn(
+            DesktopError::LegacyNotLooked,
+            "no_home",
+            "the carry-over from the previous app identifier was not looked at because the old folders could not be located; it is tried again at the next launch",
+        )]),
     }
 }
 
@@ -273,7 +361,14 @@ fn run(
         Ok(state) if state.finished => return report,
         Ok(state) => state,
         Err(error) => {
-            report.say(Level::WARN, format!("the journal cannot be read ({}): nothing done", error.kind()));
+            report.say(
+                Entry::warn(
+                    DesktopError::LegacyJournalUnreadable,
+                    "journal_unreadable",
+                    "the carry-over journal could not be read, so nothing was carried over this launch",
+                )
+                .kind(error.kind()),
+            );
             return report;
         }
     };
@@ -281,48 +376,75 @@ fn run(
         // Once, and written before anything is carried: carrying changes what this looks at.
         state.configured = Some(configured(&folders[0].1));
         if let Err(error) = io.save(control, &state) {
-            report.say(Level::WARN, format!("the journal cannot be written ({}): nothing done", error.kind()));
+            report.say(
+                Entry::warn(
+                    DesktopError::LegacyJournalUnwritable,
+                    "journal_unwritable",
+                    "the carry-over journal could not be written, so nothing was carried over this launch",
+                )
+                .kind(error.kind()),
+            );
             return report;
         }
     }
     if !state.folders {
         state.folders = true;
-        for (from, to) in folders {
-            state.folders &= folder(from, to, state.configured == Some(true), io, &mut report);
+        for (index, (from, to)) in folders.iter().enumerate() {
+            let name = FOLDERS.get(index).copied().unwrap_or("other");
+            state.folders &= folder(name, from, to, state.configured == Some(true), io, &mut report);
         }
     }
     let keys = keys(control, list, copy, &mut report);
     state.finished = state.folders && keys;
     if let Err(error) = io.save(control, &state) {
-        report.say(Level::WARN, format!("the journal cannot be written ({})", error.kind()));
+        report.say(
+            Entry::warn(
+                DesktopError::LegacyJournalUnwritable,
+                "journal_unwritable",
+                "the carry-over journal could not be written, so what is left is tried again at the next launch",
+            )
+            .kind(error.kind()),
+        );
     }
     report
 }
 
 /// One folder, reported if there was anything to carry; whether it is settled. Where the install was set up (`kept`),
 /// an old folder that exists is only reported.
-fn folder(from: &Path, to: &Path, kept: bool, io: &Io, report: &mut Report) -> bool {
-    let (shown_from, shown_to) = (from.display(), to.display());
+fn folder(name: &'static str, from: &Path, to: &Path, kept: bool, io: &Io, report: &mut Report) -> bool {
     if kept {
         if exists(from).unwrap_or(true) {
-            report.say(Level::INFO, format!("left {shown_from}: {shown_to} is set up"));
+            report.say(
+                Entry::info("left", "an old folder was left as it is because the install here is already set up")
+                    .folder(name),
+            );
         }
         return true;
     }
-    let line = match carry(from, to, io) {
+    let entry = match carry(from, to, io) {
         Ok(None) => return true,
-        Ok(Some(None)) => format!("copied {shown_from} to {shown_to}"),
-        Ok(Some(Some(backup))) => {
-            format!("copied {shown_from} to {shown_to}; what was there is kept as {}", backup.display())
-        }
+        Ok(Some(backup)) => Entry::info("copied", "an old folder was copied to the app's own folder")
+            .folder(name)
+            .backup(backup.is_some()),
         Err(error) => {
-            report.say(Level::WARN, format!("could not copy {shown_from} to {shown_to}: {}", error.kind()));
+            report.say(
+                Entry::warn(
+                    DesktopError::LegacyFolderFailed,
+                    "copy_failed",
+                    "an old folder could not be copied, so it is tried again at the next launch",
+                )
+                .folder(name)
+                .kind(error.kind()),
+            );
             return false;
         }
     };
-    report.say(Level::INFO, line);
+    report.say(entry);
     true
 }
+
+/// The names the log gives the folders the app carries, in the order `app_data::carried_from` returns them.
+const FOLDERS: [&str; 2] = ["app_data", "webview"];
 
 /// Carry the old folder `from` to `to` (see the module). `None` when there is nothing to carry: no old folder, or one
 /// carried already. Else where the folder that was at `to` is kept, if there was one.
@@ -461,7 +583,14 @@ fn keys(
     let providers = match list() {
         Ok(providers) => providers,
         Err(error) => {
-            report.say(Level::WARN, format!("provider keys not looked at ({error:?})"));
+            report.say(
+                Entry::warn(
+                    DesktopError::LegacyKeysNotListed,
+                    "keys_not_listed",
+                    "the old provider keys could not be listed, so they are tried again at the next launch",
+                )
+                .key_error(error),
+            );
             return false;
         }
     };
@@ -480,12 +609,27 @@ fn keys(
         let may_write: Hook = Box::new(move || running(&control));
         let settled: Hook = Box::new(move || Files::write_private(&record, b"").is_ok());
         match copy(&provider, may_write, settled) {
-            Ok(true) => report.say(Level::INFO, format!("copied the {provider} key to the new namespace")),
-            Ok(false) => {
-                report.say(Level::INFO, format!("nothing to copy for {provider}: the new namespace holds a key"))
-            }
+            Ok(true) => report.say(
+                Entry::info("key_copied", "an old provider key was copied to the app's own credential namespace")
+                    .provider(&provider),
+            ),
+            Ok(false) => report.say(
+                Entry::info(
+                    "key_kept",
+                    "an old provider key was not copied because the app's namespace already holds one",
+                )
+                .provider(&provider),
+            ),
             Err(error) => {
-                report.say(Level::WARN, format!("could not copy the {provider} key: {error:?}"));
+                report.say(
+                    Entry::warn(
+                        DesktopError::LegacyKeyFailed,
+                        "key_failed",
+                        "an old provider key could not be copied, so it is tried again at the next launch",
+                    )
+                    .provider(&provider)
+                    .key_error(error),
+                );
                 all = false;
             }
         }
@@ -622,7 +766,7 @@ mod tests {
         assert!(root.join("new-data.first-start-backup/logs/log").exists());
         assert_eq!(read(&root.join("new-web.first-start-backup"), "note"), "first-start web");
         assert_eq!(report.0.len(), 2, "one line per folder");
-        assert!(report.0.iter().all(|(level, line)| *level == Level::INFO && line.contains("first-start-backup")));
+        assert!(report.0.iter().all(|e| e.level == Level::INFO && e.result == "copied" && e.backup));
 
         // Finished: an old folder that changes later is not carried again.
         put(&folders[1].0, "note", "another old web");
@@ -644,7 +788,7 @@ mod tests {
         assert!(!root.join("new-data.first-start-backup").exists() && !root.join("new-data.migrating").exists());
         assert!(read_state(&control).unwrap().finished);
         assert_eq!(report.0.len(), 2);
-        assert!(report.0.iter().all(|(level, line)| *level == Level::INFO && line.starts_with("left ")));
+        assert!(report.0.iter().all(|e| e.level == Level::INFO && e.result == "left"));
     }
 
     #[test]
@@ -818,7 +962,7 @@ mod tests {
         assert_eq!(read(new_data, store::FILE_NAME), "live token");
         assert!(copies_of(new_data).unwrap().is_empty(), "the copy is thrown away");
         assert_eq!(read(&folders[1].1, "note"), "old web", "the other folder goes on");
-        assert!(report.0.iter().any(|(level, line)| *level == Level::WARN && line.contains("resource busy")));
+        assert!(report.0.iter().any(|e| e.level == Level::WARN && e.kind == Some(io::ErrorKind::ResourceBusy)));
         assert!(!read_state(&control).unwrap().finished);
 
         healthy(&folders, &control);
@@ -874,7 +1018,7 @@ mod tests {
 
         let report = run(&folders, &control, &Io::default(), || Err(KeyError::Unavailable), no_copy);
         assert_carried_but_open(&folders, &control);
-        assert!(report.0.iter().any(|(level, line)| *level == Level::WARN && line.contains("Unavailable")));
+        assert!(report.0.iter().any(|e| e.level == Level::WARN && e.key_error == Some(KeyError::Unavailable)));
 
         // Deleted by hand meanwhile: the folders are settled, so it does not come back.
         fs::remove_dir_all(&folders[1].1).unwrap();
@@ -1017,7 +1161,7 @@ mod tests {
 
         assert_eq!(read(&folders[0].1, "note"), "old");
         assert_eq!(read(&folders[2].1, "note"), "old");
-        let levels: Vec<Level> = report.0.iter().map(|(level, _)| *level).collect();
+        let levels: Vec<Level> = report.0.iter().map(|e| e.level).collect();
         assert_eq!(levels, vec![Level::INFO, Level::WARN, Level::INFO]);
         let state = read_state(&control).unwrap();
         assert!(!state.folders && !state.finished);

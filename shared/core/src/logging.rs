@@ -5,6 +5,7 @@
 use std::cell::Cell;
 use std::io::{IsTerminal, Write};
 use std::sync::{Mutex, PoisonError};
+use tracing_subscriber::filter::{filter_fn, FilterExt};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -12,6 +13,20 @@ use tracing_subscriber::{EnvFilter, Layer};
 
 /// The variable that sets the log's level and filters, in `EnvFilter` syntax (default `info`). No other variable is read.
 pub const VARIABLE: &str = "SIDEVOICE_LOG";
+
+/// The panic record: where, on which thread, which version and, for a literal, the message (guideline section 9).
+pub const PANIC_TARGET: &str = "panic";
+/// The backtrace of a panic, a second event for the app file only: never stderr, never a system log. It shares no prefix
+/// with another of our targets (filters match targets by prefix), so no directive reaches it by accident.
+pub const BACKTRACE_TARGET: &str = "crash_backtrace";
+/// What a panic's message is replaced by when the payload is not a literal: a formatted message carries values.
+const FORMATTED_MARKER: &str = "<formatted panic message omitted>";
+const NON_TEXT_MARKER: &str = "<non-text panic payload omitted>";
+
+/// Whether `target` is the backtrace event's, by the same prefix rule as the filter directive `crash_backtrace=...`.
+pub fn is_backtrace_target(target: &str) -> bool {
+    target.strip_prefix(BACKTRACE_TARGET).is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+}
 
 const LEVELS: [&str; 6] = ["error", "warn", "info", "debug", "trace", "off"];
 
@@ -103,17 +118,24 @@ impl Home {
 pub struct Lines<F> {
     sink: F,
     home: Home,
+    /// Whether the backtrace event is dropped here: true for every writer but the app file's.
+    skip_backtrace: bool,
 }
 
 pub struct Line<'a, F: Fn(&str)> {
     lines: &'a Lines<F>,
     buffer: Vec<u8>,
+    skipped: bool,
 }
 
 impl<'a, F: Fn(&str) + 'a> MakeWriter<'a> for Lines<F> {
     type Writer = Line<'a, F>;
     fn make_writer(&'a self) -> Self::Writer {
-        Line { lines: self, buffer: Vec::new() }
+        Line { lines: self, buffer: Vec::new(), skipped: false }
+    }
+
+    fn make_writer_for(&'a self, meta: &tracing::Metadata<'_>) -> Self::Writer {
+        Line { lines: self, buffer: Vec::new(), skipped: self.skip_backtrace && is_backtrace_target(meta.target()) }
     }
 }
 
@@ -147,7 +169,7 @@ impl<F: Fn(&str)> Drop for Line<'_, F> {
     fn drop(&mut self) {
         let text = String::from_utf8_lossy(&self.buffer);
         let text = text.trim_end_matches('\n');
-        if text.is_empty() {
+        if text.is_empty() || self.skipped {
             return;
         }
         let text = self.lines.home.redact(text);
@@ -174,7 +196,7 @@ pub struct Extras<L> {
 /// Installs the process's subscriber: `SIDEVOICE_LOG` as the filter, and one human `key=value` layer into `sink` (the file) and
 /// one into stderr when stderr is a terminal and `SIDEVOICE_DEBUG` is not on (that channel prints its own lines there). Both
 /// show `home` as `~`. It also routes the `log` crate's records (tao, wry, tauri) into it, and a panic goes to it through a
-/// hook. A second call does nothing.
+/// hook. A second call does nothing. Only the file layer gets a panic's backtrace.
 pub fn init<F>(own: &[&str], home: Option<&std::path::Path>, sink: F)
 where
     F: Fn(&str) + Send + Sync + 'static,
@@ -189,12 +211,13 @@ where
     F: Fn(&str) + Send + Sync + 'static,
     L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
 {
-    let (filter, invalid) = filter(std::env::var(VARIABLE).ok().as_deref(), own);
+    let value = std::env::var(VARIABLE).ok();
+    let (filter, invalid) = filter(value.as_deref(), own);
     let home = Home::new(home);
     let _ = HOME.set(home.clone());
     let file = tracing_subscriber::fmt::layer()
         .with_ansi(false)
-        .with_writer(Lines { sink, home: home.clone() })
+        .with_writer(Lines { sink, home: home.clone(), skip_backtrace: false })
         .log_internal_errors(false);
     let stderr = (extras.stderr && std::io::stderr().is_terminal() && !crate::debug::enabled()).then(|| {
         let to_stderr = |line: &str| {
@@ -202,42 +225,139 @@ where
         };
         tracing_subscriber::fmt::layer()
             .with_ansi(true)
-            .with_writer(Lines { sink: to_stderr, home })
+            .with_writer(Lines { sink: to_stderr, home, skip_backtrace: true })
             .log_internal_errors(false)
     });
-    let installed = tracing_subscriber::registry()
-        .with(file.and_then(stderr).and_then(extras.layer).with_filter(filter))
-        .try_init()
-        .is_ok();
+    STDERR_LAYER.store(stderr.is_some(), std::sync::atomic::Ordering::Relaxed);
+    // The process's own layer (the phone's system log) never gets the backtrace either: it has its own filter, the same
+    // directives with the backtrace target off.
+    let (own_filter, _) = self::filter(value.as_deref(), own);
+    let extra = extras
+        .layer
+        .map(|layer| layer.with_filter(own_filter.and(filter_fn(|metadata| !is_backtrace_target(metadata.target())))));
+    let installed =
+        tracing_subscriber::registry().with(extra).with(file.and_then(stderr).with_filter(filter)).try_init().is_ok();
     if installed {
         if extras.panic_hook {
             install_panic_hook();
         }
         if invalid {
-            tracing::warn!(variable = VARIABLE, "invalid log filter, using the default");
+            tracing::warn!(
+                error.type = crate::error::SharedError::InvalidLogFilter.code(),
+                variable = VARIABLE,
+                "the log filter is not valid; the default filter is used instead"
+            );
         }
     }
 }
 
-/// A panic goes to the log once, through the subscriber (`target: "panic"`: its place and thread, never its message, which `unwrap`
-/// and `assert` fill with `Debug` of values), and its place to stderr. The
-/// default hook is not chained: it would write the raw message to stderr, past the writer's backstop.
+/// Whether stderr has a layer: when it has not, a panic still shows its place there (the hook's own line).
+static STDERR_LAYER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What the process is, as OpenTelemetry's resource conventions name it: a closed list set here, logged once in the start
+/// event and not repeated on each line. No detectors: they add host names, command lines and owners.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Resource {
+    pub service_name: &'static str,
+    pub service_version: &'static str,
+    pub os_type: &'static str,
+    pub os_name: &'static str,
+    pub host_arch: &'static str,
+}
+
+impl Resource {
+    /// `os` and `arch` as Rust names them, in OpenTelemetry's values (`os.name` tells iOS and Android apart from their
+    /// kernel's `os.type`); a name Rust gives that is not mapped here travels as it is.
+    pub fn of(name: &'static str, version: &'static str, os: &'static str, arch: &'static str) -> Resource {
+        Resource {
+            service_name: name,
+            service_version: version,
+            os_type: match os {
+                "macos" | "ios" => "darwin",
+                "android" => "linux",
+                other => other,
+            },
+            os_name: match os {
+                "macos" => "macOS",
+                "ios" => "iOS",
+                "android" => "Android",
+                "linux" => "Linux",
+                "windows" => "Windows",
+                other => other,
+            },
+            host_arch: match arch {
+                "x86_64" => "amd64",
+                "aarch64" => "arm64",
+                other => other,
+            },
+        }
+    }
+}
+
+/// The resource the panic record repeats the version of.
+static RESOURCE: std::sync::OnceLock<Resource> = std::sync::OnceLock::new();
+
+/// The process's start event, once, after [`init`]: the resource attributes, and the version the panic record repeats.
+pub fn announce(resource: Resource) {
+    let _ = RESOURCE.set(resource);
+    tracing::info!(
+        service.name = resource.service_name,
+        service.version = resource.service_version,
+        os.type = resource.os_type,
+        os.name = resource.os_name,
+        host.arch = resource.host_arch,
+        "the application started"
+    );
+}
+
+/// A panic goes to the log as two events (guideline section 9), through the subscriber: first `panic`, then `crash_backtrace`
+/// for the app file only. The default hook is not chained: it would write the raw message to stderr, past the writer's
+/// backstop.
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         IN_HOOK.with(|flag| flag.set(true));
-        let thread = std::thread::current();
-        tracing::error!(
-            target: "panic",
-            location = %info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default(),
-            thread = thread.name().unwrap_or("unnamed"),
-            "panic"
-        );
+        record_panic(info.payload(), info.location().map(|at| (at.file(), at.line())), std::thread::current().name());
         IN_HOOK.with(|flag| flag.set(false));
-        // However the log is set up, a panic must not vanish: the place, never the message, on stderr as well.
-        let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
-        let location = HOME.get().map_or(location.clone(), |home| home.redact(&location));
-        let _ = writeln!(std::io::stderr().lock(), "sidevoice: panic at {location}");
+        // However the log is set up, a panic must not vanish: with no stderr layer its place, never its message, goes there.
+        if !STDERR_LAYER.load(std::sync::atomic::Ordering::Relaxed) {
+            let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+            let location = HOME.get().map_or(location.clone(), |home| home.redact(&location));
+            let _ = writeln!(std::io::stderr().lock(), "sidevoice: panic at {location}");
+        }
     }));
+}
+
+/// The panic's two events. `panic`: where, which thread, which version and the message only when the payload is a literal
+/// (`&'static str`); a formatted `String` is replaced by a marker and its length, never its text, a prefix or a hash,
+/// because `unwrap()` and `assert_eq!` put values in it. Then `crash_backtrace`: the frames, in one line (symbols and
+/// lines, no values).
+fn record_panic(payload: &(dyn std::any::Any + Send), location: Option<(&str, u32)>, thread: Option<&str>) {
+    let (message, len) = match (payload.downcast_ref::<&'static str>(), payload.downcast_ref::<String>()) {
+        (Some(literal), _) => (*literal, None),
+        (None, Some(formatted)) => (FORMATTED_MARKER, Some(formatted.len())),
+        (None, None) => (NON_TEXT_MARKER, None),
+    };
+    let (file, line) = location.unzip();
+    tracing::event!(
+        target: "panic",
+        tracing::Level::ERROR,
+        exception.type = "panic",
+        exception.message = message,
+        len,
+        code.file.path = file,
+        code.line.number = line,
+        thread.name = thread.unwrap_or("unnamed"),
+        service.version = RESOURCE.get().map_or("unknown", |resource| resource.service_version),
+        "the program panicked; the work of that thread was abandoned"
+    );
+    let backtrace = std::backtrace::Backtrace::force_capture();
+    tracing::event!(
+        target: "crash_backtrace",
+        tracing::Level::ERROR,
+        exception.type = "panic",
+        exception.stacktrace = ?backtrace,
+        "the backtrace of the panic recorded just before"
+    );
 }
 
 /// An id a page or client named, as a log field: as it is when it is 1 to 64 of `[A-Za-z0-9._:-]`, else `invalid`. The sender
@@ -302,12 +422,35 @@ mod tests {
         let lines = Lines {
             sink: |line: &str| seen.lock().unwrap().push(line.to_owned()),
             home: Home::new(Some(std::path::Path::new("/home/ana"))),
+            skip_backtrace: false,
         };
         let mut writer = lines.make_writer();
         writer.write_all(b"one /HOME/ana/x ").unwrap();
         writer.write_all(b"line\n").unwrap();
         drop(writer);
         assert_eq!(*seen.lock().unwrap(), ["one ~/x line"]);
+    }
+
+    #[test]
+    fn the_resource_is_a_closed_list_in_opentelemetry_values() {
+        let mac = Resource::of("app", "1.0.0", "macos", "aarch64");
+        assert_eq!((mac.os_type, mac.os_name, mac.host_arch), ("darwin", "macOS", "arm64"));
+        let ios = Resource::of("app", "1.0.0", "ios", "aarch64");
+        assert_eq!((ios.os_type, ios.os_name), ("darwin", "iOS"));
+        let android = Resource::of("app", "1.0.0", "android", "aarch64");
+        assert_eq!((android.os_type, android.os_name), ("linux", "Android"));
+        let linux = Resource::of("app", "1.0.0", "linux", "x86_64");
+        assert_eq!((linux.os_type, linux.os_name, linux.host_arch), ("linux", "Linux", "amd64"));
+        let windows = Resource::of("app", "1.0.0", "windows", "x86_64");
+        assert_eq!((windows.os_type, windows.os_name), ("windows", "Windows"));
+        assert_eq!((mac.service_name, mac.service_version), ("app", "1.0.0"));
+    }
+
+    #[test]
+    fn the_backtrace_target_is_matched_like_a_filter_directive_and_shares_no_prefix_with_the_panic_target() {
+        assert!(is_backtrace_target("crash_backtrace") && is_backtrace_target("crash_backtrace::x"));
+        assert!(!is_backtrace_target("crash_backtrace_x") && !is_backtrace_target("panic"));
+        assert!(!PANIC_TARGET.starts_with(BACKTRACE_TARGET) && !BACKTRACE_TARGET.starts_with(PANIC_TARGET));
     }
 
     #[test]

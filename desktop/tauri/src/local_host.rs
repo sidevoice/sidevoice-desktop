@@ -152,11 +152,14 @@ fn act(app: &AppHandle, name: &str) -> Answer {
 fn run_install(installing: Installing) -> Answer {
     let _span = tracing::info_span!("local_host_install", job = %install::loggable_job(installing.id())).entered();
     let fetch = Https::new().map_err(|failure| {
-        tracing::error!(report = %failure.log_report(), "local-host install could not start");
+        failure.log(
+            sidevoice_local_host::error::LocalHostError::InstallNotStarted.code(),
+            "the local host install could not start",
+        );
         json!(failure)
     })?;
     installing.run(&fetch, &install::Options::standard()).map(|report| json!(report)).map_err(|failure| {
-        tracing::error!(report = %failure.log_report(), "local-host install failed");
+        failure.log(sidevoice_local_host::error::LocalHostError::InstallFailed.code(), "the local host install failed");
         json!(failure)
     })
 }
@@ -165,11 +168,15 @@ fn run_install(installing: Installing) -> Answer {
 /// same install the background update runs). Blocking, like the install; a failure is logged here in full.
 fn run_update(host: &Arc<LocalHost>) -> Result<sidevoice_local_host::state::Report, Value> {
     let fetch = Https::new().map_err(|failure| {
-        tracing::error!(report = %failure.log_report(), "local-host update could not start");
+        failure
+            .log(crate::error::DesktopError::LocalHostUpdateNotStarted.code(), "the local host update could not start");
         json!(failure)
     })?;
     host.update(&fetch, &install::Options::standard()).map_err(|failure| {
-        tracing::error!(report = %failure.log_report(), "local-host update failed");
+        failure.log(
+            sidevoice_local_host::error::LocalHostError::ServiceUpdateFailed.code(),
+            "the local host update failed",
+        );
         json!(failure)
     })
 }
@@ -187,7 +194,7 @@ fn reveal(app: &AppHandle) -> Answer {
         return Err(refusal("log.missing", t(language, "local_host.log_missing")));
     }
     crate::platform::reveal::files(app, &logs).map_err(|_| {
-        tracing::warn!(code = "reveal_failed", "could not reveal logs");
+        tracing::warn!(error.type = crate::error::DesktopError::RevealFailed.code(), "the logs could not be shown in the file manager");
         refusal("reveal.failed", t(language, "local_host.reveal_failed"))
     })?;
     Ok(state(app).unwrap_or(Value::Null))
@@ -245,10 +252,18 @@ fn keep_current(app: &AppHandle, host: &Arc<LocalHost>) {
     let (app, host) = (app.clone(), host.clone());
     let started = std::thread::Builder::new().name("local-host-update".into()).spawn(move || match Https::new() {
         Ok(fetch) => host.keep_current(&fetch, &install::Options::standard(), || crate::data::admit(&app)),
-        Err(failure) => tracing::error!(report = %failure.log_report(), "local-host updates could not start"),
+        Err(failure) => failure.log(
+            crate::error::DesktopError::LocalHostUpdatesNotStarted.code(),
+            "the local host's background updates could not start",
+        ),
     });
     if let Err(e) = started {
-        tracing::error!(kind = ?e.kind(), os_error = e.raw_os_error(), "local-host updates could not start");
+        tracing::error!(
+            error.type = crate::error::DesktopError::LocalHostUpdatesNotStarted.code(),
+            kind = ?e.kind(),
+            os_error = e.raw_os_error(),
+            "the local host's background updates could not start"
+        );
     }
 }
 

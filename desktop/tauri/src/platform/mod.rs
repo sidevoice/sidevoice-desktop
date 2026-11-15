@@ -8,6 +8,7 @@ pub mod locale;
 pub mod media_duck;
 #[cfg(test)]
 pub mod pairing_storage;
+pub mod resource;
 pub mod reveal;
 pub mod session;
 pub mod shortcut_access;

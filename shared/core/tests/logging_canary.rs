@@ -29,7 +29,7 @@ fn nothing_seeded_reaches_the_log() {
     // Lifecycle lines, as the app and the local host emit them: fixed fields, and they reach the file.
     tracing::info!(target: "sidevoice_local_host::host", state = "paired", "lifecycle local-host state");
     tracing::info!(target: "sidevoice_desktop_lib", call_card = true, "lifecycle app launch");
-    tracing::warn!(target: "sidevoice_local_host::proxy", http_status = 503u16, reason = "not_paired", "lifecycle proxy refused");
+    tracing::event!(target: "sidevoice_local_host::proxy", tracing::Level::WARN, http.response.status_code = 503u16, error.type = "local-host.not-paired", "lifecycle proxy refused");
     // The SIDEVOICE_DEBUG helpers are not the log: a voice event with a transcript goes through them in the call host.
     sidevoice_shared::debug::debug(&format!("voice event {{\"phase\":\"finished\",\"text\":\"{WORDS}\"}}"));
     sidevoice_shared::debug::debug_detail(|| format!("snapshot {WORDS}"));
@@ -40,6 +40,12 @@ fn nothing_seeded_reaches_the_log() {
         .unwrap()
         .join();
     let _ = std::panic::catch_unwind(|| panic!("second {HOME}/caught"));
+    // A literal message is the one a panic keeps.
+    let _ = std::thread::Builder::new()
+        .name("literal-thread".into())
+        .spawn(|| panic!("a literal panic message"))
+        .unwrap()
+        .join();
 
     // The hook swallows panics; a failed assertion below must say why.
     drop(std::panic::take_hook());
@@ -50,8 +56,17 @@ fn nothing_seeded_reaches_the_log() {
         "path=~/project",
         "canary thread",
         "canary bridge ~/log",
-        "ERROR panic: panic",
-        "canary-thread",
+        "ERROR panic: the program panicked",
+        "exception.type=\"panic\"",
+        "exception.message=\"<formatted panic message omitted>\"",
+        "exception.message=\"a literal panic message\"",
+        "code.line.number=",
+        "thread.name=\"canary-thread\"",
+        "service.version=\"unknown\"",
+        "crash_backtrace: the backtrace of the panic",
+        "exception.stacktrace=Backtrace",
+        "error.type=\"local-host.not-paired\"",
+        "http.response.status_code=503",
         "lifecycle local-host state",
         "lifecycle app launch",
         "lifecycle proxy refused",
@@ -65,6 +80,7 @@ fn nothing_seeded_reaches_the_log() {
         assert!(!text.contains(&decimal(seed)), "{seed:?} reached the log as bytes");
     }
     assert!(!text.contains(HOME), "the home directory reached the log:\n{text}");
-    // A panic keeps its place and thread, never its message.
+    // A formatted panic keeps its place, thread and length, never its message.
     assert!(!text.contains("failed at") && !text.contains("second"), "a panic message reached the log:\n{text}");
+    assert!(!text.contains(" code=") && !text.contains("http_status"), "a v1 field name is back:\n{text}");
 }
