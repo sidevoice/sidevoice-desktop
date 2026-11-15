@@ -47,10 +47,9 @@ impl Os for Native {
             session
                 .setPreferredInput_error(port.as_deref())
                 .map_err(|error| {
-                    log::warn!(
-                        "the audio session refused the preferred input: {} ({})",
-                        error.localizedDescription(),
-                        error.code()
+                    tracing::warn!(
+                        ns_error_code = error.code(),
+                        "the audio session refused the preferred input"
                     );
                     "audio-input-failed".to_owned()
                 })

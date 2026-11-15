@@ -228,7 +228,10 @@ impl<Id: PartialEq> Mute<Id> {
             return None;
         }
         if self.retried {
-            log::warn!("call: the system's call keeps its mute ({})", self.system);
+            tracing::warn!(
+                muted = self.system,
+                "the system's call keeps its mute after one retry"
+            );
             return None;
         }
         self.retried = true;
@@ -332,12 +335,13 @@ fn request_start(
     let answered = RcBlock::new(move |error: *mut NSError| {
         // SAFETY: CallKit hands a valid error, or none, for the length of the call.
         let refused = unsafe { error.as_ref() }.map(|error| {
+            // The text goes to the caller, which maps it to a code; the log has the code only.
             let reason = format!(
                 "CallKit refused the call ({}, {})",
                 error.domain(),
                 error.code()
             );
-            log::warn!("call: {reason}");
+            tracing::warn!(ns_error_code = error.code(), "CallKit refused the call");
             // The call was never taken: it is not the app's.
             CALLKIT.with_borrow_mut(|kit| {
                 if let Some(kit) = kit.as_mut() {
@@ -407,11 +411,7 @@ fn ask_mute(muted: bool) {
         let Some(error) = (unsafe { error.as_ref() }) else {
             return;
         };
-        log::warn!(
-            "call: CallKit refused the mute ({}, {})",
-            error.domain(),
-            error.code()
-        );
+        tracing::warn!(ns_error_code = error.code(), "CallKit refused the mute");
         // Never performed: nothing of it comes back.
         let again = CALLKIT.with_borrow_mut(|kit| {
             let call = kit.as_mut()?.call.as_mut().filter(|call| call.id == id)?;
@@ -448,10 +448,9 @@ fn end(id: u64, reason: Option<StopReason>) {
         let action = CXEndCallAction::initWithCallUUID(CXEndCallAction::alloc(), &call.uuid);
         let answered = RcBlock::new(|error: *mut NSError| {
             if let Some(error) = error.as_ref() {
-                log::warn!(
-                    "call: CallKit refused the end ({}, {})",
-                    error.domain(),
-                    error.code()
+                tracing::warn!(
+                    ns_error_code = error.code(),
+                    "CallKit refused the end of the call"
                 );
             }
         });
@@ -486,7 +485,7 @@ define_class!(
         /// The system reset the provider: every call is over.
         #[unsafe(method(providerDidReset:))]
         fn provider_did_reset(&self, _provider: &CXProvider) {
-            log::warn!("call: CallKit reset the provider");
+            tracing::warn!("call: CallKit reset the provider");
             let call = CALLKIT.with_borrow_mut(|kit| kit.as_mut().and_then(|kit| kit.call.take()));
             if let Some(call) = call {
                 (call.events)(CallEvent::Stopped {
@@ -505,7 +504,7 @@ define_class!(
                     provider.reportOutgoingCallWithUUID_startedConnectingAtDate(&uuid, None);
                     action.fulfill();
                 } else {
-                    log::warn!("call: CallKit performed a start that is not the app's call");
+                    tracing::warn!("call: CallKit performed a start that is not the app's call");
                     action.fail();
                 }
             }
@@ -571,7 +570,7 @@ define_class!(
 
         #[unsafe(method(provider:timedOutPerformingAction:))]
         fn timed_out(&self, _provider: &CXProvider, _action: &CXAction) {
-            log::warn!("call: a CallKit action timed out");
+            tracing::warn!("call: a CallKit action timed out");
         }
 
         /// The system activated the call's audio session: the app's audio may start. The call is connected from the first.
@@ -596,9 +595,11 @@ define_class!(
                     session.categoryOptions(),
                 )
             };
-            log::info!(
-                "call: CallKit activated the audio session (category {category}, mode {mode}, options {:#x})",
-                options.0
+            tracing::info!(
+                category = category.to_string(),
+                mode = mode.to_string(),
+                options = options.0,
+                "CallKit activated the audio session"
             );
             if let Some(events) = running() {
                 events(CallEvent::Audio { active: true });
@@ -608,7 +609,7 @@ define_class!(
         /// The system deactivated it (the call ended or was held).
         #[unsafe(method(provider:didDeactivateAudioSession:))]
         fn did_deactivate(&self, _provider: &CXProvider, _session: &AVAudioSession) {
-            log::info!("call: CallKit deactivated the audio session");
+            tracing::info!("call: CallKit deactivated the audio session");
             if let Some(events) = running() {
                 events(CallEvent::Audio { active: false });
             }

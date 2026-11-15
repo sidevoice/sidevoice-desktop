@@ -33,16 +33,20 @@ serde_json = "1"
 # The creatures' stills reach the app as base64 (`call_still`, src/lib.rs), as the page's canvas gives them.
 base64 = "0.22"
 # The app's log (src/lib.rs, sidevoice-shared's `system_log`): `tracing` events through one subscriber: a file in the app's log folder (the plugin
-# writes it, `split`; its `log` command is the page's channel) and the system's (logcat, the unified log). `log` is what the
+# writes it, `split`; its `log` command is the page's channel) and the system's (logcat, the unified log; `warn` and above). `log` is what the
 # plugins and Tauri emit, which `tracing-log` bridges.
 tauri-plugin-log = "2"
 log = "0.4"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# The subscriber's types the system log layer is built on (src/platform/system_log.rs); no features beyond the registry.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry"] }
 # The camera that scans the pairing QR code (`host.codeScanner`, js/mobile-bridge.js): Tauri's official barcode scanner, CameraX
 # and ML Kit on Android, AVFoundation on iOS, with the camera permission it asks for itself (docs/MOBILE.md -> "Scanning the pairing code").
 tauri-plugin-barcode-scanner = "2.5.3"
 
 [target.'cfg(target_os = "ios")'.dependencies]
+# The unified log layer (src/platform/system_log/ios.rs): `warn` and `error` of our targets only, under sidevoice-shared's filter.
+tracing-oslog = "0.3"
 # The session's interruptions (src/platform/interruption/ios.rs): the notification a phone call or an alarm makes the system post.
 objc2 = "0.6"
 block2 = "0.6"

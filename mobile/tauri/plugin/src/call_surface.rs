@@ -235,12 +235,6 @@ pub const STILLS_CAP: u64 = 8 * 1024 * 1024;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
-/// A line for the system's log, where `log show` reads it (iOS: subsystem `ai.sidevoice`, the category given, public
-/// strings): the app's log file is not in the unified log. Nothing on other systems, whose log already is the system's.
-pub fn os_log(category: &str, message: &str) {
-    platform::os_log(category, message);
-}
-
 /// The folder the stills are kept in, by id: in the container the app shares with its widget extension where there is one
 /// (iOS, the App Group's), else in the app's cache.
 pub fn stills_dir<R: Runtime>(app: &AppHandle<R>) -> io::Result<PathBuf> {
@@ -253,10 +247,10 @@ pub fn stills_dir<R: Runtime>(app: &AppHandle<R>) -> io::Result<PathBuf> {
     static SAID: std::sync::Once = std::sync::Once::new();
     SAID.call_once(|| {
         // Where the stills go is where the surfaces must read them: a widget extension cannot read the app's cache.
-        log::info!(
+        tracing::info!(
             target: "stills",
-            "call stills: folder kept (shared container: {})",
-            shared.is_some()
+            shared_container = shared.is_some(),
+            "the folder of the call's stills was set"
         );
     });
     Ok(dir)
@@ -274,12 +268,13 @@ pub fn save_still<R: Runtime>(
     px: u32,
 ) -> Result<(), StillError> {
     if let Err(error) = check_still(id, png, px) {
-        log::warn!(
+        tracing::warn!(
             target: "stills",
-            "call stills: refused a still (id of {} bytes, {} bytes, {px} px): {}",
-            id.len(),
-            png.len(),
-            error.code()
+            id_len = id.len(),
+            len = png.len(),
+            px,
+            reason = error.code(),
+            "a still was refused"
         );
         return Err(error);
     }
@@ -301,11 +296,7 @@ pub fn save_still<R: Runtime>(
     fs::write(&partial, png)
         .and_then(|()| fs::rename(&partial, &file))
         .map_err(StillError::Io)?;
-    log::info!(
-        target: "stills",
-        "call stills: kept a still ({} bytes, {px} px)",
-        png.len()
-    );
+    tracing::info!(target: "stills", len = png.len(), px, "a still was kept");
     Ok(())
 }
 
@@ -397,7 +388,9 @@ pub(crate) fn start_surface(details: &CallDetails, events: CallEvents) {
         &details_json(details, false),
         Arc::new(move |name| match SurfaceAction::named(name) {
             Some(action) => events(CallEvent::Action { action }),
-            None => log::warn!("call surface: an action the app does not know"),
+            None => tracing::warn!(
+                "a call surface asked for an action the app does not know; it is ignored"
+            ),
         }),
     );
 }

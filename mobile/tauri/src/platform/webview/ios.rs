@@ -52,6 +52,16 @@ fn lock_zoom(web_view: &UIView) {
 
 /// Asks the page what it measures (the viewport, the document, the root element and the backgrounds) and logs the answer:
 /// the web view's side of a layout the native side cannot see.
+/// What `log_page`'s script answers that is logged: sizes in CSS pixels.
+#[derive(serde::Deserialize)]
+struct PageLayout {
+    inner: Option<[f64; 2]>,
+    visual: Option<[f64; 2]>,
+    client: Option<[f64; 2]>,
+    scroll: Option<f64>,
+    screen: Option<[f64; 2]>,
+}
+
 fn log_page(web_view: &UIView) {
     const SCRIPT: &str = "(() => { const r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); \
         return [Math.round(b.top), Math.round(b.height), getComputedStyle(e).backgroundColor].join(' '); }; \
@@ -62,8 +72,19 @@ fn log_page(web_view: &UIView) {
     let script = NSString::from_str(SCRIPT);
     let done = RcBlock::new(|result: *mut AnyObject, _error: *mut AnyObject| {
         // SAFETY: the result of a script that returns a string is an `NSString`, or null on an error.
+        // Only the numbers are read, through a type: the page is script, and its other values (colours, text) stay out of the log.
         if let Some(result) = unsafe { result.cast::<NSString>().as_ref() } {
-            log::info!("layout page: {result}");
+            match serde_json::from_str::<PageLayout>(&result.to_string()) {
+                Ok(page) => tracing::info!(
+                    inner = ?page.inner,
+                    visual = ?page.visual,
+                    client = ?page.client,
+                    scroll = ?page.scroll,
+                    screen = ?page.screen,
+                    "the page's layout was measured"
+                ),
+                Err(_) => tracing::warn!("the page's layout could not be read"),
+            }
         }
     });
     // SAFETY: `evaluateJavaScript:completionHandler:` is `WKWebView`'s; the block takes the result and the error.

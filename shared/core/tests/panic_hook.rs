@@ -23,14 +23,18 @@ fn append(path: &Path, line: &str) {
 fn child(dir: &Path) {
     let (file, system) = (dir.join("app.log"), dir.join("system.log"));
     let home = Some(Path::new(CANARY_HOME));
-    let layer = SystemLog::new(Home::new(home), move |_, _, line: &str| append(&system, line));
+    let layer = SystemLog::new(Home::new(home), move |_, line: &str| append(&system, line));
+    let own = ["sidevoice_shared", logging::PANIC_TARGET, logging::BACKTRACE_TARGET];
     logging::init_with(
-        &["sidevoice_shared", logging::PANIC_TARGET, logging::BACKTRACE_TARGET],
+        &own,
         home,
         move |line| append(&file, line),
-        Extras { layer: Some(layer), stderr: false, panic_hook: true },
+        Extras { layer: Some(layer), system_targets: &own, stderr: false, panic_hook: true },
     );
     logging::announce(Resource::of("canary-app", "9.9.9", "macos", "aarch64"));
+    tracing::info!(target: "sidevoice_shared", "an info line of ours");
+    tracing::warn!(target: "hyper", "a dependency warning");
+    tracing::warn!(target: "sidevoice_shared", "a warning of ours");
     let literal = std::thread::Builder::new()
         .name("literal-panic".into())
         .spawn(|| panic!("literal words that may be logged"))
@@ -109,6 +113,9 @@ fn a_panic_is_two_redacted_events_and_the_backtrace_reaches_the_file_only() {
     }
 
     // The system log gets the panic record and never the backtrace (guideline section 8).
+    assert!(system.contains("a warning of ours"), "{system}");
+    assert!(!system.contains("an info line") && !system.contains("the application started"), "{system}");
+    assert!(!system.contains("a dependency warning") && file.contains("a dependency warning"), "{system}");
     assert!(system.contains("the program panicked"), "{system}");
     assert!(
         !system.contains("crash_backtrace") && !system.contains("stacktrace") && !system.contains("Backtrace"),

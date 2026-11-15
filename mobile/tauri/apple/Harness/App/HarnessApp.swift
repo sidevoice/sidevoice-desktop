@@ -108,7 +108,7 @@ final class Harness: ObservableObject {
                 UIApplication.shared.endBackgroundTask(background)
                 background = .invalid
             }
-            NSLog("LA harness: no audio (%@); kept alive by a background task", "\(error)")
+            NSLog("LA harness: no audio; kept alive by a background task")
         }
     }
 

@@ -47,7 +47,7 @@ struct Lines: View {
     /// Logs a chunk the view had to cut: the chunker's measurement drifted from the device's.
     private static func report(_ lines: [Line], _ text: String, width: CGFloat) {
         guard lines.last?.ellipsis == true else { return }
-        CallLog.text.error("chunk of \(text.count) characters cut by the view at \(Int(width)) pt")
+        CallLog.error("a chunk of the call's text was cut by the view; the chunker's measurement drifted from the device's")
     }
 
     struct Line {
