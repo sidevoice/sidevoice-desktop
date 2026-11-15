@@ -53,7 +53,11 @@ fn plain_id(id: &str) -> bool {
 fn read(path: &Path) -> Result<Option<Stored>, std::io::ErrorKind> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        // Windows reports a path through a regular file as `NotFound` too, where Unix says `NotADirectory`: a parent
+        // that is a regular file is never "no file yet".
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return if path.parent().is_some_and(|dir| dir.is_file()) { Err(error.kind()) } else { Ok(None) };
+        }
         Err(error) => return Err(error.kind()),
     };
     let mut bytes = Vec::new();
