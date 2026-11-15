@@ -56,7 +56,7 @@ card's window none, no other window any).
 | `voice_audio_devices` | `sidevoice-shared-tauri:allow-voice-audio-devices` | room | room page | `page` | from now on, `devices` when they change | no |
 | `voice_set_audio_devices` | `sidevoice-shared-tauri:allow-voice-set-audio-devices` | room | room page | `page`, `choice` | `devices`, when the choice changes them | no |
 | `microphone` | `sidevoice-shared-tauri:allow-microphone` | room | room page | `action` (`state`, `request`, `open-settings`) | nothing (the system's answer, or its privacy page opened) | no |
-| `crash_reports` | `sidevoice-shared-tauri:allow-crash-reports` | room | room page | `action` (`get`, `set`), `mode?` (`auto`, `never`) | nothing (the app's crash reports setting, kept by its reporter) | no |
+| `crash_reports` | `sidevoice-shared-tauri:allow-crash-reports` | room | room page | `action` (`get`, `set`, `install_id`), `mode?` (`auto`, `never`) | the app's crash reports setting (`get`, `set`, kept by its reporter), or `install_id`: `{installId}`, the installation id, `null` under `never` | no |
 | `bridge_level` | `sidevoice-shared-tauri:allow-bridge-level` | room | room page | `level` | nothing (the app's `CallObserver` is told the microphone's level) | no |
 | `bridge_playback` | `sidevoice-shared-tauri:allow-bridge-playback` | room | room page | `level`, `threadId?` | nothing (the app's `CallObserver` is told the voice's output level and whose reply it is) | no |
 | `pairings_read` | `sidevoice-shared-tauri:allow-pairings-read` | room | room page | none | nothing (the pairings, from the app's `PairingStore`) | no |

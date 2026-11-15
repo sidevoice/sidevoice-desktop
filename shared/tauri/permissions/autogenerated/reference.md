@@ -62,6 +62,32 @@ Denies the bridge_playback command without any pre-configured scope.
 <tr>
 <td>
 
+`sidevoice-shared-tauri:allow-crash-reports`
+
+</td>
+<td>
+
+Enables the crash_reports command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:deny-crash-reports`
+
+</td>
+<td>
+
+Denies the crash_reports command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `sidevoice-shared-tauri:allow-engine-cancel`
 
 </td>
@@ -419,32 +445,6 @@ Enables the microphone command without any pre-configured scope.
 <td>
 
 Denies the microphone command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`sidevoice-shared-tauri:allow-crash-reports`
-
-</td>
-<td>
-
-Enables the crash_reports command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`sidevoice-shared-tauri:deny-crash-reports`
-
-</td>
-<td>
-
-Denies the crash_reports command without any pre-configured scope.
 
 </td>
 </tr>

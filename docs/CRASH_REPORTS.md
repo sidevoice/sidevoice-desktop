@@ -42,12 +42,13 @@ report carries, made on first ask, `null` under "No enviar".
 
 - A machine's record is posted on the pass's own thread (up to 10 s) and its outcome is the event's own (by event id): an
   app panic posted at the same time cannot make a failed record look delivered, so it is not acknowledged.
-- The app's own panic is posted from the panic hook: best-effort, at most 2 s, so a slow network cannot hold a dying app up.
+- The app's own panic is posted from the panic hook: best-effort, at most about 2.5 s (a 2 s send budget plus 0.5 s to hear its outcome), so a slow network cannot hold a dying app up.
 - The setting file: no file is "auto"; a file that is there but cannot be read or understood means "never" for that run (a
   warning with `error.type` `shared.crash-settings-unreadable`), and is left as it is until the person chooses.
-- A machine's record is checked again here: the message is printable ASCII or the marker, every tail line is a warning or an
-  error of the piece's own log with its time as an offset from the crash (`-12.345s`) and its ids as tokens of that record
-  (`d1`, `c2`; both made by the machine, sidevoice-core's `crash` module); anything else and the record is skipped.
+- A machine's record is checked again here, by shape only: the message is printable ASCII or the marker, and every tail line is
+  a warning or an error of the piece's own log with its time as an offset from the crash (`-12.345s`). The app does not
+  verify that the ids in a line are tokens of the record (`d1`, `c2`): the machine makes them (sidevoice-core's `crash`
+  module), the app trusts that; a line of another shape and the record is skipped.
 
 ## "No enviar"
 
