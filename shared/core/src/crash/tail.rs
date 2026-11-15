@@ -24,7 +24,7 @@ fn is_offset(time: &str) -> bool {
 /// The first `target:` or `span{fields}:` of `rest` and what follows it.
 fn split_head(rest: &str) -> Option<(&str, &str)> {
     let name = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(rest.len());
-    if name > 0 && rest[name..].starts_with('{') {
+    if name > 0 && rest.get(name..).is_some_and(|after| after.starts_with('{')) {
         let (mut quoted, mut escaped) = (false, false);
         for (at, c) in rest.char_indices().skip_while(|(at, _)| *at <= name) {
             match c {
@@ -32,7 +32,8 @@ fn split_head(rest: &str) -> Option<(&str, &str)> {
                 '\\' if quoted => escaped = true,
                 '"' => quoted = !quoted,
                 '}' if !quoted => {
-                    return rest[at + 1..].strip_prefix(':').map(|after| (&rest[..=at], after));
+                    let (head, after) = (rest.get(..=at)?, rest.get(at + 1..)?);
+                    return after.strip_prefix(':').map(|after| (head, after));
                 }
                 _ => {}
             }
@@ -49,8 +50,8 @@ pub fn is_tail_line(line: &str, piece: Piece) -> bool {
     if !is_offset(time) || !matches!(level, "WARN" | "ERROR") {
         return false;
     }
-    let rest = line.trim_start()[time.len()..].trim_start();
-    let mut rest = rest[level.len()..].trim_start();
+    let rest = line.trim_start().strip_prefix(time).unwrap_or_default().trim_start();
+    let mut rest = rest.strip_prefix(level).unwrap_or_default().trim_start();
     let own = match piece {
         Piece::Core => "sidevoice_core",
         Piece::Connector => "sidevoice_connector",

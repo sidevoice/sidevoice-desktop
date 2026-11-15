@@ -38,27 +38,26 @@ impl Machine for LocalCore {
     }
 }
 
-/// At start, right after the log: the reporter (the setting is read here), the panic hook's observer, and the pass over the
-/// core's records on a thread of its own.
+/// At start, right after the log: the reporter (the setting is read here; the client is made on a thread of its own), the
+/// panic hook's observer, and the pass over the core's records on a thread of its own. Nothing here can stop the app: with no
+/// data folder, or a reporter that cannot start, reporting is off for this run and the setting still answers the page.
 pub fn setup(app: &AppHandle) {
-    let Ok(dir) = crate::data::desktop_dir(app) else { return };
-    let reporter = Reporter::start(Config {
-        resource: crate::platform::resource::current(),
-        dsn: DSN.map(str::to_owned),
-        dir,
-        post: None,
-    });
+    let resource = crate::platform::resource::current();
+    let Ok(dir) = crate::data::desktop_dir(app) else {
+        app.manage(CrashReports(Reporter::unavailable(resource)));
+        return;
+    };
+    let reporter = Reporter::start_in_background(Config { resource, dsn: DSN.map(str::to_owned), dir, post: None });
     crash::report_panics(reporter.clone());
     app.manage(CrashReports(reporter.clone()));
     let app = app.clone();
     let started = std::thread::Builder::new().name("crash-records".into()).spawn(move || {
-        std::thread::sleep(FIRST);
-        loop {
+        // A pass that panics is contained and the next one comes after a longer wait: the loop does not end.
+        crash::machine::poll_forever(&reporter, FIRST, EVERY, |reporter| {
             if let Some(host) = crate::local_host::running(&app) {
-                crash::machine::sync(&reporter, &LocalCore(host));
+                crash::machine::sync(reporter, &LocalCore(host));
             }
-            std::thread::sleep(EVERY);
-        }
+        });
     });
     if let Err(error) = started {
         tracing::warn!(

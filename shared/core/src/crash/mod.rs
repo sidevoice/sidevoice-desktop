@@ -19,6 +19,8 @@
 //! - [`machine`]: the machines' records, fetched and acknowledged through the app's way to a machine.
 
 pub mod event;
+#[cfg(test)]
+mod hardening_tests;
 pub mod machine;
 pub mod reporter;
 pub mod settings;
@@ -28,6 +30,7 @@ mod tests;
 pub mod transport;
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 pub use machine::{Machine, MachineError, MachineRecord, Synced};
 pub use reporter::{Config, Reporter, SendError};
@@ -63,8 +66,64 @@ impl Mode {
     }
 }
 
+/// Runs `step` so that a panic in it ends there: the reporter is best-effort and never takes the app down. A panic is
+/// logged (a fixed sentence and `error.type`; the step is a fixed name, the payload is never read) and `None` comes back.
+pub(crate) fn contained<T>(step: &'static str, run: impl FnOnce() -> T) -> Option<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            tracing::warn!(
+                error.type = crate::error::SharedError::CrashReporterFailed.code(),
+                step,
+                "a step of the crash reporter failed and was contained; the app goes on"
+            );
+            None
+        }
+    }
+}
+
+/// Only one panic is being handed to the reporter at a time, process-wide; a panic that comes while one is (another
+/// thread's, or the reporter's own) is not reported.
+static HANDING_OVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// How long the panic hook waits for the reporter in all: the POST's budget and the time to hear its outcome, plus a margin.
+/// A panic inside the hook aborts the process and cannot be caught, so the reporter's work runs on a thread of its own and
+/// the hook only waits, at most this long.
+const HOOK_WAIT: Duration = Duration::from_millis(2600);
+
+struct Release;
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        HANDING_OVER.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Has the reporter told of every panic of this process from now on, through the log's panic hook (call after
-/// `logging::init`).
+/// `logging::init`). Inside the hook nothing of the reporter's runs: the frames are taken there (they are the panicking
+/// thread's), the rest on a thread of its own, so that a panic or a stall in the reporter cannot abort the process or hold
+/// it up beyond [`HOOK_WAIT`].
 pub fn report_panics(reporter: std::sync::Arc<Reporter>) {
-    crate::logging::observe_panics(move |literal, thread| reporter.capture_panic(literal, thread));
+    use std::sync::atomic::Ordering;
+    crate::logging::observe_panics(move |literal, thread| {
+        if !reporter.would_send()
+            || HANDING_OVER.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err()
+        {
+            return;
+        }
+        let release = Release;
+        let stacktrace = sentry::integrations::backtrace::current_stacktrace();
+        let images = sentry::integrations::debug_images::debug_images();
+        let (literal, thread, reporter) = (literal.map(str::to_owned), thread.to_owned(), reporter.clone());
+        let (tell, hear) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new().name("crash-report".into()).spawn(move || {
+            let _release = release;
+            reporter.capture_panic_with(literal.as_deref(), &thread, stacktrace, images);
+            let _ = tell.send(());
+        });
+        // On a spawn that failed the closure, `release` with it, was dropped: the next panic may try again.
+        if spawned.is_ok() {
+            let _ = hear.recv_timeout(HOOK_WAIT);
+        }
+    });
 }

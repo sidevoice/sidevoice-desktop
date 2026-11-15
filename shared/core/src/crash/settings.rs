@@ -88,6 +88,11 @@ impl Settings {
         Settings { path, stored }
     }
 
+    /// No place to keep anything (the app's directory could not be had): `never` for this run, and nothing can be written.
+    pub fn unavailable() -> Settings {
+        Settings { path: PathBuf::new(), stored: Stored { mode: Mode::Never, install: None } }
+    }
+
     pub fn mode(&self) -> Mode {
         self.stored.mode
     }
@@ -107,7 +112,9 @@ impl Settings {
     /// The installation id as of `now` (Unix seconds): made on first use and again when a year old.
     pub fn install_id(&mut self, now: u64) -> std::io::Result<String> {
         if let Some(install) = &self.stored.install {
-            if now.saturating_sub(install.created) < ID_LIFETIME_SECS && install.created <= now + ID_LIFETIME_SECS {
+            if now.saturating_sub(install.created) < ID_LIFETIME_SECS
+                && install.created <= now.saturating_add(ID_LIFETIME_SECS)
+            {
                 return Ok(install.id.clone());
             }
         }
@@ -121,6 +128,9 @@ impl Settings {
 
     /// Atomically: a temporary file beside it, then a rename.
     fn write(&self, stored: &Stored) -> std::io::Result<()> {
+        if self.path.as_os_str().is_empty() {
+            return Err(std::io::Error::other("no place to keep the setting"));
+        }
         let dir = self.path.parent().unwrap_or_else(|| Path::new("."));
         std::fs::create_dir_all(dir)?;
         let temporary = self.path.with_extension("json.tmp");

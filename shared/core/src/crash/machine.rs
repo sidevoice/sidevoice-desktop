@@ -13,7 +13,8 @@ use super::reporter::Reporter;
 use crate::error::SharedError;
 use sentry::types::Uuid;
 use serde_json::Value;
-use std::time::SystemTime;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 /// Which piece of a machine wrote the record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +42,8 @@ pub struct MachineRecord {
 
 const MAX_FRAMES: usize = 64;
 const MAX_TAIL: usize = 20;
+/// The most records one pass looks at (each send may take up to its budget).
+const MAX_RECORDS: usize = 50;
 
 fn token(value: &str, max: usize, allowed: impl Fn(char) -> bool) -> bool {
     !value.is_empty() && value.len() <= max && value.chars().all(allowed)
@@ -151,6 +154,10 @@ pub struct Synced {
 
 /// One pass over `machine`'s records. Under `never` it does nothing and does not call the machine.
 pub fn sync(reporter: &Reporter, machine: &dyn Machine) -> Synced {
+    super::contained("sync", || sync_pass(reporter, machine)).unwrap_or_default()
+}
+
+fn sync_pass(reporter: &Reporter, machine: &dyn Machine) -> Synced {
     let mut done = Synced::default();
     if !reporter.is_active() {
         return done;
@@ -159,7 +166,8 @@ pub fn sync(reporter: &Reporter, machine: &dyn Machine) -> Synced {
         tracing::debug!("a machine's crash records were not listed: it did not answer");
         return done;
     };
-    for row in &rows {
+    // A machine that lists more than it should is read as far as the cap; the rest waits for the next pass.
+    for row in rows.iter().take(MAX_RECORDS) {
         // The setting may change while a pass runs: look again before each record.
         if !reporter.is_active() {
             break;
@@ -195,4 +203,37 @@ pub fn sync(reporter: &Reporter, machine: &dyn Machine) -> Synced {
         }
     }
     done
+}
+
+/// How long to wait after `failures` passes in a row that panicked: `every` doubled each time, up to 64 times and an hour.
+pub fn backoff(every: Duration, failures: u32) -> Duration {
+    every.saturating_mul(1 << failures.min(6)).min(Duration::from_secs(3600).max(every))
+}
+
+/// The poll loop: waits `first`, then runs `pass` every `every` while `keep_going` says so. A pass that panics is contained
+/// (logged, never rethrown) and the next one comes after a growing wait ([`backoff`]), so the loop never ends because of
+/// what a pass did. Meant for a thread of its own.
+pub fn poll_while(
+    reporter: &Arc<Reporter>,
+    first: Duration,
+    every: Duration,
+    keep_going: impl Fn() -> bool,
+    pass: impl Fn(&Reporter),
+) {
+    std::thread::sleep(first);
+    let mut failures = 0u32;
+    while keep_going() {
+        if super::contained("poll", || pass(reporter)).is_some() {
+            failures = 0;
+            std::thread::sleep(every);
+        } else {
+            failures = failures.saturating_add(1);
+            std::thread::sleep(backoff(every, failures));
+        }
+    }
+}
+
+/// [`poll_while`] for as long as the process lives.
+pub fn poll_forever(reporter: &Arc<Reporter>, first: Duration, every: Duration, pass: impl Fn(&Reporter)) {
+    poll_while(reporter, first, every, || true, pass);
 }

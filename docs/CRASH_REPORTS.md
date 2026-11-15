@@ -42,13 +42,47 @@ report carries, made on first ask, `null` under "No enviar".
 
 - A machine's record is posted on the pass's own thread (up to 10 s) and its outcome is the event's own (by event id): an
   app panic posted at the same time cannot make a failed record look delivered, so it is not acknowledged.
-- The app's own panic is posted from the panic hook: best-effort, at most about 2.5 s (a 2 s send budget plus 0.5 s to hear its outcome), so a slow network cannot hold a dying app up.
+- The app's own panic is posted by a thread the panic hook starts and waits for: best-effort, at most about 2.6 s (a 2 s send budget plus 0.5 s to hear its outcome), so a slow network cannot hold a dying app up.
 - The setting file: no file is "auto"; a file that is there but cannot be read or understood means "never" for that run (a
   warning with `error.type` `shared.crash-settings-unreadable`), and is left as it is until the person chooses.
 - A machine's record is checked again here, by shape only: the message is printable ASCII or the marker, and every tail line is
   a warning or an error of the piece's own log with its time as an offset from the crash (`-12.345s`). The app does not
   verify that the ids in a line are tokens of the record (`d1`, `c2`): the machine makes them (sidevoice-core's `crash`
   module), the app trusts that; a line of another shape and the record is skipped.
+
+## Never breaks the app
+
+Reporting is best-effort: nothing it does may stop, slow down or crash the app, and when it cannot work the app runs on
+with reporting off for that run. What holds, and where it is tested (`shared/core/src/crash/hardening_tests.rs`,
+`shared/core/tests/crash_panic_in_reporter.rs`):
+
+- **No panic escapes.** Every entry the app calls (`Reporter::start`, `set_mode`, `installation_id`, `capture_panic`,
+  `send_machine`, `machine::sync`, each pass of the poll loop) runs inside `catch_unwind`; a panic is logged with a fixed
+  sentence and `error.type` `shared.crash-reporter-failed` and swallowed. A transport that panics is contained at the gate,
+  so the send just failed. Slicing in the tail grammar and the id's year arithmetic cannot panic either.
+- **The panic hook cannot be broken by the reporter.** A panic inside a panic hook aborts the process and cannot be caught,
+  so nothing of the reporter runs in the hook: it takes the frames (the dying thread's), hands the rest to a thread of its
+  own and waits at most 2.6 s. One report is handed over at a time process-wide (a panic raised by the reporter, or by
+  another thread meanwhile, is not reported: no recursion, no deadlock), a thread-local guard stops a transport that
+  reports again, locks are only tried never waited for, and at most 10 own panics are reported per run.
+- **Nothing blocks the app.** The client is made on a thread of its own (`start_in_background`; only the 4 KB settings file
+  is read on the start path) and `never` still wins over a client that finishes late. A record is sent on the poll
+  thread, at most 4 POSTs are under way at once (the next is dropped, not queued, and the record stays on the machine), and
+  every POST has a timeout (10 s a record, 2 s a panic) and runs on a thread of its own.
+- **Init failures leave the app working.** A bad DSN, no network, a TLS error, an unreadable or unwritable settings
+  directory, or no data folder at all give `Reporter::unavailable`: `never` for the run, `capture` and `send` do nothing, the
+  page's `get`/`set` still answer (`set` says the choice was not kept). The command's state is always managed, so the page
+  never hits a missing one.
+- **The machine poll is harmless.** An unreachable core, bad JSON, a body over 1 MiB (the local socket client's limit) or a
+  slow answer (10 s timeout) is an error the pass swallows; a pass looks at 50 records at most; a record that is not ours
+  is skipped. The loop runs in its own thread; a pass that panics is contained and the next comes after a doubling wait
+  (up to an hour).
+
+## What is sent, and what is not
+
+Only **crashes**: the app's own panics, and the crash records of machines the app is connected to (the core's and the
+connector's own panics, which the machine already recorded). Handled errors, warnings and logs are never sent as events:
+that is the decided scope. Capturing handled errors could be an opt-in later; it is not done and nothing here prepares it.
 
 ## "No enviar"
 

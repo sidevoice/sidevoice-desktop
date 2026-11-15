@@ -15,7 +15,7 @@ use sentry::protocol::EnvelopeItem;
 use sentry::types::{Dsn, Uuid};
 use sentry::{Envelope, Transport};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -28,6 +28,9 @@ pub const RECORD_BUDGET: Duration = Duration::from_secs(10);
 /// How long the POST of the app's own panic may take: it runs inside the panic hook, which holds the dying process up. A
 /// panic report is best-effort; a slow network loses it rather than the exit.
 pub const PANIC_BUDGET: Duration = Duration::from_secs(2);
+/// How many POSTs may be under way at once. A send that finds them all busy is dropped, not queued: nothing waits, and a
+/// stuck network cannot pile threads up.
+pub const MAX_IN_FLIGHT: usize = 4;
 
 /// Where an envelope's bytes go; the real one posts to Sentry, a test keeps them. `budget` is the most it may take.
 pub trait Post: Send + Sync + 'static {
@@ -38,13 +41,14 @@ pub trait Post: Send + Sync + 'static {
 pub struct Gate {
     open: AtomicBool,
     post: Arc<dyn Post>,
+    in_flight: AtomicUsize,
     /// The events somebody waits for, by event id: `None` until the envelope is handled.
     watched: Mutex<HashMap<Uuid, Option<bool>>>,
 }
 
 impl Gate {
     pub fn new(post: Arc<dyn Post>) -> Gate {
-        Gate { open: AtomicBool::new(true), post, watched: Mutex::new(HashMap::new()) }
+        Gate { open: AtomicBool::new(true), post, in_flight: AtomicUsize::new(0), watched: Mutex::new(HashMap::new()) }
     }
 
     /// From now on nothing is sent, including what is being handed over this instant.
@@ -100,7 +104,16 @@ impl Transport for Gate {
             return;
         }
         let budget = if self.is_watched(id) { RECORD_BUDGET } else { PANIC_BUDGET };
-        self.record(id, self.post.post(bytes, budget).is_ok());
+        if self.in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_IN_FLIGHT {
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            tracing::debug!("a crash report was dropped: sends are already under way");
+            self.record(id, false);
+            return;
+        }
+        // A transport that panics ends here: the caller's thread (the app's, or a pass's) never sees it.
+        let sent = super::contained("post", || self.post.post(bytes, budget).is_ok()).unwrap_or(false);
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        self.record(id, sent);
     }
 
     fn flush(&self, _timeout: Duration) -> bool {

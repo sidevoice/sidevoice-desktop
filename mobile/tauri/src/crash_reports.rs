@@ -15,13 +15,17 @@ use tauri::{AppHandle, Manager};
 /// The DSN of a release or nightly build; empty or absent otherwise.
 const DSN: Option<&str> = option_env!("SIDEVOICE_SENTRY_DSN");
 
-/// At start, right after the log: the reporter (the setting is read here) and the observer the panic hook tells.
+/// At start, right after the log: the reporter (the setting is read here; the client is made on a thread of its own) and the
+/// observer the panic hook tells. With no files folder, or a reporter that cannot start, reporting is off for this run and
+/// the setting still answers the page.
 pub fn setup(app: &AppHandle) {
+    let resource = crate::platform::resource::current();
     let Ok(dir) = crate::own_files(app) else {
+        app.manage(CrashReports(Reporter::unavailable(resource)));
         return;
     };
-    let reporter = Reporter::start(Config {
-        resource: crate::platform::resource::current(),
+    let reporter = Reporter::start_in_background(Config {
+        resource,
         dsn: DSN.map(str::to_owned),
         dir,
         post: None,
