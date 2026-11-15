@@ -12,6 +12,7 @@ mod acl_tests;
 mod bridge;
 use bridge::headset;
 mod call;
+mod crash_reports;
 mod developer_options;
 mod downloads;
 mod hold;
@@ -542,6 +543,8 @@ fn run_app() {
             // The log's file (and its folder), then where the panics' file goes, and the last run's panics into the log (`panics`).
             open_log_file(&handle);
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "app started");
+            // A panic from here on may be reported, under the person's setting (`crash_reports`).
+            crash_reports::setup(&handle);
             match handle.path().app_log_dir() {
                 Ok(dir) => panics::watch(&dir),
                 Err(_) => tracing::warn!("panics: no log folder"),

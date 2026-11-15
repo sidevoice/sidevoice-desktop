@@ -33,6 +33,8 @@ pub fn install() {
             if let Some(path) = PATH.get() {
                 keep(path, &describe(info));
             }
+            // The crash reporter, if the person lets it: the literal or nothing, never the formatted message.
+            sidevoice_shared::logging::tell_observer(info.payload());
             standard(info);
         }));
     });

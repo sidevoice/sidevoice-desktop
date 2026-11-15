@@ -141,6 +141,14 @@ impl Action {
     }
 }
 
+/// A failed call on the core's socket, as a refusal.
+fn refused(error: CoreError) -> Refusal {
+    match error {
+        CoreError::Absent => Refusal::new("core.unreachable", "No core answers."),
+        CoreError::Unsafe(refusal) | CoreError::Failed(refusal) => refusal,
+    }
+}
+
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -267,6 +275,32 @@ impl LocalHost {
             "host": pairing.host,
             "local": true,
         }))
+    }
+
+    /// This computer's crash records, read with the local device's token (the core lists them on the device surface only).
+    /// Refused when no core answers or the pairing does not work.
+    pub fn crash_records(&self) -> Result<Vec<Value>, Refusal> {
+        let token = self.token()?;
+        #[allow(clippy::disallowed_methods, reason = "the bearer of one authenticated call on the core's socket")]
+        self.core.crashes(token.expose_secret()).map_err(refused)
+    }
+
+    /// Tells this computer's core that the crash record `id` was handled (it deletes it).
+    pub fn acknowledge_crash(&self, id: &str) -> Result<(), Refusal> {
+        let token = self.token()?;
+        #[allow(clippy::disallowed_methods, reason = "the bearer of one authenticated call on the core's socket")]
+        self.core.acknowledge_crash(token.expose_secret(), id).map_err(refused)
+    }
+
+    /// The device token while a core answers and the pairing works.
+    fn token(&self) -> Result<secrecy::SecretString, Refusal> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .pairing
+            .as_ref()
+            .filter(|_| inner.report.reachable)
+            .map(|pairing| pairing.token.clone())
+            .ok_or_else(|| Refusal::new("core.unreachable", "No core answers, or the pairing does not work."))
     }
 
     /// One pass: observe, keep the pairing, decide the state.

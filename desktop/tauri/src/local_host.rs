@@ -267,6 +267,12 @@ fn keep_current(app: &AppHandle, host: &Arc<LocalHost>) {
     }
 }
 
+/// The running local host, for whoever needs it off the page's path (the crash records' pass); `None` before it started or
+/// where there is none.
+pub fn running(app: &AppHandle) -> Option<Arc<LocalHost>> {
+    hosted(app).ok()
+}
+
 /// As the app quits: the poll and the proxy stop, every tunnel closes.
 pub fn shutdown(app: &AppHandle) {
     if let Some(hosted) = app.try_state::<Hosted>() {

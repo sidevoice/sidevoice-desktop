@@ -5,6 +5,7 @@
 //! - `GET /api/device/identity?nonce=` → the core signs a fresh nonce; checked against the pinned key.
 //! - `POST /api/device/local/pair {name}` → a device token for this app (the core revokes the previous local one).
 //! - `DELETE /api/device/local` → this app's local device revoked.
+//! - `GET /api/device/crashes`, `DELETE /api/device/crashes/{id}` → the machine's crash records and their acknowledgement.
 //! - Any authenticated route with the token, to tell whether the core still accepts it.
 
 use crate::checks::{self, Check};
@@ -155,6 +156,37 @@ impl CoreSocket {
             return Err(failed(format!("DELETE /api/device/local answered {}", answer.status)));
         }
         Ok(())
+    }
+
+    /// The machine's crash records (`GET /api/device/crashes`, the device surface: `token` is required): JSON objects, not yet
+    /// trusted. The app checks each against the closed field list before it sends one anywhere.
+    pub fn crashes(&self, token: &str) -> Result<Vec<serde_json::Value>, CoreError> {
+        let bearer = format!("Bearer {token}");
+        let answer = self.call("GET", "/api/device/crashes", &[("authorization", &bearer)], None, CALL_TIMEOUT)?;
+        if answer.status != 200 {
+            return Err(failed(format!("GET /api/device/crashes answered {}", answer.status)));
+        }
+        let body: serde_json::Value = answer.json().map_err(|e| failed(format!("GET /api/device/crashes: {e}")))?;
+        body.get("crashes")
+            .and_then(|rows| rows.as_array())
+            .cloned()
+            .ok_or_else(|| failed("GET /api/device/crashes: no list"))
+    }
+
+    /// Tells the core the record `id` was handled, which deletes it (`DELETE /api/device/crashes/{id}`). A record already gone
+    /// (404) is done. Only a canonical UUID is put in the path.
+    pub fn acknowledge_crash(&self, token: &str, id: &str) -> Result<(), CoreError> {
+        let canonical = id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
+        if !canonical {
+            return Err(failed("not a crash record id"));
+        }
+        let bearer = format!("Bearer {token}");
+        let target = format!("/api/device/crashes/{id}");
+        let answer = self.call("DELETE", &target, &[("authorization", &bearer)], None, CALL_TIMEOUT)?;
+        match answer.status {
+            200 | 404 => Ok(()),
+            status => Err(failed(format!("DELETE /api/device/crashes answered {status}"))),
+        }
     }
 
     /// Whether the core accepts `token`: an authenticated read (the device list), 200 or 401.

@@ -46,14 +46,27 @@ pub fn sign_android() -> Result<()> {
     let alias = crate::util::required_env("ANDROID_UPLOAD_KEY_ALIAS")?;
     let password = crate::util::required_env("ANDROID_UPLOAD_KEYSTORE_PASSWORD")?;
     let input = unsigned_apk();
-    ensure(input.exists(), format!("{}: build it first (`cargo xtask mobile build android`)", input.display()))?;
+    ensure(
+        input.exists(),
+        format!(
+            "{}: build it first (`cargo xtask mobile build android`)",
+            input.display()
+        ),
+    )?;
 
     let work = work("mobile")?;
     let aligned = work.join("aligned.apk");
-    Cmd::new(&zipalign).args(["-P", "16", "-f", "4"]).arg(&input).arg(&aligned).run()?;
+    Cmd::new(&zipalign)
+        .args(["-P", "16", "-f", "4"])
+        .arg(&input)
+        .arg(&aligned)
+        .run()?;
 
     let (out, secrets) = (signed(), SecretDir::new("android-signing")?);
-    let (keystore, password) = (keystore(&secrets)?, secrets.file("password", password.as_bytes())?);
+    let (keystore, password) = (
+        keystore(&secrets)?,
+        secrets.file("password", password.as_bytes())?,
+    );
     let _ = fs::remove_file(&out);
     Cmd::new(&apksigner)
         .args(["sign", "--v4-signing-enabled", "false", "--ks"])
@@ -66,6 +79,9 @@ pub fn sign_android() -> Result<()> {
         .run()?;
     drop(secrets);
     let _ = fs::remove_file(&aligned);
-    Cmd::new(&apksigner).args(["verify", "--verbose", "--print-certs"]).arg(&out).run()?;
+    Cmd::new(&apksigner)
+        .args(["verify", "--verbose", "--print-certs"])
+        .arg(&out)
+        .run()?;
     check_16kb(&out)
 }

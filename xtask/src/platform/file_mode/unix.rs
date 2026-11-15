@@ -16,6 +16,7 @@ impl Os for Native {
     }
 
     fn chmod(path: &Path, mode: u32) -> Result<()> {
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| format!("{}: {e}", path.display()))
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .map_err(|e| format!("{}: {e}", path.display()))
     }
 }

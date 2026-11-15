@@ -21,7 +21,10 @@ impl Os for Native {
     /// profile is never deleted.
     fn require_fresh_profile() -> Result<()> {
         // `dirs` resolves both through `SHGetKnownFolderPath`.
-        for (name, root) in [("RoamingAppData", dirs::config_dir()), ("LocalAppData", dirs::data_local_dir())] {
+        for (name, root) in [
+            ("RoamingAppData", dirs::config_dir()),
+            ("LocalAppData", dirs::data_local_dir()),
+        ] {
             let root = root.ok_or_else(|| format!("Cannot resolve {name}"))?;
             let profile = root.join(IDENTIFIER);
             if profile.exists() {

@@ -419,6 +419,15 @@
     });
   }
 
+  /** The app's crash reports setting (docs/BRIDGE.md -> "Crash reports"): the app keeps it and holds to it; the page reads it
+   *  and passes on the person's choice (`auto` or `never`). A rejection means the app did not keep the choice. */
+  function crashReports() {
+    return Object.freeze({
+      get: () => call("crash_reports", { action: "get" }).then((answer) => answer?.mode),
+      set: (mode) => call("crash_reports", { action: "set", mode }).then(() => undefined),
+    });
+  }
+
   /** The room page and the app, the call state one way and the commands the other (docs/BRIDGE.md -> "The call state").
    *  The page reports a snapshot of the call as the room's own view model says it, whenever it changes, to `publish`;
    *  `run(request)` runs a command of the app (from a tray, a shortcut, a headset, a notification) through the web UI's own actions.
@@ -557,5 +566,5 @@
     };
   }
 
-  return Object.freeze({ engine, voice, microphone, pairings, room, messages });
+  return Object.freeze({ engine, voice, microphone, pairings, crashReports, room, messages });
 })

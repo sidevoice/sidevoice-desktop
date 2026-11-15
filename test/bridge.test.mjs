@@ -1408,11 +1408,11 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset", "screen", "shortcuts"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "crashReports", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset", "screen", "shortcuts"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, true, true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "screen", "shortcuts", "updater", "voice"]);
+  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "crashReports", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "screen", "shortcuts", "updater", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));

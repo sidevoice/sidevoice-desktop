@@ -43,7 +43,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-android
       - name: "The unsigned APK (universal: arm64-v8a and armeabi-v7a)"
+        env:
+          # Crash reports (docs/CRASH_REPORTS.md): this build sends them.
+          SIDEVOICE_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
         run: cargo xtask mobile build android
+      # The native libraries with their symbols, and the release, to Sentry. The token is this step's alone.
+      - name: Upload the debug files and the release to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          npm install --global @sentry/cli@3.8.2
+          cargo xtask sentry upload sidevoice-mobile target/aarch64-linux-android/release target/armv7-linux-androideabi/release
       # The only step that sees the secrets: it aligns the APK for 16 KB pages, signs it, verifies the signature and
       # checks the native libraries' alignment. The keystore and its password are files only the runner's user can
       # read, removed when it ends.

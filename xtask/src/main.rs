@@ -123,6 +123,11 @@
 //! - `publish apk-nightly`: the signed APK (dist/Sidevoice-android.apk) and its `.sha256` attached to the
 //!   `nightly` pre-release as `Sidevoice_nightly_android.apk` (mobile-android-signed.yml).
 //!
+//! Crash reports (sentry.rs), `sentry-cli` with `SENTRY_AUTH_TOKEN`:
+//!
+//! - `sentry upload SERVICE PATH...`: the release `SERVICE@<version>` (SERVICE: `sidevoice-desktop`, `sidevoice-mobile`) and the
+//!   debug files under each PATH, to the EU project; a release or nightly build only.
+//!
 //! The release PR (checks.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
 //!
 //! - `release-pr-title [BRANCH]`: the PR on release-please's BRANCH (default `GITHUB_REF_NAME`) has a release title.
@@ -141,7 +146,9 @@
 use std::process::ExitCode;
 
 use xtask::util::Channel;
-use xtask::{checks, host_graph, mobile, packaging, platform, platform_guard, publish, util};
+use xtask::{
+    checks, host_graph, mobile, packaging, platform, platform_guard, publish, sentry, util,
+};
 
 const USAGE: &str =
     "usage: cargo xtask web | lint | platform-guard | host-graph | platform-clippy | test | voice-contract | icons | permissions | two-users | bundle [--channel C] | engine-rev
@@ -156,6 +163,7 @@ const USAGE: &str =
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly | publish apk-nightly
   | release-pr-title [BRANCH] | release-pr-checks
+  | sentry upload SERVICE PATH...
 (C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
 
 fn main() -> ExitCode {
@@ -169,6 +177,7 @@ fn main() -> ExitCode {
         ["web"] => checks::web(),
         ["lint"] => checks::lint(),
         ["platform-guard"] => platform_guard::check(),
+        ["sentry", "upload", service, paths @ ..] => sentry::upload(service, paths),
         ["host-graph"] => host_graph::check(),
         ["mobile", "generate", project] => mobile::generate(project),
         ["mobile", "generated", project] => mobile::generated(project),
@@ -182,8 +191,12 @@ fn main() -> ExitCode {
         ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
         ["mobile", "check-ios", app] => mobile::ios::check_app(std::path::Path::new(app)),
         ["mobile", "screenshots", project] => mobile::screenshots(project),
-        ["mobile", "testflight", "--build-number", number] => mobile::testflight::testflight(number),
-        ["mobile", "symbols", "--build-number", number] => mobile::testflight::symbols(number, None),
+        ["mobile", "testflight", "--build-number", number] => {
+            mobile::testflight::testflight(number)
+        }
+        ["mobile", "symbols", "--build-number", number] => {
+            mobile::testflight::symbols(number, None)
+        }
         ["mobile", "symbols", "--build-number", number, "--ips", ips] => {
             mobile::testflight::symbols(number, Some(std::path::Path::new(ips)))
         }
@@ -202,7 +215,9 @@ fn main() -> ExitCode {
         ["sherpa-libs"] => checks::sherpa_libs(),
         ["release", "app"] => platform::release::build_app(false, Channel::Dev),
         ["release", "app", "--signed"] => platform::release::build_app(true, Channel::Dev),
-        ["release", "app", "--channel", c] => Channel::parse(c).and_then(|c| platform::release::build_app(false, c)),
+        ["release", "app", "--channel", c] => {
+            Channel::parse(c).and_then(|c| platform::release::build_app(false, c))
+        }
         ["release", "app", "--signed", "--channel", c] => {
             Channel::parse(c).and_then(|c| platform::release::build_app(true, c))
         }

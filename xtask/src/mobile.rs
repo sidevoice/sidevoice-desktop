@@ -56,8 +56,14 @@ struct Project {
 
 fn project(name: &str) -> Result<Project> {
     match name {
-        "android" => Ok(Project { cli: "android", dir: "gen/android" }),
-        "ios" => Ok(Project { cli: "ios", dir: "gen/apple" }),
+        "android" => Ok(Project {
+            cli: "android",
+            dir: "gen/android",
+        }),
+        "ios" => Ok(Project {
+            cli: "ios",
+            dir: "gen/apple",
+        }),
         other => Err(format!("mobile generate: android or ios, not `{other}`")),
     }
 }
@@ -89,7 +95,11 @@ fn build_channel() -> Result<Channel> {
 /// channel ([`build_channel`]) and, for a nightly, HEAD's short commit and date.
 fn build_vars() -> Result<[(&'static str, String); 3]> {
     let channel = build_channel()?;
-    let (commit, date) = if channel == Channel::Nightly { util::head_commit()? } else { Default::default() };
+    let (commit, date) = if channel == Channel::Nightly {
+        util::head_commit()?
+    } else {
+        Default::default()
+    };
     Ok([
         ("SIDEVOICE_BUILD_CHANNEL", channel.name().to_owned()),
         ("SIDEVOICE_BUILD_COMMIT", commit),
@@ -118,8 +128,13 @@ const ANDROID_TARGET_SDK: u32 = 36;
 fn pin_target_sdk(gradle: &str) -> Result<String> {
     let line = util::re(r"(?m)^(\s*)targetSdk = \d+$");
     let found = line.find_iter(gradle).count();
-    ensure(found == 1, format!("the template's app/build.gradle.kts has {found} `targetSdk = N` lines, not one"))?;
-    Ok(line.replace(gradle, format!("${{1}}targetSdk = {ANDROID_TARGET_SDK}")).into_owned())
+    ensure(
+        found == 1,
+        format!("the template's app/build.gradle.kts has {found} `targetSdk = N` lines, not one"),
+    )?;
+    Ok(line
+        .replace(gradle, format!("${{1}}targetSdk = {ANDROID_TARGET_SDK}"))
+        .into_owned())
 }
 
 /// The directory of the iOS project that holds the app's own files (the Tauri template's `<app>_iOS`), which the Xcode
@@ -149,7 +164,11 @@ fn check_privacy_manifest_listed(project: &Path) -> Result<()> {
     let text = fs::read_to_string(&pbxproj).map_err(|e| format!("{}: {e}", pbxproj.display()))?;
     ensure(
         text.contains(&format!("{} in Resources", ios::MANIFEST)),
-        format!("{}: {} is not a resource of the app: the app would ship without it", pbxproj.display(), ios::MANIFEST),
+        format!(
+            "{}: {} is not a resource of the app: the app would ship without it",
+            pbxproj.display(),
+            ios::MANIFEST
+        ),
     )
 }
 
@@ -168,10 +187,19 @@ fn ios_languages(dir: &Path) -> Result<Vec<String>> {
     let mut languages: Vec<String> = entries
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.path().is_dir())
-        .filter_map(|entry| entry.file_name().to_string_lossy().strip_suffix(".lproj").map(str::to_owned))
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .strip_suffix(".lproj")
+                .map(str::to_owned)
+        })
         .collect();
     languages.sort();
-    ensure(!languages.is_empty(), format!("{}: no <language>.lproj folder", dir.display()))?;
+    ensure(
+        !languages.is_empty(),
+        format!("{}: no <language>.lproj folder", dir.display()),
+    )?;
     Ok(languages)
 }
 
@@ -185,7 +213,8 @@ fn add_localized_texts(project: &Path) -> Result<()> {
         let to = project.join(IOS_APP_DIR).join(&folder);
         mkdir(&to)?;
         let source = from.join(&folder).join(IOS_TEXTS_FILE);
-        fs::copy(&source, to.join(IOS_TEXTS_FILE)).map_err(|e| format!("{}: {e}", source.display()))?;
+        fs::copy(&source, to.join(IOS_TEXTS_FILE))
+            .map_err(|e| format!("{}: {e}", source.display()))?;
     }
     Ok(())
 }
@@ -204,9 +233,15 @@ impl<'a> Objects<'a> {
     /// The objects the array `key` of `object` lists (`targets`, `buildPhases`, `files`, `children`), in order; an id
     /// that is no object of the project is left out.
     fn listed(&self, object: &'a Dictionary, key: &str) -> impl Iterator<Item = &'a Dictionary> {
-        let ids = object.get(key).and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        let ids = object
+            .get(key)
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let objects = Objects(self.0);
-        ids.iter().filter_map(Value::as_string).filter_map(move |id| objects.get(id))
+        ids.iter()
+            .filter_map(Value::as_string)
+            .filter_map(move |id| objects.get(id))
     }
 }
 
@@ -223,13 +258,19 @@ fn field<'a>(object: &'a Dictionary, key: &str) -> Option<&'a str> {
 /// The references are followed (project, app target, Resources phase, build file, group, children), not searched for in
 /// the text: a build file that no phase lists, or a group that lacks a language, reads like a good one to a search.
 fn check_localized_texts_listed(pbxproj: &str, languages: &[String]) -> Result<()> {
-    let root =
-        Value::from_reader_ascii(Cursor::new(pbxproj.as_bytes())).map_err(|e| format!("not a project file: {e}"))?;
-    let root = root.as_dictionary().ok_or("not a project file: its top level is not a dictionary")?;
-    let objects =
-        Objects(root.get("objects").and_then(Value::as_dictionary).ok_or("no `objects` in the project file")?);
-    let project =
-        field(root, "rootObject").and_then(|id| objects.get(id)).ok_or("no project object in the project file")?;
+    let root = Value::from_reader_ascii(Cursor::new(pbxproj.as_bytes()))
+        .map_err(|e| format!("not a project file: {e}"))?;
+    let root = root
+        .as_dictionary()
+        .ok_or("not a project file: its top level is not a dictionary")?;
+    let objects = Objects(
+        root.get("objects")
+            .and_then(Value::as_dictionary)
+            .ok_or("no `objects` in the project file")?,
+    );
+    let project = field(root, "rootObject")
+        .and_then(|id| objects.get(id))
+        .ok_or("no project object in the project file")?;
 
     let regions: Vec<&str> = project
         .get("knownRegions")
@@ -242,7 +283,13 @@ fn check_localized_texts_listed(pbxproj: &str, languages: &[String]) -> Result<(
         .listed(project, "targets")
         .filter(|target| field(target, "productType") == Some(APP_PRODUCT_TYPE))
         .collect();
-    ensure(apps.len() == 1, format!("the project has {} application targets, not one", apps.len()))?;
+    ensure(
+        apps.len() == 1,
+        format!(
+            "the project has {} application targets, not one",
+            apps.len()
+        ),
+    )?;
 
     // What the app's Resources build phases copy into the bundle (the `fileRef` of their build files), and of that the
     // group of the language files.
@@ -252,7 +299,8 @@ fn check_localized_texts_listed(pbxproj: &str, languages: &[String]) -> Result<(
         .flat_map(|phase| objects.listed(phase, "files"))
         .filter_map(|file| field(file, "fileRef").and_then(|id| objects.get(id)))
         .filter(|copied| {
-            field(copied, "isa") == Some("PBXVariantGroup") && field(copied, "name") == Some(IOS_TEXTS_FILE)
+            field(copied, "isa") == Some("PBXVariantGroup")
+                && field(copied, "name") == Some(IOS_TEXTS_FILE)
         })
         .collect();
     let files: Vec<&str> = groups
@@ -263,7 +311,9 @@ fn check_localized_texts_listed(pbxproj: &str, languages: &[String]) -> Result<(
 
     let mut missing = Vec::new();
     if groups.is_empty() {
-        missing.push(format!("the {IOS_TEXTS_FILE} group is not copied by the app target's Resources build phase"));
+        missing.push(format!(
+            "the {IOS_TEXTS_FILE} group is not copied by the app target's Resources build phase"
+        ));
     }
     for language in languages {
         if !regions.contains(&language.as_str()) {
@@ -271,10 +321,18 @@ fn check_localized_texts_listed(pbxproj: &str, languages: &[String]) -> Result<(
         }
         let file = format!("{language}.lproj/{IOS_TEXTS_FILE}");
         if !groups.is_empty() && !files.contains(&file.as_str()) {
-            missing.push(format!("{file} is not a child of the {IOS_TEXTS_FILE} group"));
+            missing.push(format!(
+                "{file} is not a child of the {IOS_TEXTS_FILE} group"
+            ));
         }
     }
-    ensure(missing.is_empty(), format!("the iOS project does not have the localized texts: {}", missing.join("; ")))
+    ensure(
+        missing.is_empty(),
+        format!(
+            "the iOS project does not have the localized texts: {}",
+            missing.join("; ")
+        ),
+    )
 }
 
 /// [`check_localized_texts_listed`] on the project `generate` has just made, for each language of `mobile/tauri/ios`.
@@ -282,7 +340,8 @@ fn check_localized_texts_in(project: &Path) -> Result<()> {
     let languages = ios_languages(&repo().join("mobile/tauri").join(IOS_TEXTS_DIR))?;
     let pbxproj = project.join(IOS_PBXPROJ);
     let text = fs::read_to_string(&pbxproj).map_err(|e| format!("{}: {e}", pbxproj.display()))?;
-    check_localized_texts_listed(&text, &languages).map_err(|e| format!("{}: {e}", pbxproj.display()))
+    check_localized_texts_listed(&text, &languages)
+        .map_err(|e| format!("{}: {e}", pbxproj.display()))
 }
 
 /// `mobile generate android|ios`.
@@ -330,7 +389,11 @@ pub fn generated(name: &str) -> Result<()> {
         .stdout()?;
     if !changes.trim().is_empty() {
         // What the generator wrote, to commit as it is.
-        let diff = Cmd::new("git").args(["diff", "--"]).arg(&dir).dir(repo()).stdout()?;
+        let diff = Cmd::new("git")
+            .args(["diff", "--"])
+            .arg(&dir)
+            .dir(repo())
+            .stdout()?;
         println!("{diff}");
     }
     ensure(
@@ -340,7 +403,8 @@ pub fn generated(name: &str) -> Result<()> {
 }
 
 /// What an unsigned Android build leaves, below mobile/tauri/gen/android.
-const UNSIGNED_APK: &str = "app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk";
+const UNSIGNED_APK: &str =
+    "app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk";
 
 /// The unsigned APK `mobile build android` puts in dist/.
 pub fn unsigned_apk() -> PathBuf {
@@ -367,20 +431,41 @@ pub fn engine_libs(name: &str, target: &str) -> Result<EngineLibs> {
 /// [`engine_libs`] for each of `targets`, fetched once.
 fn engine_libs_of(name: &str, targets: &[&str]) -> Result<Vec<EngineLibs>> {
     let android = project(name)?.cli == "android";
-    let dir = repo().join(if android { ANDROID_LIBS } else { IOS_FRAMEWORKS });
+    let dir = repo().join(if android {
+        ANDROID_LIBS
+    } else {
+        IOS_FRAMEWORKS
+    });
     let dir_text = dir.to_string_lossy().into_owned();
-    crate::checks::engine_xtask(&["mobile-libs", if android { "android" } else { "ios" }, &dir_text])?.run()?;
+    crate::checks::engine_xtask(&[
+        "mobile-libs",
+        if android { "android" } else { "ios" },
+        &dir_text,
+    ])?
+    .run()?;
     let mut all = Vec::new();
     for target in targets {
         let (sherpa, onnxruntime) = if android {
             (dir.join(android_abi(target)?), None)
         } else {
-            (dir.join(format!("lib-{target}")), Some(dir.join(format!("frameworks-{target}"))))
+            (
+                dir.join(format!("lib-{target}")),
+                Some(dir.join(format!("frameworks-{target}"))),
+            )
         };
         for linked in std::iter::once(&sherpa).chain(onnxruntime.as_ref()) {
-            ensure(linked.is_dir(), format!("{}: the engine's libraries have nothing for {target}", linked.display()))?;
+            ensure(
+                linked.is_dir(),
+                format!(
+                    "{}: the engine's libraries have nothing for {target}",
+                    linked.display()
+                ),
+            )?;
         }
-        all.push(EngineLibs { sherpa, onnxruntime });
+        all.push(EngineLibs {
+            sherpa,
+            onnxruntime,
+        });
     }
     Ok(all)
 }
@@ -409,7 +494,11 @@ impl EngineLibs {
     /// The variables the app's cargo reads, with their values.
     fn vars(&self) -> Vec<(&'static str, &Path)> {
         let mut vars = vec![("SHERPA_ONNX_LIB_DIR", self.sherpa.as_path())];
-        vars.extend(self.onnxruntime.as_deref().map(|dir| ("ONNXRUNTIME_FRAMEWORK_DIR", dir)));
+        vars.extend(
+            self.onnxruntime
+                .as_deref()
+                .map(|dir| ("ONNXRUNTIME_FRAMEWORK_DIR", dir)),
+        );
         vars
     }
 
@@ -450,32 +539,50 @@ impl AppBuildLibs {
         let mut all = engine_libs_of(name, targets)?;
         let config = repo().join(".cargo/config.toml");
         let original = fs::read(&config).ok();
-        let mut text = original.as_deref().map(String::from_utf8_lossy).unwrap_or_default().into_owned();
+        let mut text = original
+            .as_deref()
+            .map(String::from_utf8_lossy)
+            .unwrap_or_default()
+            .into_owned();
         // What every cargo of the build reads from the cargo config: the build's own variables (`host.build`, [`build_vars`]),
         // which the Tauri CLI does not hand the cargo of the native project either.
-        let mut env: Vec<(String, String)> =
-            build_vars()?.into_iter().map(|(key, value)| (key.to_owned(), value)).collect();
-        ensure(!text.contains("\n[env]"), format!("{}: has an [env] table already", config.display()))?;
+        let mut env: Vec<(String, String)> = build_vars()?
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect();
+        ensure(
+            !text.contains("\n[env]"),
+            format!("{}: has an [env] table already", config.display()),
+        )?;
         text.push_str(
             "\n# Written by `cargo xtask mobile` for one app build, and taken out after it (xtask/src/mobile.rs, AppBuildLibs).\n",
         );
         if android {
-            ensure(!text.contains(".sherpa-onnx]"), format!("{}: overrides sherpa-onnx already", config.display()))?;
+            ensure(
+                !text.contains(".sherpa-onnx]"),
+                format!("{}: overrides sherpa-onnx already", config.display()),
+            )?;
             for (target, libs) in targets.iter().zip(&all) {
-                let dir =
-                    serde_json::to_string(&format!("native={}", libs.sherpa.display())).map_err(|e| e.to_string())?;
+                let dir = serde_json::to_string(&format!("native={}", libs.sherpa.display()))
+                    .map_err(|e| e.to_string())?;
                 text.push_str(&format!(
                     "[target.{target}.sherpa-onnx]\nrustc-link-search = [{dir}]\nrustc-link-lib = [\"dylib=sherpa-onnx-c-api\", \"dylib=onnxruntime\"]\n"
                 ));
             }
         } else {
             env.extend(
-                all[0].vars().into_iter().map(|(key, value)| (key.to_owned(), value.to_string_lossy().into_owned())),
+                all[0]
+                    .vars()
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value.to_string_lossy().into_owned())),
             );
             // The oldest iOS the app runs on, for the C and C++ the build scripts compile (whisper.cpp, aws-lc): without
             // it they target the SDK's own version, and an availability check (`@available(iOS 18, *)`) is then compiled
             // as always true, so the app calls what an older iOS lacks.
-            env.push(("IPHONEOS_DEPLOYMENT_TARGET".to_owned(), ios_deployment_target()?));
+            env.push((
+                "IPHONEOS_DEPLOYMENT_TARGET".to_owned(),
+                ios_deployment_target()?,
+            ));
         }
         text.push_str("[env]\n");
         for (key, value) in env {
@@ -483,7 +590,11 @@ impl AppBuildLibs {
             text.push_str(&format!("{key} = {value}\n"));
         }
         write(&config, text)?;
-        Ok(AppBuildLibs { libs: all.remove(0), config, original })
+        Ok(AppBuildLibs {
+            libs: all.remove(0),
+            config,
+            original,
+        })
     }
 }
 
@@ -492,7 +603,8 @@ impl AppBuildLibs {
 fn ios_deployment_target() -> Result<String> {
     let path = repo().join("mobile/tauri/tauri.conf.json");
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let config: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let config: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     config["bundle"]["iOS"]["minimumSystemVersion"]
         .as_str()
         .map(str::to_owned)
@@ -515,7 +627,10 @@ pub fn build(name: &str) -> Result<()> {
     match project(name)?.cli {
         "android" => {
             let libs = AppBuildLibs::hold(name, &ANDROID_TARGETS)?;
-            build_tauri(&["android", "build", "--apk", "--target", "aarch64", "--target", "armv7", "--ci"])?.run()?;
+            build_tauri(&[
+                "android", "build", "--apk", "--target", "aarch64", "--target", "armv7", "--ci",
+            ])?
+            .run()?;
             drop(libs);
             let apk = repo().join("mobile/tauri/gen/android").join(UNSIGNED_APK);
             let to = unsigned_apk();
@@ -524,10 +639,20 @@ pub fn build(name: &str) -> Result<()> {
         }
         _ => {
             let libs = AppBuildLibs::hold(name, &["aarch64-apple-ios-sim"])?;
-            libs.libs.apply(build_tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"])?).run()?;
+            libs.libs
+                .apply(build_tauri(&[
+                    "ios",
+                    "build",
+                    "--target",
+                    "aarch64-sim",
+                    "--no-sign",
+                    "--ci",
+                ])?)
+                .run()?;
             drop(libs);
             let build = repo().join("mobile/tauri/gen/apple/build");
-            let app = find_app(&build, 3).ok_or_else(|| format!("no .app below {}", build.display()))?;
+            let app =
+                find_app(&build, 3).ok_or_else(|| format!("no .app below {}", build.display()))?;
             ios::check_app(&app)?;
             // The app is a directory with symbolic links in it: zip keeps them (`-y`).
             Cmd::new("zip")
@@ -542,11 +667,25 @@ pub fn build(name: &str) -> Result<()> {
 
 /// The first `.app` directory below `dir`, at most `depth` levels down.
 fn find_app(dir: &Path, depth: usize) -> Option<PathBuf> {
-    let mut entries: Vec<PathBuf> = fs::read_dir(dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
     entries.sort();
-    entries.iter().find(|p| p.is_dir() && p.extension().is_some_and(|e| e == "app")).cloned().or_else(|| {
-        (depth > 1).then(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find_app(p, depth - 1))).flatten()
-    })
+    entries
+        .iter()
+        .find(|p| p.is_dir() && p.extension().is_some_and(|e| e == "app"))
+        .cloned()
+        .or_else(|| {
+            (depth > 1)
+                .then(|| {
+                    entries
+                        .iter()
+                        .filter(|p| p.is_dir())
+                        .find_map(|p| find_app(p, depth - 1))
+                })
+                .flatten()
+        })
 }
 
 /// `mobile screenshots ios`: the simulator app `mobile build ios` left in dist/, run on an iPhone Pro Max simulator in light
@@ -569,7 +708,10 @@ const CALL_ACTIVITY: &str = "mobile/tauri/apple/CallActivity";
 /// beside the gallery's renders. Needs macOS with Xcode.
 pub fn renders(name: &str) -> Result<()> {
     ensure(project(name)?.cli == "ios", "mobile renders: ios only")?;
-    platform::ios_simulator::renders(&repo().join(CALL_ACTIVITY), &repo().join("dist/live-activity"))
+    platform::ios_simulator::renders(
+        &repo().join(CALL_ACTIVITY),
+        &repo().join("dist/live-activity"),
+    )
 }
 
 /// Where the Live Activity's Simulator harness is: its XcodeGen spec and UI tests.
@@ -578,9 +720,14 @@ const HARNESS: &str = "mobile/tauri/apple/Harness";
 /// `mobile live-activity ios`: the harness's shots of the call's Live Activity into dist/live-activity-sim/, then their
 /// `INDEX.md`. The index is written whether or not every shot was taken: it lists those that were.
 pub fn live_activity(name: &str) -> Result<()> {
-    ensure(project(name)?.cli == "ios", "mobile live-activity: ios only")?;
+    ensure(
+        project(name)?.cli == "ios",
+        "mobile live-activity: ios only",
+    )?;
     let out = repo().join("dist/live-activity-sim");
-    let only = std::env::var("LA_ONLY").ok().filter(|only| !only.trim().is_empty());
+    let only = std::env::var("LA_ONLY")
+        .ok()
+        .filter(|only| !only.trim().is_empty());
     let ran = platform::ios_simulator::live_activity(&repo().join(HARNESS), &out, only.as_deref());
     if !out.is_dir() {
         return ran;
@@ -592,7 +739,10 @@ pub fn live_activity(name: &str) -> Result<()> {
         .collect();
     shots.sort();
     let device = fs::read_to_string(out.join("device.txt")).unwrap_or_default();
-    write(&out.join("INDEX.md"), live_activity_index(&shots, device.trim()))?;
+    write(
+        &out.join("INDEX.md"),
+        live_activity_index(&shots, device.trim()),
+    )?;
     ran
 }
 
@@ -610,7 +760,12 @@ impl<'a> Shot<'a> {
         let (presentation, rest) = stem.split_once('-')?;
         let (fixture, appearance) = rest.rsplit_once('-')?;
         let (state, variant) = fixture.split_once('-').unwrap_or((fixture, ""));
-        Some(Shot { presentation, state, variant, appearance })
+        Some(Shot {
+            presentation,
+            state,
+            variant,
+            appearance,
+        })
     }
 
     /// The design gallery's PNGs (research/live-activity-design-2026-11-02, png/) this shot is to match, the closest first.
@@ -625,8 +780,13 @@ impl<'a> Shot<'a> {
                 if state != "said" {
                     add(format!("pieces-{state}"));
                 }
-                if ["speaking-light", "speaking-dark", "listening-light", "working-light"]
-                    .contains(&format!("{state}-{theme}").as_str())
+                if [
+                    "speaking-light",
+                    "speaking-dark",
+                    "listening-light",
+                    "working-light",
+                ]
+                .contains(&format!("{state}-{theme}").as_str())
                 {
                     add(format!("phones-{state}-{theme}"));
                 }
@@ -671,8 +831,16 @@ fn live_activity_index(shots: &[String], device: &str) -> String {
             continue;
         };
         let gallery = shot.gallery();
-        let gallery = if gallery.is_empty() { "none drawn".to_owned() } else { gallery.join(", ") };
-        let frames = if shot.presentation == "expanded" { file.replace(".png", ".json") } else { String::new() };
+        let gallery = if gallery.is_empty() {
+            "none drawn".to_owned()
+        } else {
+            gallery.join(", ")
+        };
+        let frames = if shot.presentation == "expanded" {
+            file.replace(".png", ".json")
+        } else {
+            String::new()
+        };
         index.push_str(&format!("| {file} | {gallery} | {frames} |\n"));
     }
     index
@@ -685,19 +853,38 @@ fn live_activity_index(shots: &[String], device: &str) -> String {
 pub fn lint(name: &str) -> Result<()> {
     crate::checks::web()?;
     // `disallowed_macros` is on (clippy.toml: no `dbg!`, `println!`, `eprintln!`): the app logs through `tracing`.
-    let flags = ["--", "-D", "warnings", "-A", "clippy::disallowed_methods", "-A", "clippy::disallowed_types"];
-    let packages = ["-p", "sidevoice-mobile", "-p", "sidevoice-mobile-plugin", "--all-targets"];
+    let flags = [
+        "--",
+        "-D",
+        "warnings",
+        "-A",
+        "clippy::disallowed_methods",
+        "-A",
+        "clippy::disallowed_types",
+    ];
+    let packages = [
+        "-p",
+        "sidevoice-mobile",
+        "-p",
+        "sidevoice-mobile-plugin",
+        "--all-targets",
+    ];
     let mobile = repo().join("mobile/tauri");
     match project(name)?.cli {
         "android" => {
             let libs = engine_libs(name, "aarch64-linux-android")?;
-            let clippy = Cmd::new("cargo").args(["ndk", "--target", "arm64-v8a", "clippy"]).args(packages).args(flags);
+            let clippy = Cmd::new("cargo")
+                .args(["ndk", "--target", "arm64-v8a", "clippy"])
+                .args(packages)
+                .args(flags);
             libs.apply(clippy.dir(&mobile)).run()
         }
         _ => {
             let libs = engine_libs(name, "aarch64-apple-ios-sim")?;
-            let clippy =
-                Cmd::new("cargo").args(["clippy", "--target", "aarch64-apple-ios-sim"]).args(packages).args(flags);
+            let clippy = Cmd::new("cargo")
+                .args(["clippy", "--target", "aarch64-apple-ios-sim"])
+                .args(packages)
+                .args(flags);
             libs.apply(clippy.dir(&mobile)).run()
         }
     }
@@ -708,15 +895,23 @@ pub fn lint(name: &str) -> Result<()> {
 /// android`). The call card's renders (`CallCardRenderTest`) are copied to [`CALL_CARD_RENDERS`] in dist/, whatever the
 /// tests' outcome: they are the evidence a reviewer compares with the design.
 pub fn test(name: &str) -> Result<()> {
-    ensure(project(name)?.cli == "android", "mobile test: android, the one with Kotlin of its own")?;
+    ensure(
+        project(name)?.cli == "android",
+        "mobile test: android, the one with Kotlin of its own",
+    )?;
     let gradle = repo().join("mobile/tauri/gen/android");
-    let tests = Cmd::new(gradle.join("gradlew")).arg(":sidevoice-mobile-plugin:testDebugUnitTest").dir(&gradle).run();
+    let tests = Cmd::new(gradle.join("gradlew"))
+        .arg(":sidevoice-mobile-plugin:testDebugUnitTest")
+        .dir(&gradle)
+        .run();
     let renders = repo().join("mobile/tauri/plugin/android/build/call-card-renders");
     if renders.is_dir() {
         let to = repo().join("dist").join(CALL_CARD_RENDERS);
         mkdir(&to)?;
         for entry in fs::read_dir(&renders).map_err(|e| format!("{}: {e}", renders.display()))? {
-            let from = entry.map_err(|e| format!("{}: {e}", renders.display()))?.path();
+            let from = entry
+                .map_err(|e| format!("{}: {e}", renders.display()))?
+                .path();
             if let Some(file) = from.file_name() {
                 fs::copy(&from, to.join(file)).map_err(|e| format!("{}: {e}", from.display()))?;
             }
@@ -745,13 +940,20 @@ mod tests {
     /// this syntax as a dictionary, but it accepts an entry without its `;` or its `=`, which the system does not.)
     /// The texts are plain: a backslash escape is refused, not decoded.
     fn strings_of(text: &str) -> Result<Vec<(String, String)>> {
-        let token = util::re(r#"\A(?:\s+|(?s:/\*.*?\*/)|//[^\n]*|"([A-Za-z]+)"\s*=\s*"([^"\\]*)"\s*;)"#);
+        let token =
+            util::re(r#"\A(?:\s+|(?s:/\*.*?\*/)|//[^\n]*|"([A-Za-z]+)"\s*=\s*"([^"\\]*)"\s*;)"#);
         let mut entries = Vec::new();
         let mut rest = text;
         while !rest.is_empty() {
             let Some(found) = token.captures(rest) else {
                 let line = text[..text.len() - rest.len()].matches('\n').count() + 1;
-                let snippet: String = rest.lines().next().unwrap_or_default().chars().take(40).collect();
+                let snippet: String = rest
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(40)
+                    .collect();
                 return Err(format!(
                     "line {line}: expected a `\"KEY\" = \"text\";` entry or a comment, found `{snippet}`"
                 ));
@@ -775,10 +977,16 @@ mod tests {
     #[test]
     fn every_language_has_both_permission_texts() {
         let languages = ios_languages(&ios_dir()).unwrap();
-        assert!(languages.iter().any(|language| language == "en"), "English is the base: {languages:?}");
+        assert!(
+            languages.iter().any(|language| language == "en"),
+            "English is the base: {languages:?}"
+        );
         for language in languages {
-            let file = ios_dir().join(format!("{language}.lproj")).join(IOS_TEXTS_FILE);
-            let text = fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+            let file = ios_dir()
+                .join(format!("{language}.lproj"))
+                .join(IOS_TEXTS_FILE);
+            let text =
+                fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
             let keys: Vec<String> = strings_of(&text)
                 .unwrap_or_else(|e| panic!("{}: {e}", file.display()))
                 .into_iter()
@@ -803,8 +1011,13 @@ mod tests {
         assert_eq!(strings.len(), 3);
         for (key, value) in strings {
             let in_plist = util::re(&format!(r"<key>{key}</key>\s*<string>([^<]*)</string>"));
-            let base = in_plist.captures(&plist).unwrap_or_else(|| panic!("Info.ios.plist has no {key}"));
-            assert_eq!(&base[1], value, "{key}: the English of en.lproj and of Info.ios.plist are one text");
+            let base = in_plist
+                .captures(&plist)
+                .unwrap_or_else(|| panic!("Info.ios.plist has no {key}"));
+            assert_eq!(
+                &base[1], value,
+                "{key}: the English of en.lproj and of Info.ios.plist are one text"
+            );
         }
     }
 
@@ -815,8 +1028,10 @@ mod tests {
             .captures(&plist)
             .expect("Info.ios.plist has CFBundleLocalizations")[1]
             .to_owned();
-        let mut offered: Vec<String> =
-            util::re(r"<string>([^<]*)</string>").captures_iter(&listed).map(|found| found[1].to_owned()).collect();
+        let mut offered: Vec<String> = util::re(r"<string>([^<]*)</string>")
+            .captures_iter(&listed)
+            .map(|found| found[1].to_owned())
+            .collect();
         offered.sort();
         assert_eq!(offered, ios_languages(&ios_dir()).unwrap());
     }
@@ -832,20 +1047,42 @@ mod tests {
         );
 
         let malformed = [
-            ("an entry without its `;`, before another", "\"A\" = \"x\"\n\"B\" = \"y\";\n", 1),
-            ("an entry without its `;`, at the end", "\"A\" = \"x\";\n\n\"B\" = \"y\"\n", 3),
+            (
+                "an entry without its `;`, before another",
+                "\"A\" = \"x\"\n\"B\" = \"y\";\n",
+                1,
+            ),
+            (
+                "an entry without its `;`, at the end",
+                "\"A\" = \"x\";\n\n\"B\" = \"y\"\n",
+                3,
+            ),
             ("an entry without its `=`", "\"A\" \"x\";\n", 1),
             ("a key that is not quoted", "A = \"x\";\n", 1),
-            ("a string that is not closed", "\"A\" = \"x;\n\"B\" = \"y\";\n", 1),
-            ("a comment that is not closed", "\"A\" = \"x\";\n/* b\n\"B\" = \"y\";\n", 2),
-            ("a line that is no entry", "\"A\" = \"x\";\nthis is not an entry\n", 2),
+            (
+                "a string that is not closed",
+                "\"A\" = \"x;\n\"B\" = \"y\";\n",
+                1,
+            ),
+            (
+                "a comment that is not closed",
+                "\"A\" = \"x\";\n/* b\n\"B\" = \"y\";\n",
+                2,
+            ),
+            (
+                "a line that is no entry",
+                "\"A\" = \"x\";\nthis is not an entry\n",
+                2,
+            ),
             ("a text with an escape", "\"A\" = \"say \\\"hi\\\"\";\n", 1),
             ("a closing brace", "\"A\" = \"x\";\n}\n", 2),
         ];
         for (what, text, line) in malformed {
             let error = strings_of(text).expect_err(what);
             assert!(
-                error.starts_with(&format!("line {line}: expected a `\"KEY\" = \"text\";` entry")),
+                error.starts_with(&format!(
+                    "line {line}: expected a `\"KEY\" = \"text\";` entry"
+                )),
                 "{what}: {error}"
             );
         }
@@ -865,7 +1102,13 @@ mod tests {
     /// known regions. The build file is called "InfoPlist.strings in Resources" and every language's path is in the
     /// text whoever copies the group, as in a project that does not ship the texts.
     fn project_file(regions: &[&str], languages: &[&str], copier: Copier) -> String {
-        let quote = |name: &str| if name.contains('-') { format!("\"{name}\"") } else { name.to_owned() };
+        let quote = |name: &str| {
+            if name.contains('-') {
+                format!("\"{name}\"")
+            } else {
+                name.to_owned()
+            }
+        };
         let files: String = languages
             .iter()
             .enumerate()
@@ -877,8 +1120,13 @@ mod tests {
                 )
             })
             .collect();
-        let children: String = (0..languages.len()).map(|index| format!("                F{index:02},\n")).collect();
-        let regions: String = regions.iter().map(|region| format!("                {},\n", quote(region))).collect();
+        let children: String = (0..languages.len())
+            .map(|index| format!("                F{index:02},\n"))
+            .collect();
+        let regions: String = regions
+            .iter()
+            .map(|region| format!("                {},\n", quote(region)))
+            .collect();
         let copies = |phase: Copier| {
             if phase == copier {
                 "                B01 /* InfoPlist.strings in Resources */,\n"
@@ -999,9 +1247,17 @@ mod tests {
     fn a_language_missing_from_the_group_is_refused() {
         let project = project_file(&ALL_REGIONS, &["en", "zh-Hans"], Copier::App);
         // A search of the text finds the build file and the other languages' paths, and so would pass this.
-        assert!(project.contains("InfoPlist.strings in Resources") && project.contains("en.lproj/InfoPlist.strings"));
+        assert!(
+            project.contains("InfoPlist.strings in Resources")
+                && project.contains("en.lproj/InfoPlist.strings")
+        );
         let error = check_localized_texts_listed(&project, &languages()).unwrap_err();
-        assert_eq!(error, format!("{LACKING}de.lproj/InfoPlist.strings is not a child of the InfoPlist.strings group"));
+        assert_eq!(
+            error,
+            format!(
+                "{LACKING}de.lproj/InfoPlist.strings is not a child of the InfoPlist.strings group"
+            )
+        );
     }
 
     #[test]
@@ -1010,7 +1266,8 @@ mod tests {
             let project = project_file(&ALL_REGIONS, &ALL_LANGUAGES, copier);
             // The build file and every path are in the text: a search of it passes, the build phases do not.
             assert!(
-                project.contains("InfoPlist.strings in Resources") && project.contains("de.lproj/InfoPlist.strings")
+                project.contains("InfoPlist.strings in Resources")
+                    && project.contains("de.lproj/InfoPlist.strings")
             );
             let error = check_localized_texts_listed(&project, &languages()).unwrap_err();
             assert_eq!(
@@ -1043,13 +1300,23 @@ mod tests {
     #[test]
     fn what_is_no_project_with_an_app_is_refused() {
         let project = project_file(&ALL_REGIONS, &ALL_LANGUAGES, Copier::App);
-        let no_app = project.replace("com.apple.product-type.application", "com.apple.product-type.tool");
+        let no_app = project.replace(
+            "com.apple.product-type.application",
+            "com.apple.product-type.tool",
+        );
         let error = check_localized_texts_listed(&no_app, &languages()).unwrap_err();
         assert_eq!(error, "the project has 0 application targets, not one");
 
         let no_project = project.replace("rootObject = P01", "rootObject = Q01");
-        assert!(check_localized_texts_listed(&no_project, &languages()).unwrap_err().contains("no project object"));
-        for text in ["", "no regions at all", "{ objects = { }; ", "{ objects = (); rootObject = P01; }"] {
+        assert!(check_localized_texts_listed(&no_project, &languages())
+            .unwrap_err()
+            .contains("no project object"));
+        for text in [
+            "",
+            "no regions at all",
+            "{ objects = { }; ",
+            "{ objects = (); rootObject = P01; }",
+        ] {
             let error = check_localized_texts_listed(text, &languages()).unwrap_err();
             assert!(!error.starts_with(LACKING), "{text:?}: {error}");
         }
@@ -1062,14 +1329,18 @@ mod tests {
         let path = repo().join("mobile/tauri/gen/apple").join(IOS_PBXPROJ);
         let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let languages = ios_languages(&ios_dir()).unwrap();
-        let error = check_localized_texts_listed(&text, &languages).err().unwrap_or_else(|| LACKING.to_owned());
+        let error = check_localized_texts_listed(&text, &languages)
+            .err()
+            .unwrap_or_else(|| LACKING.to_owned());
         assert!(error.starts_with(LACKING), "{error}");
     }
 
     #[test]
     fn the_simulator_app_is_found_a_few_levels_down() {
         let dir = tempfile::tempdir().unwrap();
-        let app = dir.path().join("arm64-sim/Release-iphonesimulator/Sidevoice.app");
+        let app = dir
+            .path()
+            .join("arm64-sim/Release-iphonesimulator/Sidevoice.app");
         fs::create_dir_all(&app).unwrap();
         fs::create_dir_all(dir.path().join("arm64-sim/other")).unwrap();
         assert_eq!(find_app(dir.path(), 3), Some(app));
@@ -1081,22 +1352,42 @@ mod tests {
         let gallery = |file: &str| Shot::read(file).unwrap().gallery();
         assert_eq!(
             gallery("lock-working-light.png"),
-            ["pieces-working.png", "phones-working-light.png", "states-light.png"]
+            [
+                "pieces-working.png",
+                "phones-working-light.png",
+                "states-light.png"
+            ]
         );
         assert_eq!(gallery("expanded-said-dark.png"), ["states-dark.png"]);
         assert_eq!(
             gallery("compact-working-mic-off-light.png"),
-            ["pieces-working-mic-off.png", "phones-working-mic-off-light.png", "states-mic-off-light.png"]
+            [
+                "pieces-working-mic-off.png",
+                "phones-working-mic-off-light.png",
+                "states-mic-off-light.png"
+            ]
         );
-        assert_eq!(gallery("lock-listening-no-still-dark.png"), ["pieces-listening-no-still.png"]);
-        assert_eq!(gallery("expanded-working-conversations-9-light.png"), ["pieces-working.png"]);
-        assert_eq!(gallery("expanded-speaking-long-en-light.png"), Vec::<String>::new());
+        assert_eq!(
+            gallery("lock-listening-no-still-dark.png"),
+            ["pieces-listening-no-still.png"]
+        );
+        assert_eq!(
+            gallery("expanded-working-conversations-9-light.png"),
+            ["pieces-working.png"]
+        );
+        assert_eq!(
+            gallery("expanded-speaking-long-en-light.png"),
+            Vec::<String>::new()
+        );
         assert!(Shot::read("device.txt").is_none());
     }
 
     #[test]
     fn the_index_lists_every_shot_and_the_frames_of_the_expanded_ones() {
-        let shots = ["expanded-idle-light.png".to_owned(), "lock-speaking-long-en-dark.png".to_owned()];
+        let shots = [
+            "expanded-idle-light.png".to_owned(),
+            "lock-speaking-long-en-dark.png".to_owned(),
+        ];
         let index = live_activity_index(&shots, "device type t, runtime r");
         assert!(index
             .contains("| expanded-idle-light.png | pieces-idle.png, states-light.png | expanded-idle-light.json |"));
@@ -1107,8 +1398,15 @@ mod tests {
     #[test]
     fn the_target_sdk_line_of_the_template_is_replaced() {
         let template = "android {\n    defaultConfig {\n        minSdk = 26\n        targetSdk = 37\n    }\n}\n";
-        assert_eq!(pin_target_sdk(template).unwrap(), template.replace("targetSdk = 37", "targetSdk = 36"));
-        assert!(pin_target_sdk("android {}").unwrap_err().contains("0 `targetSdk"));
-        assert!(pin_target_sdk("targetSdk = 1\ntargetSdk = 2\n").unwrap_err().contains("2 `targetSdk"));
+        assert_eq!(
+            pin_target_sdk(template).unwrap(),
+            template.replace("targetSdk = 37", "targetSdk = 36")
+        );
+        assert!(pin_target_sdk("android {}")
+            .unwrap_err()
+            .contains("0 `targetSdk"));
+        assert!(pin_target_sdk("targetSdk = 1\ntargetSdk = 2\n")
+            .unwrap_err()
+            .contains("2 `targetSdk"));
     }
 }

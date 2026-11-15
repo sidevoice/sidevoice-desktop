@@ -17,7 +17,10 @@ pub fn web() -> Result<()> {
 pub fn lint() -> Result<()> {
     let app = repo().join("desktop");
     let xtask = repo().join("xtask/Cargo.toml");
-    Cmd::new("cargo").args(["fmt", "--all", "--check"]).dir(&app).run()?;
+    Cmd::new("cargo")
+        .args(["fmt", "--all", "--check"])
+        .dir(&app)
+        .run()?;
     Cmd::new("cargo")
         .args(["fmt", "--manifest-path"])
         .arg(&xtask)
@@ -33,7 +36,15 @@ pub fn clippy(boundary: bool) -> Result<()> {
     let app = repo().join("desktop");
     let xtask = repo().join("xtask/Cargo.toml");
     let level = if boundary { "-D" } else { "-A" };
-    let flags = ["--", "-D", "warnings", level, "clippy::disallowed_methods", level, "clippy::disallowed_types"];
+    let flags = [
+        "--",
+        "-D",
+        "warnings",
+        level,
+        "clippy::disallowed_methods",
+        level,
+        "clippy::disallowed_types",
+    ];
     // Run both even when the app reports boundary findings.
     let app_result = Cmd::new("cargo")
         .args(["clippy", "--workspace", "--all-targets", "--all-features"])
@@ -46,7 +57,10 @@ pub fn clippy(boundary: bool) -> Result<()> {
         .args(flags)
         .dir(&app)
         .run();
-    let errors: Vec<_> = [app_result, xtask_result].into_iter().filter_map(Result::err).collect();
+    let errors: Vec<_> = [app_result, xtask_result]
+        .into_iter()
+        .filter_map(Result::err)
+        .collect();
     if errors.is_empty() {
         Ok(())
     } else {
@@ -58,7 +72,10 @@ pub fn clippy(boundary: bool) -> Result<()> {
 /// when one fails.
 pub fn test() -> Result<()> {
     Cmd::new(npm()).arg("test").run()?;
-    Cmd::new("cargo").args(["test", "--workspace", "--no-fail-fast"]).dir(repo().join("desktop")).run()
+    Cmd::new("cargo")
+        .args(["test", "--workspace", "--no-fail-fast"])
+        .dir(repo().join("desktop"))
+        .run()
 }
 
 /// Portable fixtures, also run by the existing macOS and Windows PR jobs.
@@ -71,19 +88,28 @@ pub fn test_support() -> Result<()> {
 }
 
 /// Everything `npm run icons` writes.
-const DRAWN: &[&str] =
-    &["desktop/tauri/packaging", "mobile/tauri/app-icon", "mobile/tauri/plugin/android/src/main/res/drawable"];
+const DRAWN: &[&str] = &[
+    "desktop/tauri/packaging",
+    "mobile/tauri/app-icon",
+    "mobile/tauri/plugin/android/src/main/res/drawable",
+];
 
 /// `icons`: the icons, tray marks, .dmg window and the mobile app's icons are what the brand files draw:
 /// `npm run icons`, then nothing it writes differs from what is committed.
 pub fn icons() -> Result<()> {
     Cmd::new(npm()).args(["run", "icons"]).run()?;
-    Cmd::new("git").args(["status", "--porcelain", "--"]).args(DRAWN).run()?;
+    Cmd::new("git")
+        .args(["status", "--porcelain", "--"])
+        .args(DRAWN)
+        .run()?;
     Cmd::new("git")
         .args(["diff", "--quiet", "--exit-code", "--"])
         .args(DRAWN)
         .run()
-        .map_err(|_| "the committed icons are not what the brand files draw: run `npm run icons` and commit".into())
+        .map_err(|_| {
+            "the committed icons are not what the brand files draw: run `npm run icons` and commit"
+                .into()
+        })
 }
 
 /// The command permissions written from the app's build script (tauri-build, desktop/tauri/build.rs) and from the shared plugin's
@@ -94,7 +120,10 @@ const PERMISSIONS: [&str; 2] = ["desktop/tauri/permissions", "shared/tauri/permi
 /// file per declared command; the plugin's build script does the same for its own), then nothing under
 /// desktop/tauri/permissions or shared/tauri/permissions differs from what is committed.
 pub fn permissions() -> Result<()> {
-    Cmd::new("cargo").args(["check", "-p", "sidevoice-desktop"]).dir(repo().join("desktop")).run()?;
+    Cmd::new("cargo")
+        .args(["check", "-p", "sidevoice-desktop"])
+        .dir(repo().join("desktop"))
+        .run()?;
     let changes = Cmd::new("git")
         .args(["status", "--porcelain", "--untracked-files=all", "--"])
         .args(PERMISSIONS)
@@ -128,7 +157,10 @@ pub fn engine_in_lock(lock: &str) -> Result<String> {
         .map(|m| m.as_str().trim_matches('"'))
         .unwrap_or_default();
     let rev = source.rsplit('#').next().unwrap_or_default();
-    ensure(rev.len() == 40, format!("no sidevoice-engine commit in Cargo.lock: {source:?}"))?;
+    ensure(
+        rev.len() == 40,
+        format!("no sidevoice-engine commit in Cargo.lock: {source:?}"),
+    )?;
     Ok(rev.to_owned())
 }
 
@@ -146,7 +178,8 @@ pub fn sherpa_libs() -> Result<()> {
 /// output is the command's.
 pub fn engine_xtask(args: &[&str]) -> Result<Cmd> {
     let rev = pinned_engine()?;
-    let base = std::env::var_os("RUNNER_TEMP").map_or_else(|| repo().join("target/xtask"), Into::into);
+    let base =
+        std::env::var_os("RUNNER_TEMP").map_or_else(|| repo().join("target/xtask"), Into::into);
     mkdir(&base)?;
     let engine = base.join("sidevoice-engine");
     if engine.exists() {
@@ -162,7 +195,12 @@ pub fn engine_xtask(args: &[&str]) -> Result<Cmd> {
         "https://github.com/sidevoice/sidevoice-engine",
         &rev,
     ]))?;
-    quiet(Cmd::new("git").arg("-C").arg(&engine).args(["checkout", "-q", "FETCH_HEAD"]))?;
+    quiet(
+        Cmd::new("git")
+            .arg("-C")
+            .arg(&engine)
+            .args(["checkout", "-q", "FETCH_HEAD"]),
+    )?;
     Ok(Cmd::new("cargo")
         .args(["run", "--quiet", "--locked", "--manifest-path"])
         .arg(engine.join("xtask/Cargo.toml"))
@@ -178,9 +216,16 @@ pub fn engine_xtask(args: &[&str]) -> Result<Cmd> {
 pub fn bundle(channel: crate::util::Channel) -> Result<()> {
     let Some(bundles) = host::installer_bundles() else {
         let os = host::name();
-        return Err(format!("`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask release`"));
+        return Err(format!(
+            "`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask release`"
+        ));
     };
-    let mut command = crate::util::TauriBuild { bundles, channel, ..Default::default() }.command()?;
+    let mut command = crate::util::TauriBuild {
+        bundles,
+        channel,
+        ..Default::default()
+    }
+    .command()?;
     if host::installers_for_any_cpu() {
         // Installers must run on other CPUs too, including when bundled on a laptop.
         command = command.env("GGML_NATIVE", "OFF");
@@ -194,13 +239,22 @@ pub fn bundle(channel: crate::util::Channel) -> Result<()> {
 pub fn release_pr_title(branch: Option<&str>) -> Result<()> {
     let branch = match branch {
         Some(branch) => branch.to_owned(),
-        None => std::env::var("GITHUB_REF_NAME").map_err(|_| "no BRANCH, and GITHUB_REF_NAME is not set")?,
+        None => std::env::var("GITHUB_REF_NAME")
+            .map_err(|_| "no BRANCH, and GITHUB_REF_NAME is not set")?,
     };
-    ensure(is_release_branch(&branch), "dispatch is for release-please's branch only")?;
-    let title = Cmd::new("gh").args(["pr", "view", &branch, "--json", "title", "-q", ".title"]).stdout()?;
+    ensure(
+        is_release_branch(&branch),
+        "dispatch is for release-please's branch only",
+    )?;
+    let title = Cmd::new("gh")
+        .args(["pr", "view", &branch, "--json", "title", "-q", ".title"])
+        .stdout()?;
     let title = title.trim_end_matches('\n');
     eprintln!("{title}");
-    ensure(is_release_title(title), format!("not a release PR's title: {title}"))
+    ensure(
+        is_release_title(title),
+        format!("not a release PR's title: {title}"),
+    )
 }
 
 pub fn is_release_branch(branch: &str) -> bool {
@@ -208,18 +262,29 @@ pub fn is_release_branch(branch: &str) -> bool {
 }
 
 pub fn is_release_title(title: &str) -> bool {
-    title.lines().any(|line| crate::util::re(r"^chore(\([^)]+\))?: release ").is_match(line))
+    title
+        .lines()
+        .any(|line| crate::util::re(r"^chore(\([^)]+\))?: release ").is_match(line))
 }
 
 /// `release-pr-checks`: the PR-title check dispatched on every open release PR's branch (release-please opens and
 /// updates its PR with the workflow's token, whose pushes start no workflow). `gh` with `GH_TOKEN` and `GH_REPO`.
 pub fn release_pr_checks() -> Result<()> {
     let branches = Cmd::new("gh")
-        .args(["pr", "list", "--state", "open", "--label", "autorelease: pending"])
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--label",
+            "autorelease: pending",
+        ])
         .args(["--json", "headRefName", "--jq", ".[].headRefName"])
         .stdout()?;
     for branch in branches.split_whitespace() {
-        Cmd::new("gh").args(["workflow", "run", "pr-title.yml", "--ref", branch]).run()?;
+        Cmd::new("gh")
+            .args(["workflow", "run", "pr-title.yml", "--ref", branch])
+            .run()?;
     }
     Ok(())
 }
@@ -234,20 +299,40 @@ const VOICE_REPOSITORY: &str = "sidevoice/sidevoice-voice";
 /// (shared/core/tests/voice_settings_contract.rs). `gh` with `GH_TOKEN`; both repositories are public.
 pub fn voice_contract() -> Result<()> {
     let pin = repo().join("web.pin.json");
-    let pin: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&pin).map_err(|e| format!("{}: {e}", pin.display()))?)
-            .map_err(|e| format!("web.pin.json: {e}"))?;
-    let field = |name: &str| pin[name].as_str().ok_or_else(|| format!("web.pin.json: no `{name}`"));
+    let pin: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&pin).map_err(|e| format!("{}: {e}", pin.display()))?,
+    )
+    .map_err(|e| format!("web.pin.json: {e}"))?;
+    let field = |name: &str| {
+        pin[name]
+            .as_str()
+            .ok_or_else(|| format!("web.pin.json: no `{name}`"))
+    };
     let (web, tag) = (field("repository")?, field("tag")?);
     let version = voice_version(&github_file(web, "apps/web/package.json", tag)?)?;
-    let contract = github_file(VOICE_REPOSITORY, "js/voice-host.d.ts", &format!("v{version}"))?;
+    let contract = github_file(
+        VOICE_REPOSITORY,
+        "js/voice-host.d.ts",
+        &format!("v{version}"),
+    )?;
     let dir = repo().join("target/voice-contract");
     mkdir(&dir)?;
     let path = dir.join(format!("voice-host-{version}.d.ts"));
     fs::write(&path, contract).map_err(|e| format!("{}: {e}", path.display()))?;
-    eprintln!("{web} {tag} depends on {VOICE_REPOSITORY} {version}: {}", path.display());
+    eprintln!(
+        "{web} {tag} depends on {VOICE_REPOSITORY} {version}: {}",
+        path.display()
+    );
     Cmd::new("cargo")
-        .args(["test", "-p", "sidevoice-shared", "--test", "voice_settings_contract", "--", "--include-ignored"])
+        .args([
+            "test",
+            "-p",
+            "sidevoice-shared",
+            "--test",
+            "voice_settings_contract",
+            "--",
+            "--include-ignored",
+        ])
         .env("SIDEVOICE_VOICE_CONTRACT", &path)
         .dir(repo().join("desktop"))
         .run()
@@ -257,20 +342,27 @@ pub fn voice_contract() -> Result<()> {
 fn github_file(repository: &str, path: &str, reference: &str) -> Result<String> {
     Cmd::new("gh")
         .args(["api", "-H", "Accept: application/vnd.github.raw"])
-        .arg(format!("repos/{repository}/contents/{path}?ref={reference}"))
+        .arg(format!(
+            "repos/{repository}/contents/{path}?ref={reference}"
+        ))
         .stdout()
 }
 
 /// The version of `@sidevoice/voice` a web `package.json` depends on: an exact one, since the contract is read at that
 /// release.
 pub fn voice_version(package: &str) -> Result<String> {
-    let package: serde_json::Value = serde_json::from_str(package).map_err(|e| format!("package.json: {e}"))?;
+    let package: serde_json::Value =
+        serde_json::from_str(package).map_err(|e| format!("package.json: {e}"))?;
     let version = ["dependencies", "devDependencies"]
         .iter()
         .find_map(|section| package[section]["@sidevoice/voice"].as_str())
         .ok_or("package.json: no @sidevoice/voice dependency")?;
-    let exact = version.split('.').count() == 3 && version.split('.').all(|part| part.parse::<u32>().is_ok());
-    ensure(exact, format!("package.json: @sidevoice/voice is {version:?}, not an exact x.y.z release"))?;
+    let exact = version.split('.').count() == 3
+        && version.split('.').all(|part| part.parse::<u32>().is_ok());
+    ensure(
+        exact,
+        format!("package.json: @sidevoice/voice is {version:?}, not an exact x.y.z release"),
+    )?;
     Ok(version.to_owned())
 }
 
@@ -286,19 +378,32 @@ name = "sidevoice-engine"
 version = "0.4.0"
 source = "git+https://github.com/sidevoice/sidevoice-engine?rev=0123456#0123456789abcdef0123456789abcdef01234567"
 "#;
-        assert_eq!(engine_in_lock(lock).unwrap(), "0123456789abcdef0123456789abcdef01234567");
-        assert!(engine_in_lock("source = \"git+https://github.com/sidevoice/sidevoice-engine#abc\"").is_err());
+        assert_eq!(
+            engine_in_lock(lock).unwrap(),
+            "0123456789abcdef0123456789abcdef01234567"
+        );
+        assert!(engine_in_lock(
+            "source = \"git+https://github.com/sidevoice/sidevoice-engine#abc\""
+        )
+        .is_err());
         assert!(engine_in_lock("nothing").is_err());
     }
 
     #[test]
     fn the_voice_version_is_the_exact_one_the_web_depends_on() {
-        let package = |dependencies: &str| format!("{{\"name\": \"web\", \"dependencies\": {dependencies}}}");
+        let package =
+            |dependencies: &str| format!("{{\"name\": \"web\", \"dependencies\": {dependencies}}}");
         assert_eq!(
-            voice_version(&package(r#"{"@sidevoice/engine": "0.5.0", "@sidevoice/voice": "0.7.3"}"#)).unwrap(),
+            voice_version(&package(
+                r#"{"@sidevoice/engine": "0.5.0", "@sidevoice/voice": "0.7.3"}"#
+            ))
+            .unwrap(),
             "0.7.3"
         );
-        assert!(voice_version(&package(r#"{"@sidevoice/voice": "^0.7.3"}"#)).is_err(), "a range is not a release");
+        assert!(
+            voice_version(&package(r#"{"@sidevoice/voice": "^0.7.3"}"#)).is_err(),
+            "a range is not a release"
+        );
         assert!(voice_version(&package(r#"{"@sidevoice/engine": "0.5.0"}"#)).is_err());
         assert!(voice_version("{").is_err());
     }

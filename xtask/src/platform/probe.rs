@@ -58,7 +58,10 @@ use imp::Native;
 
 /// The refusal of a flow this host does not have.
 fn unsupported(step: &str) -> String {
-    format!("`cargo xtask probe {step}` is not available on {}", host::name())
+    format!(
+        "`cargo xtask probe {step}` is not available on {}",
+        host::name()
+    )
 }
 
 /// `probe probe-app`.

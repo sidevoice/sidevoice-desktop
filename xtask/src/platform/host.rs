@@ -11,7 +11,10 @@ pub fn name() -> &'static str {
 
 /// Requires `os`: the command's tools are that system's.
 pub fn require_os(os: &str, command: &str) -> Result<()> {
-    ensure(name() == os, format!("`cargo xtask {command}` runs on {os}"))
+    ensure(
+        name() == os,
+        format!("`cargo xtask {command}` runs on {os}"),
+    )
 }
 
 /// The npm launcher: a `.cmd` on Windows.

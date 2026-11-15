@@ -39,7 +39,8 @@ pub struct Row {
 }
 
 fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    line.split_whitespace().find_map(|word| word.strip_prefix(key)?.strip_prefix('='))
+    line.split_whitespace()
+        .find_map(|word| word.strip_prefix(key)?.strip_prefix('='))
 }
 
 fn optional(line: &str, key: &str) -> Option<Option<u64>> {
@@ -52,7 +53,10 @@ fn optional(line: &str, key: &str) -> Option<Option<u64>> {
 /// The rows in `text`, in the order they were printed (a phase printed twice keeps its last values, where it first was).
 pub fn parse(text: &str) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::new();
-    for line in text.lines().filter_map(|line| line.find("memory phase=").map(|at| &line[at..])) {
+    for line in text
+        .lines()
+        .filter_map(|line| line.find("memory phase=").map(|at| &line[at..]))
+    {
         let row = (|| {
             Some(Row {
                 phase: field(line, "phase")?.to_owned(),
@@ -107,9 +111,17 @@ pub fn table(rows: &[Row]) -> String {
 #[derive(Debug, Clone, Copy)]
 pub enum Rule {
     /// What loaded at `live` is given back by `ended`.
-    Release { idle: &'static str, live: &'static str, ended: &'static str },
+    Release {
+        idle: &'static str,
+        live: &'static str,
+        ended: &'static str,
+    },
     /// Nothing grows from `from` to `to` beyond `footprint` MiB (and the Metal allocation beyond [`METAL_MIB`]).
-    Flat { from: &'static str, to: &'static str, footprint: u64 },
+    Flat {
+        from: &'static str,
+        to: &'static str,
+        footprint: u64,
+    },
 }
 
 /// The failures of `rules` over `rows`: one sentence each. A rule whose steps are missing fails (the run did not get there).
@@ -120,8 +132,12 @@ pub fn check(rows: &[Row], rules: &[Rule]) -> Vec<String> {
         let find = |phase: &str| by.get(phase).copied();
         match *rule {
             Rule::Release { idle, live, ended } => {
-                let (Some(idle_row), Some(live_row), Some(ended_row)) = (find(idle), find(live), find(ended)) else {
-                    failures.push(format!("release: a step is missing ({idle}, {live} or {ended})"));
+                let (Some(idle_row), Some(live_row), Some(ended_row)) =
+                    (find(idle), find(live), find(ended))
+                else {
+                    failures.push(format!(
+                        "release: a step is missing ({idle}, {live} or {ended})"
+                    ));
                     continue;
                 };
                 let loaded = live_row.footprint.saturating_sub(idle_row.footprint);
@@ -134,7 +150,11 @@ pub fn check(rows: &[Row], rules: &[Rule]) -> Vec<String> {
                     ));
                 }
             }
-            Rule::Flat { from, to, footprint } => {
+            Rule::Flat {
+                from,
+                to,
+                footprint,
+            } => {
                 let (Some(a), Some(b)) = (find(from), find(to)) else {
                     failures.push(format!("flat: a step is missing ({from} or {to})"));
                     continue;
@@ -184,22 +204,70 @@ pub fn report(text: &str, rules: &[Rule]) -> Result<()> {
 
 /// The host's calls on the real models (desktop/tauri/src/voice/memory.rs).
 pub const VOICE_RULES: &[Rule] = &[
-    Rule::Release { idle: "idle", live: "call-live", ended: "call-ended" },
-    Rule::Flat { from: "call-ended", to: "calls-many", footprint: FOOTPRINT_MIB },
-    Rule::Flat { from: "call-ended", to: "changes-ended", footprint: FOOTPRINT_MIB },
-    Rule::Flat { from: "call-ended", to: "preload-input-ended", footprint: FOOTPRINT_MIB },
-    Rule::Flat { from: "call-ended", to: "preload-output-ended", footprint: FOOTPRINT_MIB },
-    Rule::Flat { from: "call-ended", to: "preload-both-ended", footprint: FOOTPRINT_MIB },
+    Rule::Release {
+        idle: "idle",
+        live: "call-live",
+        ended: "call-ended",
+    },
+    Rule::Flat {
+        from: "call-ended",
+        to: "calls-many",
+        footprint: FOOTPRINT_MIB,
+    },
+    Rule::Flat {
+        from: "call-ended",
+        to: "changes-ended",
+        footprint: FOOTPRINT_MIB,
+    },
+    Rule::Flat {
+        from: "call-ended",
+        to: "preload-input-ended",
+        footprint: FOOTPRINT_MIB,
+    },
+    Rule::Flat {
+        from: "call-ended",
+        to: "preload-output-ended",
+        footprint: FOOTPRINT_MIB,
+    },
+    Rule::Flat {
+        from: "call-ended",
+        to: "preload-both-ended",
+        footprint: FOOTPRINT_MIB,
+    },
 ];
 
 /// The probe app's long session (test/fixtures/memory.html).
 pub const APP_RULES: &[Rule] = &[
-    Rule::Release { idle: "idle", live: "models-live", ended: "models-ended" },
-    Rule::Flat { from: "models-ended", to: "calls-many", footprint: FOOTPRINT_MIB },
-    Rule::Flat { from: "calls-many", to: "card-cycle", footprint: FOOTPRINT_MIB },
-    Rule::Flat { from: "card-cycle", to: "devices-cycle", footprint: FOOTPRINT_MIB },
-    Rule::Flat { from: "devices-cycle", to: "devices-idle", footprint: IDLE_MIB },
-    Rule::Flat { from: "devices-idle", to: "settings-ended", footprint: FOOTPRINT_MIB },
+    Rule::Release {
+        idle: "idle",
+        live: "models-live",
+        ended: "models-ended",
+    },
+    Rule::Flat {
+        from: "models-ended",
+        to: "calls-many",
+        footprint: FOOTPRINT_MIB,
+    },
+    Rule::Flat {
+        from: "calls-many",
+        to: "card-cycle",
+        footprint: FOOTPRINT_MIB,
+    },
+    Rule::Flat {
+        from: "card-cycle",
+        to: "devices-cycle",
+        footprint: FOOTPRINT_MIB,
+    },
+    Rule::Flat {
+        from: "devices-cycle",
+        to: "devices-idle",
+        footprint: IDLE_MIB,
+    },
+    Rule::Flat {
+        from: "devices-idle",
+        to: "settings-ended",
+        footprint: FOOTPRINT_MIB,
+    },
 ];
 
 #[cfg(test)]
@@ -217,49 +285,107 @@ mod tests {
 
     #[test]
     fn lines_are_read_wherever_they_sit_in_the_log() {
-        let text = format!("noise\nsidevoice: page says: {}\n{}\n", line("idle", 100, None), line("a", 5, Some(2)));
+        let text = format!(
+            "noise\nsidevoice: page says: {}\n{}\n",
+            line("idle", 100, None),
+            line("a", 5, Some(2))
+        );
         let rows = parse(&text);
         assert_eq!(rows.len(), 2);
-        assert_eq!((rows[0].phase.as_str(), rows[0].footprint, rows[0].metal), ("idle", 100 * MIB, None));
+        assert_eq!(
+            (rows[0].phase.as_str(), rows[0].footprint, rows[0].metal),
+            ("idle", 100 * MIB, None)
+        );
         assert_eq!(rows[1].metal, Some(2 * MIB));
         // A repeated phase keeps its place and its last values.
-        let again = parse(&format!("{}\n{}\n{}\n", line("x", 1, None), line("y", 2, None), line("x", 3, None)));
+        let again = parse(&format!(
+            "{}\n{}\n{}\n",
+            line("x", 1, None),
+            line("y", 2, None),
+            line("x", 3, None)
+        ));
         assert_eq!(
-            again.iter().map(|r| (r.phase.as_str(), r.footprint / MIB)).collect::<Vec<_>>(),
+            again
+                .iter()
+                .map(|r| (r.phase.as_str(), r.footprint / MIB))
+                .collect::<Vec<_>>(),
             [("x", 3), ("y", 2)]
         );
     }
 
     #[test]
     fn what_loaded_must_be_given_back() {
-        let rules = [Rule::Release { idle: "idle", live: "live", ended: "ended" }];
-        let ok =
-            parse(&format!("{}\n{}\n{}\n", line("idle", 100, None), line("live", 700, None), line("ended", 180, None)));
+        let rules = [Rule::Release {
+            idle: "idle",
+            live: "live",
+            ended: "ended",
+        }];
+        let ok = parse(&format!(
+            "{}\n{}\n{}\n",
+            line("idle", 100, None),
+            line("live", 700, None),
+            line("ended", 180, None)
+        ));
         assert!(check(&ok, &rules).is_empty());
-        let kept =
-            parse(&format!("{}\n{}\n{}\n", line("idle", 100, None), line("live", 700, None), line("ended", 600, None)));
+        let kept = parse(&format!(
+            "{}\n{}\n{}\n",
+            line("idle", 100, None),
+            line("live", 700, None),
+            line("ended", 600, None)
+        ));
         assert_eq!(check(&kept, &rules).len(), 1);
         // A small load is noise.
-        let small =
-            parse(&format!("{}\n{}\n{}\n", line("idle", 100, None), line("live", 150, None), line("ended", 150, None)));
+        let small = parse(&format!(
+            "{}\n{}\n{}\n",
+            line("idle", 100, None),
+            line("live", 150, None),
+            line("ended", 150, None)
+        ));
         assert!(check(&small, &rules).is_empty());
         assert_eq!(check(&ok[..2], &rules).len(), 1, "a missing step fails");
     }
 
     #[test]
     fn repeated_work_may_not_grow() {
-        let rules = [Rule::Flat { from: "a", to: "b", footprint: FOOTPRINT_MIB }];
-        let flat = parse(&format!("{}\n{}\n", line("a", 300, Some(10)), line("b", 340, Some(30))));
+        let rules = [Rule::Flat {
+            from: "a",
+            to: "b",
+            footprint: FOOTPRINT_MIB,
+        }];
+        let flat = parse(&format!(
+            "{}\n{}\n",
+            line("a", 300, Some(10)),
+            line("b", 340, Some(30))
+        ));
         assert!(check(&flat, &rules).is_empty());
-        let grows = parse(&format!("{}\n{}\n", line("a", 300, Some(10)), line("b", 400, Some(60))));
-        assert_eq!(check(&grows, &rules).len(), 2, "the footprint and the Metal allocation");
-        let no_gpu = parse(&format!("{}\n{}\n", line("a", 300, None), line("b", 310, Some(900))));
-        assert!(check(&no_gpu, &rules).is_empty(), "Metal is compared only where both steps have it");
+        let grows = parse(&format!(
+            "{}\n{}\n",
+            line("a", 300, Some(10)),
+            line("b", 400, Some(60))
+        ));
+        assert_eq!(
+            check(&grows, &rules).len(),
+            2,
+            "the footprint and the Metal allocation"
+        );
+        let no_gpu = parse(&format!(
+            "{}\n{}\n",
+            line("a", 300, None),
+            line("b", 310, Some(900))
+        ));
+        assert!(
+            check(&no_gpu, &rules).is_empty(),
+            "Metal is compared only where both steps have it"
+        );
     }
 
     #[test]
     fn the_table_is_compact() {
-        let rows = parse(&format!("{}\n{}\n", line("idle", 100, None), line("live", 640, Some(300))));
+        let rows = parse(&format!(
+            "{}\n{}\n",
+            line("idle", 100, None),
+            line("live", 640, Some(300))
+        ));
         let text = table(&rows);
         assert!(text.contains("idle") && text.contains("+540"), "{text}");
         assert_eq!(text.lines().count(), 4);

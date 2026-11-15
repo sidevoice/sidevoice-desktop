@@ -76,6 +76,8 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Crash reports (docs/CRASH_REPORTS.md): this build sends them.
+          SIDEVOICE_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
         run: cargo xtask mobile testflight --build-number ${{ github.run_number }}
       # The build's symbols (the archive's dSYMs and the app's executable as it ships), to read its crash reports: kept as
       # long as an artifact can be. App Store Connect has them too, inside the upload. Kept even when the upload fails
@@ -87,3 +89,13 @@ jobs:
           path: dist/Sidevoice-ios-${{ github.run_number }}-symbols.zip
           retention-days: 90
           if-no-files-found: ignore
+      # The same symbols, and the release, to Sentry: so a crash's addresses become names and lines. The token is this step's alone.
+      - name: Upload the symbols and the release to Sentry
+        if: ${{ success() }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          npm install --global @sentry/cli@3.8.2
+          mkdir -p dist/sentry-symbols
+          unzip -q dist/Sidevoice-ios-${{ github.run_number }}-symbols.zip -d dist/sentry-symbols
+          cargo xtask sentry upload sidevoice-mobile dist/sentry-symbols

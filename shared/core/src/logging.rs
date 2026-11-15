@@ -310,6 +310,24 @@ pub fn announce(resource: Resource) {
     );
 }
 
+/// What hears of each panic once the log has it: the payload when it is a `&'static str`, and the thread's name.
+type Observer = Box<dyn Fn(Option<&str>, &str) + Send + Sync>;
+static OBSERVER: std::sync::OnceLock<Observer> = std::sync::OnceLock::new();
+
+/// Has `observer` told of every panic from now on (once per process; the crash reporter). It runs inside the panic hook: it
+/// must not panic or wait for a lock the panicking thread may hold.
+pub fn observe_panics(observer: impl Fn(Option<&str>, &str) + Send + Sync + 'static) {
+    let _ = OBSERVER.set(Box::new(observer));
+}
+
+/// Tells the observer of a panic whose payload is `payload`, from a panic hook (this one, or the phone's, which never logs).
+pub fn tell_observer(payload: &(dyn std::any::Any + Send)) {
+    if let Some(observer) = OBSERVER.get() {
+        let literal = payload.downcast_ref::<&'static str>().copied();
+        observer(literal, std::thread::current().name().unwrap_or("unnamed"));
+    }
+}
+
 /// A panic goes to the log as two events (guideline section 9), through the subscriber: first `panic`, then `crash_backtrace`
 /// for the app file only. The default hook is not chained: it would write the raw message to stderr, past the writer's
 /// backstop.
@@ -317,6 +335,8 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         IN_HOOK.with(|flag| flag.set(true));
         record_panic(info.payload(), info.location().map(|at| (at.file(), at.line())), std::thread::current().name());
+        // Whoever reports crashes (src/crash) hears of it with what may be sent: the literal, never a formatted message.
+        tell_observer(info.payload());
         IN_HOOK.with(|flag| flag.set(false));
         // However the log is set up, a panic must not vanish: with no stderr layer its place, never its message, goes there.
         if !STDERR_LAYER.load(std::sync::atomic::Ordering::Relaxed) {

@@ -43,6 +43,20 @@ serde_json = "1"
 # (src/voice/models.rs).
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
 
+# Crash reports (src/crash): the maintained `sentry` SDK's client, event and envelope types only: no default features, so
+# no panic, contexts or release-health integration, no transport and no log or metric capture; the events are built from
+# a closed field list (src/crash/event.rs) and handed to our own transport (src/crash/transport.rs). `backtrace` and
+# `debug-images` give an own panic's frames with their addresses and the loaded modules, which Sentry symbolicates with
+# the debug files the release uploads.
+sentry = { version = "0.49", default-features = false, features = ["backtrace", "debug-images"] }
+# The event ids are the records' own UUIDs, and the install id is a random one (src/crash).
+uuid = "1"
+getrandom = "0.3"
+# The times of a machine's crash records (RFC 3339).
+time = { version = "0.3", default-features = false, features = ["std", "parsing", "formatting"] }
+# The blocking POST of an envelope, on a thread of its own (src/crash/transport.rs); the TLS stack the app already has.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+
 # Provider keys in the OS credential store (platform/credentials; docs/CREDENTIALS.md).
 keyring-core = "1.0.1"
 
@@ -71,6 +85,7 @@ regex = "1"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 
 [dev-dependencies]
+tempfile = "3"
 # The canary test sends a line through the `log` bridge.
 log = "0.4"
 keyring-core = { version = "1.0.1", features = ["sample"] }
