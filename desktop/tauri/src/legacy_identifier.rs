@@ -390,7 +390,7 @@ fn run(
     if !state.folders {
         state.folders = true;
         for (index, (from, to)) in folders.iter().enumerate() {
-            let name = FOLDERS.get(index).copied().unwrap_or("other");
+            let name = if index == 0 { "app_data" } else { "webview" };
             state.folders &= folder(name, from, to, state.configured == Some(true), io, &mut report);
         }
     }
@@ -442,9 +442,6 @@ fn folder(name: &'static str, from: &Path, to: &Path, kept: bool, io: &Io, repor
     report.say(entry);
     true
 }
-
-/// The names the log gives the folders the app carries, in the order `app_data::carried_from` returns them.
-const FOLDERS: [&str; 2] = ["app_data", "webview"];
 
 /// Carry the old folder `from` to `to` (see the module). `None` when there is nothing to carry: no old folder, or one
 /// carried already. Else where the folder that was at `to` is kept, if there was one.

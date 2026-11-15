@@ -454,11 +454,12 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             if payload.event() == PageLoadEvent::Started {
                 debug(&format!("page {}", url_path(payload.url())));
                 let url = payload.url();
+                let fields = url_fields(url);
                 tracing::info!(
-                    url.scheme = url.scheme(),
-                    server.address = url.host_str(),
-                    server.port = url.port(),
-                    url.path = url.path(),
+                    url.scheme = fields.scheme,
+                    server.address = fields.host,
+                    server.port = fields.port,
+                    url.path = fields.path,
                     "a page started loading"
                 );
                 reset_call_state(&page_app);
@@ -718,15 +719,35 @@ fn tell_the_person(text: impl std::fmt::Display) {
     eprintln!("{text}");
 }
 
-/// A url as the log may show one of ours: scheme, host, port and path; never userinfo, query or fragment.
+/// A url as the log may show one of ours (guideline sections 7.1 and 7.2): scheme, host, port and path for a url with a
+/// base, never userinfo, query or fragment; the scheme only for `data:`, `blob:`, `about:` and the like, whose rest is
+/// content (or what the page chose), not our code's address.
+struct UrlFields<'a> {
+    scheme: &'a str,
+    host: Option<&'a str>,
+    port: Option<u16>,
+    path: Option<&'a str>,
+}
+
+fn url_fields(url: &tauri::Url) -> UrlFields<'_> {
+    if url.cannot_be_a_base() {
+        return UrlFields { scheme: url.scheme(), host: None, port: None, path: None };
+    }
+    UrlFields { scheme: url.scheme(), host: url.host_str(), port: url.port(), path: Some(url.path()) }
+}
+
 fn url_path(url: &tauri::Url) -> String {
-    let port = url.port().map(|port| format!(":{port}")).unwrap_or_default();
-    format!("{}://{}{port}{}", url.scheme(), url.host_str().unwrap_or(""), url.path())
+    let f = url_fields(url);
+    let port = f.port.map(|port| format!(":{port}")).unwrap_or_default();
+    match f.path {
+        Some(path) => format!("{}://{}{port}{path}", f.scheme, f.host.unwrap_or("")),
+        None => format!("{}:", f.scheme),
+    }
 }
 
 #[cfg(test)]
 mod url_path_tests {
-    use super::url_path;
+    use super::{url_fields, url_path};
 
     #[test]
     fn a_url_loses_userinfo_query_and_fragment() {
@@ -736,5 +757,16 @@ mod url_path_tests {
             url_path(&tauri::Url::parse("tauri://localhost/probe.html").unwrap()),
             "tauri://localhost/probe.html"
         );
+    }
+
+    #[test]
+    fn an_opaque_url_logs_its_scheme_only() {
+        for raw in ["data:text/html,canary-payload", "blob:https://x.example/canary-id", "about:canary"] {
+            let url = tauri::Url::parse(raw).unwrap();
+            let f = url_fields(&url);
+            assert!(f.host.is_none() && f.port.is_none() && f.path.is_none(), "{raw}");
+            assert!(!url_path(&url).contains("canary"), "{raw}");
+        }
+        assert_eq!(url_path(&tauri::Url::parse("data:text/html,x").unwrap()), "data:");
     }
 }

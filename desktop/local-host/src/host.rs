@@ -202,7 +202,7 @@ impl LocalHost {
         let proxy_log = log.clone();
         let proxy = Proxy::start(core.clone(), move |line| proxy_log(line))?;
         log(&format!("local-host proxy on {}", proxy.url()));
-        tracing::info!(port = proxy.port(), "local-host proxy listening");
+        tracing::info!(port = proxy.port(), "the local-host proxy is listening for the page");
         Ok(Arc::new(LocalHost {
             config,
             core,

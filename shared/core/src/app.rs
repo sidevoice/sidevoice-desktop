@@ -200,7 +200,7 @@ impl<A: LaneAudio> AppHost<A> {
             Err(e) => {
                 tracing::error!(
                     error.type = crate::error::SharedError::NativeEngineFailed.code(),
-                    engine_key = crate::logging::client_id(&e.key),
+                    engine_key = crate::logging::client_id(e.key),
                     "the native engine did not start; local models are unavailable"
                 );
                 None
