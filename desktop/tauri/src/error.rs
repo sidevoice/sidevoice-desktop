@@ -39,6 +39,7 @@ pub enum DesktopError {
 
 impl DesktopError {
     /// Every variant, for the test that holds the codes unique and well formed.
+    #[cfg(test)]
     pub const ALL: [DesktopError; 16] = [
         DesktopError::UpdaterStart,
         DesktopError::UpdateDownloadFailed,
