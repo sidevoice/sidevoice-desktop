@@ -24,10 +24,7 @@ pub fn release_name(service: &str, version: &str) -> Result<String> {
 
 fn sentry() -> Result<Cmd> {
     util::required_env("SENTRY_AUTH_TOKEN")?;
-    Ok(Cmd::new("sentry-cli")
-        .env("SENTRY_URL", URL)
-        .env("SENTRY_ORG", ORG)
-        .env("SENTRY_PROJECT", PROJECT))
+    Ok(Cmd::new("sentry-cli").env("SENTRY_URL", URL).env("SENTRY_ORG", ORG).env("SENTRY_PROJECT", PROJECT))
 }
 
 /// `sentry upload SERVICE PATH...`: the release `SERVICE@<version>` created, the debug files under each PATH uploaded, the
@@ -38,10 +35,7 @@ pub fn upload(service: &str, paths: &[&str]) -> Result<()> {
         return Err("sentry upload: no path to look for debug files in".into());
     }
     sentry()?.args(["releases", "new", &release]).run()?;
-    sentry()?
-        .args(["debug-files", "upload", "--wait"])
-        .args(paths)
-        .run()?;
+    sentry()?.args(["debug-files", "upload", "--wait"]).args(paths).run()?;
     sentry()?.args(["releases", "finalize", &release]).run()
 }
 
@@ -51,13 +45,7 @@ mod tests {
 
     #[test]
     fn a_release_is_named_after_its_service() {
-        assert_eq!(
-            release_name("sidevoice-desktop", "0.9.1").unwrap(),
-            "sidevoice-desktop@0.9.1"
-        );
-        assert!(
-            release_name("sidevoice-core", "0.9.1").is_err(),
-            "the machines' releases are theirs to upload"
-        );
+        assert_eq!(release_name("sidevoice-desktop", "0.9.1").unwrap(), "sidevoice-desktop@0.9.1");
+        assert!(release_name("sidevoice-core", "0.9.1").is_err(), "the machines' releases are theirs to upload");
     }
 }

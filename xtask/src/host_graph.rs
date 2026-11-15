@@ -39,21 +39,13 @@ const TARGETS: [&str; 5] = [
 /// The host crates, by their directory at the workspace root.
 const HOSTS: [&str; 2] = ["desktop/tauri", "mobile/tauri"];
 /// The shared crates, by directory.
-const SHARED: [&str; 4] = [
-    "shared/core",
-    "shared/headset",
-    "shared/i18n",
-    "shared/tauri",
-];
+const SHARED: [&str; 4] = ["shared/core", "shared/headset", "shared/i18n", "shared/tauri"];
 /// The shared crates that have no shell.
 const CORES: [&str; 3] = ["shared/core", "shared/headset", "shared/i18n"];
 /// The host crates that exist only for their kind: the directory below the workspace root, and the kind whose attribute
 /// `#![cfg(..)]` its `src/lib.rs` carries.
-const ROOT_ATTRIBUTES: [(&str, &str); 3] = [
-    ("desktop/tauri", "desktop"),
-    ("mobile/tauri", "mobile"),
-    ("mobile/tauri/plugin", "mobile"),
-];
+const ROOT_ATTRIBUTES: [(&str, &str); 3] =
+    [("desktop/tauri", "desktop"), ("mobile/tauri", "mobile"), ("mobile/tauri/plugin", "mobile")];
 
 /// Whether a crate is the shell: Tauri, with its plugins and runtime, and the webview and window crates under it.
 fn is_shell(name: &str) -> bool {
@@ -72,64 +64,33 @@ struct Graph {
 
 impl Graph {
     fn read(metadata: &Value) -> Result<Graph> {
-        let root = Path::new(
-            metadata["workspace_root"]
-                .as_str()
-                .ok_or("cargo metadata: no workspace_root")?,
-        );
+        let root = Path::new(metadata["workspace_root"].as_str().ok_or("cargo metadata: no workspace_root")?);
         let text = |value: &Value, what: &str| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| format!("cargo metadata: no {what}"))
+            value.as_str().map(str::to_owned).ok_or_else(|| format!("cargo metadata: no {what}"))
         };
         let (mut names, mut manifests) = (HashMap::new(), HashMap::new());
-        for package in metadata["packages"]
-            .as_array()
-            .ok_or("cargo metadata: no packages")?
-        {
+        for package in metadata["packages"].as_array().ok_or("cargo metadata: no packages")? {
             let id = text(&package["id"], "package id")?;
             names.insert(id.clone(), text(&package["name"], "package name")?);
             manifests.insert(id, text(&package["manifest_path"], "manifest_path")?);
         }
         let mut members = HashMap::new();
-        for id in metadata["workspace_members"]
-            .as_array()
-            .ok_or("cargo metadata: no workspace_members")?
-        {
+        for id in metadata["workspace_members"].as_array().ok_or("cargo metadata: no workspace_members")? {
             let id = text(id, "member id")?;
-            let manifest = manifests
-                .get(&id)
-                .ok_or_else(|| format!("cargo metadata: no package {id}"))?;
-            let dir = Path::new(manifest)
-                .parent()
-                .and_then(|dir| dir.strip_prefix(root).ok());
+            let manifest = manifests.get(&id).ok_or_else(|| format!("cargo metadata: no package {id}"))?;
+            let dir = Path::new(manifest).parent().and_then(|dir| dir.strip_prefix(root).ok());
             if let Some(dir) = dir {
-                let dir: Vec<_> = dir
-                    .components()
-                    .map(|part| part.as_os_str().to_string_lossy())
-                    .collect();
+                let dir: Vec<_> = dir.components().map(|part| part.as_os_str().to_string_lossy()).collect();
                 members.insert(dir.join("/"), id);
             }
         }
         let mut edges = HashMap::new();
-        for node in metadata["resolve"]["nodes"]
-            .as_array()
-            .ok_or("cargo metadata: no resolve")?
-        {
+        for node in metadata["resolve"]["nodes"].as_array().ok_or("cargo metadata: no resolve")? {
             let id = text(&node["id"], "node id")?;
             let deps = node["deps"].as_array().into_iter().flatten();
-            edges.insert(
-                id,
-                deps.filter_map(|dep| dep["pkg"].as_str().map(str::to_owned))
-                    .collect(),
-            );
+            edges.insert(id, deps.filter_map(|dep| dep["pkg"].as_str().map(str::to_owned)).collect());
         }
-        Ok(Graph {
-            names,
-            members,
-            edges,
-        })
+        Ok(Graph { names, members, edges })
     }
 
     /// The names along the shortest dependency path from `from` to the first package `found` accepts.
@@ -149,11 +110,7 @@ impl Graph {
                         path.push(before);
                     }
                     path.reverse();
-                    return Some(
-                        path.into_iter()
-                            .map(|id| self.names.get(id).map_or(id, String::as_str))
-                            .collect(),
-                    );
+                    return Some(path.into_iter().map(|id| self.names.get(id).map_or(id, String::as_str)).collect());
                 }
                 queue.push_back(next);
             }
@@ -169,44 +126,28 @@ pub fn violations(metadata: &Value) -> Result<Vec<String>> {
     let mut found = Vec::new();
     let mut forbid = |from: &str, what: &str, goal: &dyn Fn(&str) -> bool| {
         if let Some(path) = graph.members.get(from).and_then(|id| graph.path(id, goal)) {
-            found.push(format!(
-                "{from}/ must not depend on {what}: {}",
-                path.join(" -> ")
-            ));
+            found.push(format!("{from}/ must not depend on {what}: {}", path.join(" -> ")));
         }
     };
     for host in HOSTS {
         for other in HOSTS.into_iter().filter(|other| *other != host) {
             if let Some(other_name) = name(other) {
-                forbid(host, &format!("{other}/"), &|crate_name| {
-                    crate_name == other_name
-                });
+                forbid(host, &format!("{other}/"), &|crate_name| crate_name == other_name);
             }
         }
     }
     for shared in SHARED {
         for host in HOSTS {
             if let Some(host_name) = name(host) {
-                forbid(shared, &format!("the host crate {host}/"), &|crate_name| {
-                    crate_name == host_name
-                });
+                forbid(shared, &format!("the host crate {host}/"), &|crate_name| crate_name == host_name);
             }
         }
     }
     for core in CORES {
         forbid(core, "a shell (Tauri, wry, tao)", &is_shell);
     }
-    for id in metadata["workspace_default_members"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-    {
-        let dir = graph
-            .members
-            .iter()
-            .find(|(_, member)| member.as_str() == id)
-            .map(|(dir, _)| dir.as_str());
+    for id in metadata["workspace_default_members"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        let dir = graph.members.iter().find(|(_, member)| member.as_str() == id).map(|(dir, _)| dir.as_str());
         if let Some(dir) = dir.filter(|dir| *dir == "mobile" || dir.starts_with("mobile/")) {
             found.push(format!("default-members must not hold the mobile crate {dir}/: a plain cargo command on a computer does not enter it"));
         }
@@ -227,34 +168,22 @@ pub fn unscoped_mobile_builds(text: &str) -> Result<Vec<String>> {
     // A workflow has `jobs.<id>.steps`; a composite action, `runs.steps`.
     let mut jobs: Vec<(String, &Yaml)> = Vec::new();
     if let Some(Yaml::Mapping(map)) = document.get("jobs") {
-        jobs.extend(
-            map.iter()
-                .filter_map(|(id, job)| Some((format!("job `{}`", id.as_str()?), job))),
-        );
+        jobs.extend(map.iter().filter_map(|(id, job)| Some((format!("job `{}`", id.as_str()?), job))));
     }
     if let Some(runs) = document.get("runs") {
         jobs.push(("the action".to_owned(), runs));
     }
     let mut places = Vec::new();
     for (place, job) in jobs {
-        let matrix = matrix_rows(
-            job.get("strategy")
-                .and_then(|strategy| strategy.get("matrix")),
-        );
-        let steps = job
-            .get("steps")
-            .and_then(Yaml::as_sequence)
-            .into_iter()
-            .flatten();
+        let matrix = matrix_rows(job.get("strategy").and_then(|strategy| strategy.get("matrix")));
+        let steps = job.get("steps").and_then(Yaml::as_sequence).into_iter().flatten();
         for (number, step) in steps.enumerate() {
             let Some(script) = step.get("run").and_then(Yaml::as_str) else {
                 continue;
             };
-            let unscoped = expansions(script, &matrix).iter().any(|script| {
-                commands(script)
-                    .iter()
-                    .any(|command| unscoped_mobile_build(command))
-            });
+            let unscoped = expansions(script, &matrix)
+                .iter()
+                .any(|script| commands(script).iter().any(|command| unscoped_mobile_build(command)));
             if unscoped {
                 places.push(format!("{place}, step {}", number + 1));
             }
@@ -280,28 +209,15 @@ fn matrix_rows(matrix: Option<&Yaml>) -> Vec<HashMap<String, String>> {
         return Vec::new();
     };
     let entries = |key: &str| -> Vec<HashMap<String, String>> {
-        let entries = matrix
-            .get(key)
-            .and_then(Yaml::as_sequence)
-            .into_iter()
-            .flatten()
-            .filter_map(Yaml::as_mapping);
+        let entries = matrix.get(key).and_then(Yaml::as_sequence).into_iter().flatten().filter_map(Yaml::as_mapping);
         entries
-            .map(|entry| {
-                entry
-                    .iter()
-                    .filter_map(|(k, v)| Some((k.as_str()?.to_owned(), scalar(v)?)))
-                    .collect()
-            })
+            .map(|entry| entry.iter().filter_map(|(k, v)| Some((k.as_str()?.to_owned(), scalar(v)?))).collect())
             .collect()
     };
     let lists: Vec<(String, Vec<String>)> = matrix
         .iter()
         .filter_map(|(key, value)| {
-            Some((
-                key.as_str()?.to_owned(),
-                value.as_sequence()?.iter().filter_map(scalar).collect(),
-            ))
+            Some((key.as_str()?.to_owned(), value.as_sequence()?.iter().filter_map(scalar).collect()))
         })
         .filter(|(key, _)| key != "include" && key != "exclude")
         .collect();
@@ -322,13 +238,7 @@ fn matrix_rows(matrix: Option<&Yaml>) -> Vec<HashMap<String, String>> {
         rows.clear();
     }
     let excluded = entries("exclude");
-    rows.retain(|row| {
-        !excluded.iter().any(|exclude| {
-            exclude
-                .iter()
-                .all(|(key, value)| row.get(key) == Some(value))
-        })
-    });
+    rows.retain(|row| !excluded.iter().any(|exclude| exclude.iter().all(|(key, value)| row.get(key) == Some(value))));
     // An include is added to the original rows only, never to a row another include made: with no lists there are none,
     // and each include is a row of its own.
     let original = rows.len();
@@ -336,19 +246,11 @@ fn matrix_rows(matrix: Option<&Yaml>) -> Vec<HashMap<String, String>> {
         // The keys the lists give are the original ones: an include never changes them, and adds the rest to the rows
         // it agrees with.
         let agrees = |row: &HashMap<String, String>| {
-            lists.iter().all(|(key, _)| {
-                include
-                    .get(key)
-                    .is_none_or(|value| row.get(key) == Some(value))
-            })
+            lists.iter().all(|(key, _)| include.get(key).is_none_or(|value| row.get(key) == Some(value)))
         };
         let mut added = false;
         for row in rows[..original].iter_mut().filter(|row| agrees(row)) {
-            row.extend(
-                include
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            );
+            row.extend(include.iter().map(|(key, value)| (key.clone(), value.clone())));
             added = true;
         }
         if !added {
@@ -365,9 +267,7 @@ fn expansions(script: &str, rows: &[HashMap<String, String>]) -> Vec<String> {
     let with = |row: &HashMap<String, String>| {
         expression
             .replace_all(script, |found: &regex::Captures| {
-                row.get(&found[1])
-                    .cloned()
-                    .unwrap_or_else(|| found[0].to_owned())
+                row.get(&found[1]).cloned().unwrap_or_else(|| found[0].to_owned())
             })
             .into_owned()
     };
@@ -388,8 +288,7 @@ fn commands(script: &str) -> Vec<Vec<String>> {
     while at < chars.len() {
         let c = chars[at];
         if c == '$' && chars.get(at + 1) == Some(&'{') && chars.get(at + 2) == Some(&'{') {
-            let end = (at..chars.len().saturating_sub(1))
-                .find(|&i| chars[i] == '}' && chars[i + 1] == '}');
+            let end = (at..chars.len().saturating_sub(1)).find(|&i| chars[i] == '}' && chars[i + 1] == '}');
             let end = end.map_or(chars.len(), |end| end + 2);
             word.extend(&chars[at..end]);
             (in_word, at) = (true, end);
@@ -453,8 +352,8 @@ fn commands(script: &str) -> Vec<Vec<String>> {
 /// Known limit: a `cargo` word that is the argument of another command is taken for the command (`env echo cargo build
 /// --target aarch64-apple-ios` is flagged, though it builds nothing); say so with the package, or write it differently.
 const WRAPPERS: [&str; 21] = [
-    "env", "time", "nice", "ionice", "nohup", "setsid", "stdbuf", "timeout", "flock", "exec",
-    "command", "sudo", "sh", "bash", "zsh", "dash", "then", "do", "else", "if", "while",
+    "env", "time", "nice", "ionice", "nohup", "setsid", "stdbuf", "timeout", "flock", "exec", "command", "sudo", "sh",
+    "bash", "zsh", "dash", "then", "do", "else", "if", "while",
 ];
 
 /// Whether one command is a `cargo` build for a mobile target (or `cargo ndk`, which is Android's) that does not name
@@ -471,18 +370,12 @@ fn unscoped_mobile_build(words: &[String]) -> bool {
     let Some(at) = words.iter().position(|word| !assignment(word)) else {
         return false;
     };
-    let program = Path::new(&words[at])
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned());
+    let program = Path::new(&words[at]).file_name().map(|name| name.to_string_lossy().into_owned());
     match program.as_deref() {
         Some("cargo") => {}
         Some(wrapper) if WRAPPERS.contains(&wrapper) => {
             let rest = &words[at + 1..];
-            let cargo = rest.iter().position(|word| {
-                Path::new(word)
-                    .file_name()
-                    .is_some_and(|name| name == "cargo")
-            });
+            let cargo = rest.iter().position(|word| Path::new(word).file_name().is_some_and(|name| name == "cargo"));
             // A script handed to the wrapper (`flock lock -c 'cargo …'`, `sh -c "…"`) is read as commands.
             let script = |word: &String| word.contains(char::is_whitespace);
             return cargo.is_some_and(|cargo| unscoped_mobile_build(&rest[cargo..]))
@@ -494,27 +387,18 @@ fn unscoped_mobile_build(words: &[String]) -> bool {
         _ => return false,
     }
     let args = &words[at + 1..];
-    let targets =
-        args.iter()
-            .enumerate()
-            .filter_map(|(at, arg)| match arg.strip_prefix("--target=") {
-                Some(target) => Some(target),
-                None => (arg == "--target")
-                    .then(|| args.get(at + 1).map(String::as_str))
-                    .flatten(),
-            });
-    let mobile = args.first().is_some_and(|arg| arg == "ndk")
-        || targets.into_iter().any(|target| {
-            target.contains("-ios") || target.contains("-android") || target.contains('$')
-        });
-    let scoped = args.iter().any(|arg| {
-        arg == "-p"
-            || arg.starts_with("--package")
-            || (arg.starts_with("-p") && !arg.starts_with("--"))
+    let targets = args.iter().enumerate().filter_map(|(at, arg)| match arg.strip_prefix("--target=") {
+        Some(target) => Some(target),
+        None => (arg == "--target").then(|| args.get(at + 1).map(String::as_str)).flatten(),
     });
-    let wide = args
+    let mobile = args.first().is_some_and(|arg| arg == "ndk")
+        || targets
+            .into_iter()
+            .any(|target| target.contains("-ios") || target.contains("-android") || target.contains('$'));
+    let scoped = args
         .iter()
-        .any(|arg| matches!(arg.as_str(), "--workspace" | "--all") || arg.starts_with("--exclude"));
+        .any(|arg| arg == "-p" || arg.starts_with("--package") || (arg.starts_with("-p") && !arg.starts_with("--")));
+    let wide = args.iter().any(|arg| matches!(arg.as_str(), "--workspace" | "--all") || arg.starts_with("--exclude"));
     mobile && (!scoped || wide)
 }
 
@@ -522,11 +406,7 @@ fn unscoped_mobile_build(words: &[String]) -> bool {
 /// their kind as an inner attribute.
 fn missing_root_attributes(metadata: &Value) -> Result<Vec<String>> {
     let graph = Graph::read(metadata)?;
-    let root = Path::new(
-        metadata["workspace_root"]
-            .as_str()
-            .ok_or("cargo metadata: no workspace_root")?,
-    );
+    let root = Path::new(metadata["workspace_root"].as_str().ok_or("cargo metadata: no workspace_root")?);
     let mut found = Vec::new();
     for (dir, kind) in ROOT_ATTRIBUTES {
         if !graph.members.contains_key(dir) {
@@ -534,59 +414,29 @@ fn missing_root_attributes(metadata: &Value) -> Result<Vec<String>> {
         }
         // Every library and binary target the package has, from Cargo (`src_path`), not by name.
         let id = &graph.members[dir];
-        let package = metadata["packages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|package| package["id"] == *id);
-        let targets = package
-            .and_then(|package| package["targets"].as_array())
-            .into_iter()
-            .flatten();
+        let package = metadata["packages"].as_array().into_iter().flatten().find(|package| package["id"] == *id);
+        let targets = package.and_then(|package| package["targets"].as_array()).into_iter().flatten();
         let roots: BTreeSet<&str> = targets
             .filter(|target| {
-                target["kind"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .any(|kind| {
-                        matches!(
-                            kind,
-                            "lib"
-                                | "rlib"
-                                | "cdylib"
-                                | "staticlib"
-                                | "dylib"
-                                | "proc-macro"
-                                | "bin"
-                        )
-                    })
+                target["kind"].as_array().into_iter().flatten().filter_map(Value::as_str).any(|kind| {
+                    matches!(kind, "lib" | "rlib" | "cdylib" | "staticlib" | "dylib" | "proc-macro" | "bin")
+                })
             })
             .filter_map(|target| target["src_path"].as_str())
             .collect();
         if roots.is_empty() {
-            found.push(format!(
-                "{dir}/: no library or binary target in cargo metadata"
-            ));
+            found.push(format!("{dir}/: no library or binary target in cargo metadata"));
         }
         for path in roots {
             let source = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
             // The header of the file: inner attributes, comments and blank lines, up to the first item.
             let header = source.lines().map(str::trim).take_while(|line| {
-                line.is_empty()
-                    || line.starts_with("//")
-                    || (line.starts_with("#![") && line.ends_with(']'))
+                line.is_empty() || line.starts_with("//") || (line.starts_with("#![") && line.ends_with(']'))
             });
             let attribute = format!("#![cfg({kind})]");
             if !header.into_iter().any(|line| line == attribute) {
-                let shown = Path::new(path)
-                    .strip_prefix(root)
-                    .unwrap_or(Path::new(path))
-                    .display();
-                found.push(format!(
-                    "{shown}: a host crate exists only for its kind: it starts with `{attribute}`"
-                ));
+                let shown = Path::new(path).strip_prefix(root).unwrap_or(Path::new(path)).display();
+                found.push(format!("{shown}: a host crate exists only for its kind: it starts with `{attribute}`"));
             }
         }
     }
@@ -599,11 +449,7 @@ pub fn check() -> Result<()> {
     let mut errors = Vec::new();
     for target in TARGETS {
         let metadata = resolve(&repo(), target, true)?;
-        errors.extend(
-            violations(&metadata)?
-                .into_iter()
-                .map(|error| format!("{target}: {error}")),
-        );
+        errors.extend(violations(&metadata)?.into_iter().map(|error| format!("{target}: {error}")));
         // The same on every target.
         if target == TARGETS[0] {
             errors.extend(missing_root_attributes(&metadata)?);
@@ -615,8 +461,7 @@ pub fn check() -> Result<()> {
         collect_yaml(&github.join(dir), &mut files);
         files.sort();
         for file in files {
-            let text =
-                std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             let file = file.strip_prefix(repo()).unwrap_or(&file).display();
             for place in unscoped_mobile_builds(&text).map_err(|e| format!("{file}: {e}"))? {
                 errors.push(format!(
@@ -628,11 +473,7 @@ pub fn check() -> Result<()> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "{}\nHost kind is a crate boundary: {} violations (AGENTS.md)",
-            errors.join("\n"),
-            errors.len()
-        ))
+        Err(format!("{}\nHost kind is a crate boundary: {} violations (AGENTS.md)", errors.join("\n"), errors.len()))
     }
 }
 
@@ -640,15 +481,11 @@ pub fn check() -> Result<()> {
 /// (`shell = ["dep:tauri"]`) is a dependency of the crate that has the feature, and it is what a build with that
 /// feature gets.
 fn resolve(dir: &Path, target: &str, locked: bool) -> Result<Value> {
-    let mut command =
-        Cmd::new("cargo").args(["metadata", "--format-version", "1", "--all-features"]);
+    let mut command = Cmd::new("cargo").args(["metadata", "--format-version", "1", "--all-features"]);
     if locked {
         command = command.arg("--locked");
     }
-    let metadata = command
-        .args(["--filter-platform", target])
-        .dir(dir)
-        .stdout()?;
+    let metadata = command.args(["--filter-platform", target]).dir(dir).stdout()?;
     serde_json::from_str(&metadata).map_err(|e| format!("cargo metadata: {e}"))
 }
 
@@ -658,10 +495,7 @@ fn collect_yaml(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             collect_yaml(&path, found);
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "yml" || extension == "yaml")
-        {
+        } else if path.extension().is_some_and(|extension| extension == "yml" || extension == "yaml") {
             found.push(path);
         }
     }
@@ -679,11 +513,7 @@ mod tests {
         let packages: Vec<Value> = members
             .iter()
             .map(|(dir, name)| (name, format!("/ws/{dir}/Cargo.toml")))
-            .chain(
-                others
-                    .iter()
-                    .map(|name| (name, format!("/registry/{name}/Cargo.toml"))),
-            )
+            .chain(others.iter().map(|name| (name, format!("/registry/{name}/Cargo.toml"))))
             .map(|(name, manifest)| {
                 let src = manifest.replace("Cargo.toml", "src/lib.rs");
                 json!({"id": name, "name": name, "manifest_path": manifest,
@@ -694,11 +524,8 @@ mod tests {
             .iter()
             .map(|package| {
                 let id = package["id"].as_str().unwrap();
-                let deps: Vec<Value> = edges
-                    .iter()
-                    .filter(|(from, _)| *from == id)
-                    .map(|(_, to)| json!({"pkg": to}))
-                    .collect();
+                let deps: Vec<Value> =
+                    edges.iter().filter(|(from, _)| *from == id).map(|(_, to)| json!({"pkg": to})).collect();
                 json!({"id": id, "deps": deps})
             })
             .collect();
@@ -715,13 +542,7 @@ mod tests {
     ];
 
     fn found(edges: &[(&str, &str)]) -> Vec<String> {
-        let others = [
-            "tauri",
-            "tauri-runtime",
-            "wry",
-            "serde",
-            "tauri-plugin-opener",
-        ];
+        let others = ["tauri", "tauri-runtime", "wry", "serde", "tauri-plugin-opener"];
         violations(&metadata(&WORKSPACE, &others, edges)).unwrap()
     }
 
@@ -742,11 +563,7 @@ mod tests {
     #[test]
     fn the_default_members_hold_no_mobile_crate() {
         let mut answer = metadata(&WORKSPACE, &[], &[]);
-        answer["workspace_default_members"] = json!([
-            "sidevoice-desktop",
-            "sidevoice-shared",
-            "sidevoice-local-host"
-        ]);
+        answer["workspace_default_members"] = json!(["sidevoice-desktop", "sidevoice-shared", "sidevoice-local-host"]);
         assert_eq!(violations(&answer).unwrap(), Vec::<String>::new());
         answer["workspace_default_members"] = json!(["sidevoice-desktop", "sidevoice-mobile"]);
         assert_eq!(violations(&answer).unwrap().len(), 1);
@@ -761,45 +578,26 @@ mod tests {
             std::fs::write(file, source).unwrap();
         };
         // The workspace at `/ws` of `metadata`, moved to the temporary directory.
-        let moved = metadata(&WORKSPACE, &[], &[])
-            .to_string()
-            .replace("/ws", dir.path().to_str().unwrap());
+        let moved = metadata(&WORKSPACE, &[], &[]).to_string().replace("/ws", dir.path().to_str().unwrap());
         let answer: Value = serde_json::from_str(&moved).unwrap();
         write("desktop/tauri", "#![cfg(desktop)]\n//! Docs.\nmod a;");
-        write(
-            "mobile/tauri",
-            "//! Docs.\n#![allow(dead_code)]\n#![cfg(desktop)]\nmod a;",
-        );
-        assert_eq!(
-            missing_root_attributes(&answer).unwrap().len(),
-            1,
-            "mobile carries the other kind's"
-        );
+        write("mobile/tauri", "//! Docs.\n#![allow(dead_code)]\n#![cfg(desktop)]\nmod a;");
+        assert_eq!(missing_root_attributes(&answer).unwrap().len(), 1, "mobile carries the other kind's");
         write("mobile/tauri", "// A comment.\n\n#![cfg(mobile)]\nmod a;");
-        assert_eq!(
-            missing_root_attributes(&answer).unwrap(),
-            Vec::<String>::new()
-        );
+        assert_eq!(missing_root_attributes(&answer).unwrap(), Vec::<String>::new());
         write("mobile/tauri", "mod a;\n#![cfg(mobile)]");
-        assert_eq!(
-            missing_root_attributes(&answer).unwrap().len(),
-            1,
-            "not in the header"
-        );
+        assert_eq!(missing_root_attributes(&answer).unwrap().len(), 1, "not in the header");
         // Every library and binary target is read from Cargo, wherever its file is.
         write("mobile/tauri", "#![cfg(mobile)]");
         let mut with_bin = answer.clone();
-        let bin = json!({"kind": ["bin"], "src_path": format!("{}/desktop/tauri/src/other_main.rs", dir.path().display())});
+        let bin =
+            json!({"kind": ["bin"], "src_path": format!("{}/desktop/tauri/src/other_main.rs", dir.path().display())});
         for package in with_bin["packages"].as_array_mut().unwrap() {
             if package["name"] == "sidevoice-desktop" {
                 package["targets"].as_array_mut().unwrap().push(bin.clone());
             }
         }
-        std::fs::write(
-            dir.path().join("desktop/tauri/src/other_main.rs"),
-            "fn main() {}",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("desktop/tauri/src/other_main.rs"), "fn main() {}").unwrap();
         let missing = missing_root_attributes(&with_bin).unwrap();
         assert_eq!(missing.len(), 1, "{missing:?}");
         assert!(missing[0].contains("other_main.rs"), "{missing:?}");
@@ -819,11 +617,7 @@ mod tests {
             through,
             ["mobile/tauri/ must not depend on desktop/tauri/: sidevoice-mobile -> serde -> sidevoice-desktop"]
         );
-        assert_eq!(
-            found(&[("sidevoice-desktop", "sidevoice-mobile")]).len(),
-            1,
-            "the other way round too"
-        );
+        assert_eq!(found(&[("sidevoice-desktop", "sidevoice-mobile")]).len(), 1, "the other way round too");
     }
 
     #[test]
@@ -847,27 +641,17 @@ mod tests {
     fn the_core_has_no_shell_in_its_closure() {
         let direct = found(&[("sidevoice-shared", "tauri")]);
         assert_eq!(direct, ["shared/core/ must not depend on a shell (Tauri, wry, tao): sidevoice-shared -> tauri"]);
-        let through = found(&[
-            ("sidevoice-shared", "serde"),
-            ("serde", "tauri-plugin-opener"),
-        ]);
+        let through = found(&[("sidevoice-shared", "serde"), ("serde", "tauri-plugin-opener")]);
         assert_eq!(through.len(), 1, "{through:?}");
         assert!(through[0].ends_with("sidevoice-shared -> serde -> tauri-plugin-opener"));
         // The Tauri plugin may have the shell: it is the shell's binding.
-        assert!(found(&[
-            ("sidevoice-shared-tauri", "tauri"),
-            ("sidevoice-shared-tauri", "wry")
-        ])
-        .is_empty());
+        assert!(found(&[("sidevoice-shared-tauri", "tauri"), ("sidevoice-shared-tauri", "wry")]).is_empty());
     }
 
     #[test]
     fn a_crate_that_is_not_in_the_workspace_yet_has_nothing_to_violate() {
-        let only_desktop = metadata(
-            &[("desktop/tauri", "sidevoice-desktop")],
-            &["tauri"],
-            &[("sidevoice-desktop", "tauri")],
-        );
+        let only_desktop =
+            metadata(&[("desktop/tauri", "sidevoice-desktop")], &["tauri"], &[("sidevoice-desktop", "tauri")]);
         assert!(violations(&only_desktop).unwrap().is_empty());
         assert!(violations(&json!({"workspace_root": "/ws"})).is_err());
     }
@@ -875,16 +659,10 @@ mod tests {
     /// A cargo workspace on disk: `crates` are (directory, manifest) below its root.
     fn workspace(crates: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let members: Vec<String> = crates
-            .iter()
-            .map(|(name, _)| format!("\"{name}\""))
-            .collect();
+        let members: Vec<String> = crates.iter().map(|(name, _)| format!("\"{name}\"")).collect();
         std::fs::write(
             dir.path().join("Cargo.toml"),
-            format!(
-                "[workspace]\nresolver = \"2\"\nmembers = [{}]\n",
-                members.join(", ")
-            ),
+            format!("[workspace]\nresolver = \"2\"\nmembers = [{}]\n", members.join(", ")),
         )
         .unwrap();
         for (name, manifest) in crates {
@@ -899,9 +677,7 @@ mod tests {
     fn a_dependency_behind_a_feature_is_a_dependency() {
         // The shell is optional, behind a feature of `shared/core` that no default turns on.
         let package = |name: &str, extra: &str| {
-            format!(
-                "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n{extra}"
-            )
+            format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n{extra}")
         };
         let core = package(
             "sidevoice-shared",
@@ -1063,11 +839,7 @@ jobs:
       - run: cargo build ${{ matrix.scope }} --target ${{ matrix.target }}
 ";
         let bad: Vec<String> = found(bad);
-        let steps = |job: &str| {
-            bad.iter()
-                .filter(|place| place.starts_with(&format!("job `{job}`")))
-                .count()
-        };
+        let steps = |job: &str| bad.iter().filter(|place| place.starts_with(&format!("job `{job}`"))).count();
         assert_eq!(
             bad[..7],
             [
@@ -1093,10 +865,7 @@ jobs:
         // A composite action holds its steps under `runs`.
         let action = "runs:\n  using: composite\n  steps:\n    - run: cargo build --target aarch64-linux-android\n";
         assert_eq!(found(action), ["the action, step 1"]);
-        assert!(
-            unscoped_mobile_builds("jobs: [").is_err(),
-            "an unreadable workflow is an error, never a pass"
-        );
+        assert!(unscoped_mobile_builds("jobs: [").is_err(), "an unreadable workflow is an error, never a pass");
     }
 
     #[test]
@@ -1109,10 +878,8 @@ jobs:
         }
         let mut found = Vec::new();
         collect_yaml(dir.path(), &mut found);
-        let mut names: Vec<String> = found
-            .iter()
-            .map(|path| path.strip_prefix(dir.path()).unwrap().display().to_string())
-            .collect();
+        let mut names: Vec<String> =
+            found.iter().map(|path| path.strip_prefix(dir.path()).unwrap().display().to_string()).collect();
         names.sort();
         assert_eq!(names, ["a.yml", "b.yaml", "d/e.yaml"]);
     }

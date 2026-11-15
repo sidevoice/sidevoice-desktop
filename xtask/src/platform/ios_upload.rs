@@ -10,10 +10,7 @@ trait Os {
     /// `ipa` uploaded with the App Store Connect API key `key_id` of `issuer`. The key's private file is
     /// `private_keys/AuthKey_<key_id>.p8` below `keys_parent`, the directory the tool runs in.
     fn upload(_ipa: &Path, _key_id: &str, _issuer: &str, _keys_parent: &Path) -> Result<()> {
-        Err(format!(
-            "an iOS archive is uploaded from a Mac with Xcode, not from {}",
-            host::name()
-        ))
+        Err(format!("an iOS archive is uploaded from a Mac with Xcode, not from {}", host::name()))
     }
 }
 

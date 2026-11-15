@@ -2,7 +2,9 @@
 //!
 //! The SDK's own transports queue and send in the background and never say how it went; a machine's record may be
 //! acknowledged only after a successful send, so the transport here is ours: it takes an envelope on the caller's thread,
-//! posts it, and records the outcome ([`Gate::take_outcome`]).
+//! posts it, and records the outcome of the events somebody waits for ([`Gate::watch`], [`Gate::take_outcome`]): the
+//! outcome is kept per event id, so what is posted at the same time (an app panic during a machine's record) cannot
+//! answer for another event.
 //!
 //! The gate is the app's last word. It is open only while the mode is `auto` ([`Gate::close`] when the person chooses
 //! `never`), it is checked again just before the POST, and it lets through envelopes made of events only: of whatever an
@@ -10,8 +12,9 @@
 //! no disk cache.
 
 use sentry::protocol::EnvelopeItem;
-use sentry::types::Dsn;
+use sentry::types::{Dsn, Uuid};
 use sentry::{Envelope, Transport};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -20,21 +23,28 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PostError;
 
-/// Where an envelope's bytes go; the real one posts to Sentry, a test keeps them.
+/// How long the POST of a machine's record may take: it runs on the pass's own thread.
+pub const RECORD_BUDGET: Duration = Duration::from_secs(10);
+/// How long the POST of the app's own panic may take: it runs inside the panic hook, which holds the dying process up. A
+/// panic report is best-effort; a slow network loses it rather than the exit.
+pub const PANIC_BUDGET: Duration = Duration::from_secs(2);
+
+/// Where an envelope's bytes go; the real one posts to Sentry, a test keeps them. `budget` is the most it may take.
 pub trait Post: Send + Sync + 'static {
-    fn post(&self, envelope: Vec<u8>) -> Result<(), PostError>;
+    fn post(&self, envelope: Vec<u8>, budget: Duration) -> Result<(), PostError>;
 }
 
 /// The gate: see the module's head.
 pub struct Gate {
     open: AtomicBool,
     post: Arc<dyn Post>,
-    outcome: Mutex<Option<bool>>,
+    /// The events somebody waits for, by event id: `None` until the envelope is handled.
+    watched: Mutex<HashMap<Uuid, Option<bool>>>,
 }
 
 impl Gate {
     pub fn new(post: Arc<dyn Post>) -> Gate {
-        Gate { open: AtomicBool::new(true), post, outcome: Mutex::new(None) }
+        Gate { open: AtomicBool::new(true), post, watched: Mutex::new(HashMap::new()) }
     }
 
     /// From now on nothing is sent, including what is being handed over this instant.
@@ -46,38 +56,51 @@ impl Gate {
         self.open.load(Ordering::SeqCst)
     }
 
-    fn record(&self, outcome: Option<bool>) {
-        *self.outcome.lock().unwrap_or_else(PoisonError::into_inner) = outcome;
+    /// Starts waiting for the event `id` (a machine's record: its event id is the record's id). Its POST gets the longer
+    /// budget, and its outcome is kept for [`Gate::take_outcome`].
+    pub fn watch(&self, id: Uuid) {
+        self.watched.lock().unwrap_or_else(PoisonError::into_inner).insert(id, None);
     }
 
-    /// How the last envelope went: `Some(true)` delivered, `Some(false)` the POST failed, `None` it was dropped (a closed
-    /// gate, or not an event). Read once.
-    pub fn take_outcome(&self) -> Option<bool> {
-        self.outcome.lock().unwrap_or_else(PoisonError::into_inner).take()
+    fn record(&self, id: Uuid, outcome: bool) {
+        if let Some(entry) = self.watched.lock().unwrap_or_else(PoisonError::into_inner).get_mut(&id) {
+            *entry = Some(outcome);
+        }
+    }
+
+    fn is_watched(&self, id: Uuid) -> bool {
+        self.watched.lock().unwrap_or_else(PoisonError::into_inner).contains_key(&id)
+    }
+
+    /// How the watched event `id` went, and the end of the watch: `Some(true)` delivered, `Some(false)` the POST failed,
+    /// `None` it was dropped (a closed gate, or not an event) or never arrived.
+    pub fn take_outcome(&self, id: Uuid) -> Option<bool> {
+        self.watched.lock().unwrap_or_else(PoisonError::into_inner).remove(&id).flatten()
     }
 }
 
 impl Transport for Gate {
     fn send_envelope(&self, envelope: Envelope) {
-        self.record(None);
         // The SDK attaches its pending client reports to an outgoing envelope: only the event goes on.
         let event = envelope.items().find_map(|item| match item {
             EnvelopeItem::Event(event) => Some((**event).clone()),
             _ => None,
         });
         let Some(event) = event else { return };
+        let id = event.event_id;
         if !self.is_open() {
             return;
         }
         let mut bytes = Vec::new();
         if Envelope::from(event).to_writer(&mut bytes).is_err() {
-            self.record(Some(false));
+            self.record(id, false);
             return;
         }
         if !self.is_open() {
             return;
         }
-        self.record(Some(self.post.post(bytes).is_ok()));
+        let budget = if self.is_watched(id) { RECORD_BUDGET } else { PANIC_BUDGET };
+        self.record(id, self.post.post(bytes, budget).is_ok());
     }
 
     fn flush(&self, _timeout: Duration) -> bool {
@@ -91,8 +114,6 @@ pub struct SentryPost {
     auth: String,
 }
 
-const POST_TIMEOUT: Duration = Duration::from_secs(10);
-
 impl SentryPost {
     pub fn new(dsn: &Dsn, user_agent: &str) -> SentryPost {
         SentryPost { url: dsn.envelope_api_url().to_string(), auth: dsn.to_auth(Some(user_agent)).to_string() }
@@ -102,14 +123,14 @@ impl SentryPost {
 impl Post for SentryPost {
     /// On a thread of its own: the blocking client runs a runtime, which must not start inside an async worker, and a panic
     /// hook may be running on one.
-    fn post(&self, envelope: Vec<u8>) -> Result<(), PostError> {
+    fn post(&self, envelope: Vec<u8>, budget: Duration) -> Result<(), PostError> {
         let (url, auth) = (self.url.clone(), self.auth.clone());
         let (tell, hear) = std::sync::mpsc::channel();
         std::thread::Builder::new()
             .name("crash-post".into())
             .spawn(move || {
                 let sent = reqwest::blocking::Client::builder()
-                    .timeout(POST_TIMEOUT)
+                    .timeout(budget)
                     .build()
                     .and_then(|client| {
                         client
@@ -123,7 +144,7 @@ impl Post for SentryPost {
                 let _ = tell.send(sent);
             })
             .map_err(|_| PostError)?;
-        match hear.recv_timeout(POST_TIMEOUT + Duration::from_secs(2)) {
+        match hear.recv_timeout(budget + Duration::from_millis(500)) {
             Ok(true) => Ok(()),
             _ => Err(PostError),
         }

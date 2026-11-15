@@ -79,14 +79,8 @@ const OS_CRATES: [&str; 11] = [
 ];
 const OS_CRATE_PREFIXES: [&str; 3] = ["objc2", "core_foundation", "windows_"];
 /// Names that make a `cfg`/`cfg_attr` predicate or an attribute OS-specific.
-const OS_CONDITIONS: [&str; 6] = [
-    "target_os",
-    "target_family",
-    "target_vendor",
-    "unix",
-    "windows",
-    "windows_subsystem",
-];
+const OS_CONDITIONS: [&str; 6] =
+    ["target_os", "target_family", "target_vendor", "unix", "windows", "windows_subsystem"];
 /// The host kinds (D-RULE): tauri-build's `desktop` and `mobile` conditions, and the Cargo features by those names.
 const HOST_KINDS: [&str; 2] = ["desktop", "mobile"];
 /// Cargo's view of the target OS, as build scripts read it: `CARGO_CFG_<suffix>`.
@@ -141,10 +135,7 @@ const OS_PROGRAMS: [&str; 45] = [
 ];
 
 fn is_os_crate(name: &str) -> bool {
-    OS_CRATES.contains(&name)
-        || OS_CRATE_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
+    OS_CRATES.contains(&name) || OS_CRATE_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
 fn ident(tree: &TokenTree) -> Option<String> {
@@ -213,22 +204,12 @@ fn names_host(stream: &TokenStream, aliases: &HashSet<String>) -> bool {
 /// `cfg_attr` predicate, or a `cfg`/`cfg_attr`/`windows_subsystem` among the attributes a `cfg_attr` applies.
 /// Other payloads (`doc = stringify!(unix)`, `derive(..)`) are data, not conditions.
 fn os_attr(name: &str, args: &TokenStream, aliases: &HashSet<String>) -> bool {
-    condition_attr(
-        name,
-        args,
-        &|predicate| names_os(predicate, aliases),
-        &|other| other == "windows_subsystem",
-    )
+    condition_attr(name, args, &|predicate| names_os(predicate, aliases), &|other| other == "windows_subsystem")
 }
 
 /// [`os_attr`] for the host kinds: no attribute is one by itself, only a predicate that names one.
 fn host_attr(name: &str, args: &TokenStream, aliases: &HashSet<String>) -> bool {
-    condition_attr(
-        name,
-        args,
-        &|predicate| names_host(predicate, aliases),
-        &|_| false,
-    )
+    condition_attr(name, args, &|predicate| names_host(predicate, aliases), &|_| false)
 }
 
 /// Whether one attribute holds a condition: a `cfg` predicate, a `cfg_attr` predicate, or a `cfg`/`cfg_attr` among the
@@ -302,11 +283,7 @@ fn os_attr_tokens(body: &[TokenTree], aliases: &HashSet<String>) -> bool {
 }
 
 fn os_attr_syn(attribute: &syn::Attribute, aliases: &HashSet<String>) -> bool {
-    let name = attribute
-        .path()
-        .get_ident()
-        .map(ToString::to_string)
-        .unwrap_or_default();
+    let name = attribute.path().get_ident().map(ToString::to_string).unwrap_or_default();
     let args = match &attribute.meta {
         syn::Meta::List(list) => list.tokens.clone(),
         _ => TokenStream::new(),
@@ -323,27 +300,17 @@ fn removes_on_os(attribute: &syn::Attribute, aliases: &HashSet<String>) -> bool 
             "cfg_attr" => {
                 let parts = flat(args.clone());
                 let mut parts = parts.split(|tree| punct(Some(tree), ','));
-                let predicate: TokenStream =
-                    parts.next().unwrap_or_default().iter().cloned().collect();
+                let predicate: TokenStream = parts.next().unwrap_or_default().iter().cloned().collect();
                 let under_os = under_os || names_os(&predicate, aliases);
                 parts.any(|part| {
                     let name = part.first().and_then(ident).unwrap_or_default();
-                    nested(
-                        &name,
-                        &group(part.get(1), Delimiter::Parenthesis).unwrap_or_default(),
-                        aliases,
-                        under_os,
-                    )
+                    nested(&name, &group(part.get(1), Delimiter::Parenthesis).unwrap_or_default(), aliases, under_os)
                 })
             }
             _ => false,
         }
     }
-    let name = attribute
-        .path()
-        .get_ident()
-        .map(ToString::to_string)
-        .unwrap_or_default();
+    let name = attribute.path().get_ident().map(ToString::to_string).unwrap_or_default();
     match &attribute.meta {
         syn::Meta::List(list) => nested(&name, &list.tokens, aliases, false),
         _ => false,
@@ -360,9 +327,7 @@ struct TraitShape<'a> {
 
 impl TraitShape<'_> {
     fn gated(&self, attributes: &[syn::Attribute]) -> bool {
-        attributes
-            .iter()
-            .any(|attribute| removes_on_os(attribute, self.aliases))
+        attributes.iter().any(|attribute| removes_on_os(attribute, self.aliases))
     }
 }
 
@@ -396,17 +361,11 @@ impl<'ast> syn::visit::Visit<'ast> for TraitShape<'_> {
 }
 
 fn string_value(literal: &proc_macro2::Literal) -> Option<String> {
-    syn::parse_str::<syn::LitStr>(&literal.to_string())
-        .ok()
-        .map(|lit| lit.value())
+    syn::parse_str::<syn::LitStr>(&literal.to_string()).ok().map(|lit| lit.value())
 }
 
 /// `(path, rename)` of every leaf of a `use` tree; a glob's rename is `*`.
-fn leaves(
-    tree: &syn::UseTree,
-    prefix: &mut Vec<String>,
-    out: &mut Vec<(Vec<String>, Option<String>)>,
-) {
+fn leaves(tree: &syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<(Vec<String>, Option<String>)>) {
     let name = |id: &syn::Ident| id.to_string().trim_start_matches("r#").to_string();
     match tree {
         syn::UseTree::Path(p) => {
@@ -439,15 +398,12 @@ fn os_path(path: &[String]) -> bool {
     match at(0) {
         Some("std" | "core" | "alloc") => {
             at(1) == Some("os")
-                || (at(1) == Some("env")
-                    && at(2) == Some("consts")
-                    && matches!(at(3), Some("OS" | "FAMILY")))
+                || (at(1) == Some("env") && at(2) == Some("consts") && matches!(at(3), Some("OS" | "FAMILY")))
         }
         // Local sockets and pipes: Unix sockets, Windows named pipes, and the crate that abstracts them.
         Some("tokio") => {
             (at(1) == Some("net")
-                && (at(2).is_some_and(|name| name.starts_with("Unix"))
-                    || matches!(at(2), Some("unix" | "windows"))))
+                && (at(2).is_some_and(|name| name.starts_with("Unix")) || matches!(at(2), Some("unix" | "windows"))))
                 || (at(1) == Some("signal") && matches!(at(2), Some("unix" | "windows")))
         }
         Some("mio") => at(1) == Some("net") && at(2).is_some_and(|name| name.starts_with("Unix")),
@@ -476,16 +432,11 @@ fn os_path_literal(value: &str) -> bool {
         "/Users/",
     ];
     let bytes = value.as_bytes();
-    UNIX_ROOTS
-        .iter()
-        .any(|root| value.starts_with(root) || value == root.trim_end_matches('/'))
+    UNIX_ROOTS.iter().any(|root| value.starts_with(root) || value == root.trim_end_matches('/'))
         || value.starts_with("~/Library")
         || value.starts_with("\\\\.\\")
         || value.starts_with("\\\\?\\")
-        || (bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'\\' | b'/'))
+        || (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/'))
 }
 
 /// Free functions and constructors whose argument is a filesystem path.
@@ -531,9 +482,7 @@ struct Shared {
 }
 
 fn is_command_type(name: &str, shared: &Shared) -> bool {
-    name.ends_with("Command")
-        || name.ends_with("CommandWrap")
-        || shared.command_types.contains(name)
+    name.ends_with("Command") || name.ends_with("CommandWrap") || shared.command_types.contains(name)
 }
 
 #[derive(Default)]
@@ -600,9 +549,7 @@ fn first_string(stream: TokenStream) -> Option<String> {
 }
 
 fn cargo_os_variable(value: &str) -> bool {
-    value
-        .strip_prefix("CARGO_CFG_")
-        .is_some_and(|name| OS_ENV_SUFFIXES.contains(&name))
+    value.strip_prefix("CARGO_CFG_").is_some_and(|name| OS_ENV_SUFFIXES.contains(&name))
 }
 
 /// `#[link(name = "AppKit", kind = "framework")]`, also nested in `cfg_attr`.
@@ -718,12 +665,8 @@ impl Scan {
                         let name = body.first().and_then(ident);
                         let cfg = matches!(name.as_deref(), Some("cfg" | "cfg_attr"));
                         let inner = punct(trees.get(i + 1), '!');
-                        let allowed =
-                            self.crate_root && self.depth == 0 && inner && console_subsystem(&body);
-                        if !allowed
-                            && (name.as_deref() == Some("windows_subsystem")
-                                || native_os_link(&body))
-                        {
+                        let allowed = self.crate_root && self.depth == 0 && inner && console_subsystem(&body);
+                        if !allowed && (name.as_deref() == Some("windows_subsystem") || native_os_link(&body)) {
                             self.found(&trees[i]);
                         }
                         if !allowed && cfg && os_attr_tokens(&body, &self.shared.cfg_aliases) {
@@ -760,17 +703,10 @@ impl Scan {
             }
             return i + 1;
         }
-        let extern_crate =
-            name == "extern" && trees.get(i + 1).and_then(ident).as_deref() == Some("crate");
+        let extern_crate = name == "extern" && trees.get(i + 1).and_then(ident).as_deref() == Some("crate");
         if name == "use" || extern_crate {
-            let end = trees[i..]
-                .iter()
-                .position(|t| punct(Some(t), ';'))
-                .map_or(trees.len(), |p| i + p);
-            let tokens: TokenStream = trees[i..(end + 1).min(trees.len())]
-                .iter()
-                .cloned()
-                .collect();
+            let end = trees[i..].iter().position(|t| punct(Some(t), ';')).map_or(trees.len(), |p| i + p);
+            let tokens: TokenStream = trees[i..(end + 1).min(trees.len())].iter().cloned().collect();
             if name == "use" {
                 if let Ok(item) = syn::parse2::<syn::ItemUse>(tokens) {
                     let mut out = Vec::new();
@@ -778,9 +714,7 @@ impl Scan {
                     self.bind(tree, out);
                 }
             } else if let Ok(item) = syn::parse2::<syn::ItemExternCrate>(tokens) {
-                let rename = item
-                    .rename
-                    .map(|(_, id)| id.to_string().trim_start_matches("r#").to_string());
+                let rename = item.rename.map(|(_, id)| id.to_string().trim_start_matches("r#").to_string());
                 self.bind(tree, vec![(vec![item.ident.to_string()], rename)]);
             }
             return end + 1;
@@ -858,12 +792,8 @@ impl Scan {
             if matches!(last.as_str(), "new" | "with_new") && is_command_type(prev, &self.shared) {
                 program = program.or_else(|| first_string(args.clone()));
             }
-            if matches!(last.as_str(), "var" | "var_os")
-                && path.len() == 3
-                && path[..2] == ["std", "env"]
-            {
-                cargo_var |=
-                    first_string(args.clone()).is_some_and(|value| cargo_os_variable(&value));
+            if matches!(last.as_str(), "var" | "var_os") && path.len() == 3 && path[..2] == ["std", "env"] {
+                cargo_var |= first_string(args.clone()).is_some_and(|value| cargo_os_variable(&value));
             }
             fs_path |= (matches!(prev.as_str(), "fs" | "File" | "OpenOptions")
                 && FS_FUNCTIONS.contains(&last.as_str()))
@@ -871,15 +801,8 @@ impl Scan {
                     && matches!(last.as_str(), "new" | "from"));
         }
         if let Some(program) = program {
-            let file = program
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or_default()
-                .to_lowercase();
-            let stem = file
-                .strip_suffix(".exe")
-                .or_else(|| file.strip_suffix(".cmd"))
-                .unwrap_or(&file);
+            let file = program.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase();
+            let stem = file.strip_suffix(".exe").or_else(|| file.strip_suffix(".cmd")).unwrap_or(&file);
             if OS_PROGRAMS.contains(&stem) {
                 self.found(&trees[at]);
             }
@@ -911,14 +834,13 @@ impl Scan {
 fn allows_unused(attribute: &[TokenTree]) -> bool {
     attribute.iter().enumerate().any(|(i, tree)| match tree {
         TokenTree::Group(g) => allows_unused(&flat(g.stream())),
-        TokenTree::Ident(id) if id == "allow" || id == "expect" => {
-            group(attribute.get(i + 1), Delimiter::Parenthesis).is_some_and(|lints| {
+        TokenTree::Ident(id) if id == "allow" || id == "expect" => group(attribute.get(i + 1), Delimiter::Parenthesis)
+            .is_some_and(|lints| {
                 lints.into_iter().any(|lint| {
                     matches!(&lint, TokenTree::Ident(name)
                         if name == "dead_code" || name.to_string().starts_with("unused"))
                 })
-            })
-        }
+            }),
         _ => false,
     })
 }
@@ -949,47 +871,27 @@ fn scan(source: &str, shared: &Shared) -> Result<Report> {
 fn scan_file(source: &str, shared: &Shared, crate_root: bool) -> Result<Report> {
     let stream = TokenStream::from_str(source).map_err(|e| e.to_string())?;
     let trees = flat(stream);
-    let mut scan = Scan {
-        shared: shared.clone(),
-        collecting: true,
-        crate_root,
-        ..Scan::default()
-    };
+    let mut scan = Scan { shared: shared.clone(), collecting: true, crate_root, ..Scan::default() };
     scan.walk(&trees);
     scan.collecting = false;
     scan.walk(&trees);
-    Ok(Report {
-        count: scan.count,
-        lines: scan.lines,
-        shared: scan.shared,
-    })
+    Ok(Report { count: scan.count, lines: scan.lines, shared: scan.shared })
 }
 
 /// The shape of one platform file (see the module docs); the OS itself is allowed there.
 fn scan_platform(source: &str, root: bool, shared: &Shared) -> Result<Report> {
     let stream = TokenStream::from_str(source).map_err(|e| e.to_string())?;
-    let mut scan = Scan {
-        shared: shared.clone(),
-        ..Scan::default()
-    };
+    let mut scan = Scan { shared: shared.clone(), ..Scan::default() };
     if root {
         scan.walk_root(&flat(stream));
     }
     let file = syn::parse_file(source).map_err(|e| e.to_string())?;
-    let mut shape = TraitShape {
-        aliases: &shared.cfg_aliases,
-        gates: 0,
-        lines: Vec::new(),
-    };
+    let mut shape = TraitShape { aliases: &shared.cfg_aliases, gates: 0, lines: Vec::new() };
     shape.gates = usize::from(shape.gated(&file.attrs));
     syn::visit::Visit::visit_file(&mut shape, &file);
     scan.count += shape.lines.len();
     scan.lines.extend(shape.lines);
-    Ok(Report {
-        count: scan.count,
-        lines: scan.lines,
-        shared: scan.shared,
-    })
+    Ok(Report { count: scan.count, lines: scan.lines, shared: scan.shared })
 }
 
 /// Host-kind conditions of one file, wherever they stand: attributes (inside macros such as `cfg_if!` too), `cfg!`
@@ -1038,10 +940,7 @@ impl Hosts {
                         let name = inner.first().and_then(ident).unwrap_or_default();
                         let args = group(inner.get(1), Delimiter::Parenthesis).unwrap_or_default();
                         if host_attr(&name, &args, &self.aliases)
-                            || self
-                                .loads
-                                .as_ref()
-                                .is_some_and(|loads| loads.path_attribute(&name, &inner))
+                            || self.loads.as_ref().is_some_and(|loads| loads.path_attribute(&name, &inner))
                         {
                             self.found(tree);
                         }
@@ -1051,9 +950,10 @@ impl Hosts {
                 TokenTree::Ident(id)
                     if id == "mod"
                         && punct(trees.get(at + 2), ';')
-                        && trees.get(at + 1).and_then(ident).is_some_and(|name| {
-                            self.loads.as_ref().is_some_and(|loads| loads.module(&name))
-                        }) =>
+                        && trees
+                            .get(at + 1)
+                            .and_then(ident)
+                            .is_some_and(|name| self.loads.as_ref().is_some_and(|loads| loads.module(&name))) =>
                 {
                     self.found(tree);
                 }
@@ -1061,13 +961,9 @@ impl Hosts {
                     let name = id.to_string();
                     if name == "macro_rules" {
                         let defined = trees.get(at + 2).and_then(ident);
-                        if let (Some(defined), Some(body)) = (defined, any_group(trees.get(at + 3)))
-                        {
+                        if let (Some(defined), Some(body)) = (defined, any_group(trees.get(at + 3))) {
                             if let Some(reach) = gate_reach(&flat(body)) {
-                                self.gates
-                                    .entry(defined)
-                                    .and_modify(|known| known.merge(&reach))
-                                    .or_insert(reach);
+                                self.gates.entry(defined).and_modify(|known| known.merge(&reach)).or_insert(reach);
                             }
                         }
                         continue;
@@ -1079,16 +975,11 @@ impl Hosts {
                         "cfg" if names_host(&inner, &self.aliases) => self.found(tree),
                         "cfg_aliases" => self.define(&flat(inner)),
                         "println" | "print"
-                            if self.build_script
-                                && first_string(inner.clone()).is_some_and(defines_host_cfg) =>
+                            if self.build_script && first_string(inner.clone()).is_some_and(defines_host_cfg) =>
                         {
                             self.found(tree);
                         }
-                        gate if self
-                            .gates
-                            .get(gate)
-                            .is_some_and(|reach| reach.names_host(&inner, &self.aliases)) =>
-                        {
+                        gate if self.gates.get(gate).is_some_and(|reach| reach.names_host(&inner, &self.aliases)) => {
                             self.found(tree);
                         }
                         _ => {}
@@ -1104,9 +995,7 @@ impl Hosts {
         let Some(kind) = self.root_of else {
             return false;
         };
-        let predicate = group(body.get(1), Delimiter::Parenthesis)
-            .map(flat)
-            .unwrap_or_default();
+        let predicate = group(body.get(1), Delimiter::Parenthesis).map(flat).unwrap_or_default();
         body.len() == 2
             && body.first().and_then(ident).as_deref() == Some("cfg")
             && matches!(predicate.as_slice(), [only] if ident(only).as_deref() == Some(kind))
@@ -1130,16 +1019,12 @@ impl Hosts {
 /// Whether a string is what a build script prints to define a host-kind condition: `cargo:rustc-cfg=mobile`, or
 /// `cargo::rustc-check-cfg=cfg(mobile)` which declares one.
 fn defines_host_cfg(value: String) -> bool {
-    let rest = value
-        .strip_prefix("cargo::")
-        .or_else(|| value.strip_prefix("cargo:"))
-        .unwrap_or_default();
+    let rest = value.strip_prefix("cargo::").or_else(|| value.strip_prefix("cargo:")).unwrap_or_default();
     if let Some(name) = rest.strip_prefix("rustc-cfg=") {
         return HOST_KINDS.contains(&name.split('=').next().unwrap_or_default());
     }
-    rest.strip_prefix("rustc-check-cfg=").is_some_and(|check| {
-        TokenStream::from_str(check).is_ok_and(|check| names_host(&check, &HashSet::new()))
-    })
+    rest.strip_prefix("rustc-check-cfg=")
+        .is_some_and(|check| TokenStream::from_str(check).is_ok_and(|check| names_host(&check, &HashSet::new())))
 }
 
 /// What a file needs to tell whether it loads a crate root of a host crate as a module (where its `#![cfg(..)]` would
@@ -1175,17 +1060,14 @@ impl Loads {
             [first, eq, TokenTree::Literal(lit), ..]
                 if ident(first).as_deref() == Some("path") && punct(Some(eq), '=') =>
             {
-                string_value(lit)
-                    .is_some_and(|rel| self.roots.contains(&Self::join(self.directory(), &rel)))
+                string_value(lit).is_some_and(|rel| self.roots.contains(&Self::join(self.directory(), &rel)))
             }
             _ => false,
         };
         match name {
             "path" => named(body),
             "cfg_attr" => {
-                let args = group(body.get(1), Delimiter::Parenthesis)
-                    .map(flat)
-                    .unwrap_or_default();
+                let args = group(body.get(1), Delimiter::Parenthesis).map(flat).unwrap_or_default();
                 args.split(|tree| punct(Some(tree), ',')).skip(1).any(named)
             }
             _ => false,
@@ -1194,12 +1076,7 @@ impl Loads {
 
     /// Whether `mod name;` in this file loads a crate root.
     fn module(&self, name: &str) -> bool {
-        let stem = self
-            .file
-            .rsplit('/')
-            .next()
-            .unwrap_or_default()
-            .trim_end_matches(".rs");
+        let stem = self.file.rsplit('/').next().unwrap_or_default().trim_end_matches(".rs");
         let base = if matches!(stem, "lib" | "main" | "mod") {
             self.directory().to_owned()
         } else {
@@ -1237,19 +1114,14 @@ impl Reach {
             Reach::Positions(positions) => commas(&flat(arguments.clone()))
                 .into_iter()
                 .enumerate()
-                .any(|(at, argument)| {
-                    positions.contains(&at) && names_host(&argument.into_iter().collect(), aliases)
-                }),
+                .any(|(at, argument)| positions.contains(&at) && names_host(&argument.into_iter().collect(), aliases)),
         }
     }
 }
 
 /// `trees` cut at their top-level commas.
 fn commas(trees: &[TokenTree]) -> Vec<Vec<TokenTree>> {
-    trees
-        .split(|tree| punct(Some(tree), ','))
-        .map(<[TokenTree]>::to_vec)
-        .collect()
+    trees.split(|tree| punct(Some(tree), ',')).map(<[TokenTree]>::to_vec).collect()
 }
 
 /// The metavariables the tokens of a `macro_rules!` transcriber put in a `cfg` predicate: `#[cfg($c)]`,
@@ -1259,9 +1131,7 @@ fn cfg_variables(trees: &[TokenTree]) -> HashSet<String> {
         for (at, tree) in trees.iter().enumerate() {
             match tree {
                 TokenTree::Group(g) => variables(&flat(g.stream()), found),
-                TokenTree::Punct(p) if p.as_char() == '$' => {
-                    found.extend(trees.get(at + 1).and_then(ident))
-                }
+                TokenTree::Punct(p) if p.as_char() == '$' => found.extend(trees.get(at + 1).and_then(ident)),
                 _ => {}
             }
         }
@@ -1272,11 +1142,7 @@ fn cfg_variables(trees: &[TokenTree]) -> HashSet<String> {
             TokenTree::Group(g) => found.extend(cfg_variables(&flat(g.stream()))),
             TokenTree::Ident(id) if id == "cfg" || id == "cfg_attr" => {
                 let call = group(trees.get(at + 1), Delimiter::Parenthesis);
-                let bang = if punct(trees.get(at + 1), '!') {
-                    any_group(trees.get(at + 2))
-                } else {
-                    None
-                };
+                let bang = if punct(trees.get(at + 1), '!') { any_group(trees.get(at + 2)) } else { None };
                 if let Some(args) = call.or(bang) {
                     variables(&flat(args), &mut found);
                 }
@@ -1316,17 +1182,11 @@ fn gate_reach(body: &[TokenTree]) -> Option<Reach> {
             let reaching = |segment: &Vec<TokenTree>| {
                 segment.iter().enumerate().any(|(at, tree)| {
                     punct(Some(tree), '$')
-                        && segment
-                            .get(at + 1)
-                            .and_then(ident)
-                            .is_some_and(|name| used.contains(&name))
+                        && segment.get(at + 1).and_then(ident).is_some_and(|name| used.contains(&name))
                 })
             };
             let segments = commas(&matcher);
-            let positions = segments
-                .iter()
-                .enumerate()
-                .filter(|(_, segment)| reaching(segment));
+            let positions = segments.iter().enumerate().filter(|(_, segment)| reaching(segment));
             Reach::Positions(positions.map(|(at, _)| at).collect())
         } else {
             Reach::Any
@@ -1368,16 +1228,8 @@ fn scan_host_of(
     (hosts.count, hosts.lines) = (0, BTreeSet::new());
     hosts.top = true;
     hosts.walk(&trees);
-    let shared = Shared {
-        host_aliases: hosts.aliases,
-        gate_macros: hosts.gates,
-        ..shared.clone()
-    };
-    Ok(Report {
-        count: hosts.count,
-        lines: hosts.lines,
-        shared,
-    })
+    let shared = Shared { host_aliases: hosts.aliases, gate_macros: hosts.gates, ..shared.clone() };
+    Ok(Report { count: hosts.count, lines: hosts.lines, shared })
 }
 
 /// The host-kind conditions of a Cargo manifest, which has no tokens to walk: a feature named `desktop` or `mobile`,
@@ -1385,60 +1237,26 @@ fn scan_host_of(
 fn scan_manifest(text: &str, shared: &Shared) -> Result<Report> {
     let manifest: toml::Table = text.parse().map_err(|e| format!("{e}"))?;
     let names = |predicate: &str| {
-        TokenStream::from_str(predicate)
-            .is_ok_and(|predicate| names_host(&predicate, &shared.host_aliases))
+        TokenStream::from_str(predicate).is_ok_and(|predicate| names_host(&predicate, &shared.host_aliases))
     };
     let mut found: Vec<String> = Vec::new();
     let keys = |table: Option<&toml::Value>| -> Vec<String> {
-        table
-            .and_then(toml::Value::as_table)
-            .map(|table| table.keys().cloned().collect())
-            .unwrap_or_default()
+        table.and_then(toml::Value::as_table).map(|table| table.keys().cloned().collect()).unwrap_or_default()
     };
-    found.extend(
-        keys(manifest.get("features"))
-            .into_iter()
-            .filter(|name| HOST_KINDS.contains(&name.as_str())),
-    );
-    found.extend(
-        keys(manifest.get("target"))
-            .into_iter()
-            .filter(|key| key.starts_with("cfg(") && names(key)),
-    );
+    found.extend(keys(manifest.get("features")).into_iter().filter(|name| HOST_KINDS.contains(&name.as_str())));
+    found.extend(keys(manifest.get("target")).into_iter().filter(|key| key.starts_with("cfg(") && names(key)));
     // `[lints.rust]`, and `[workspace.lints.rust]` for the members that inherit it.
-    let lints = [
-        manifest.get("lints"),
-        manifest
-            .get("workspace")
-            .and_then(|workspace| workspace.get("lints")),
-    ];
+    let lints = [manifest.get("lints"), manifest.get("workspace").and_then(|workspace| workspace.get("lints"))];
     for lints in lints.into_iter().flatten() {
-        let declared = lints
-            .get("rust")
-            .and_then(|rust| rust.get("unexpected_cfgs"))
-            .and_then(|lint| lint.get("check-cfg"));
-        let declared = declared
-            .and_then(toml::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(toml::Value::as_str);
-        found.extend(
-            declared
-                .filter(|declared| names(declared))
-                .map(str::to_owned),
-        );
+        let declared =
+            lints.get("rust").and_then(|rust| rust.get("unexpected_cfgs")).and_then(|lint| lint.get("check-cfg"));
+        let declared = declared.and_then(toml::Value::as_array).into_iter().flatten().filter_map(toml::Value::as_str);
+        found.extend(declared.filter(|declared| names(declared)).map(str::to_owned));
     }
     // A table has no spans here: the line is where the text first holds the name.
-    let lines = found.iter().map(|name| {
-        text.lines()
-            .position(|line| line.contains(name.as_str()))
-            .map_or(1, |at| at + 1)
-    });
-    Ok(Report {
-        count: found.len(),
-        lines: lines.collect(),
-        shared: shared.clone(),
-    })
+    let lines =
+        found.iter().map(|name| text.lines().position(|line| line.contains(name.as_str())).map_or(1, |at| at + 1));
+    Ok(Report { count: found.len(), lines: lines.collect(), shared: shared.clone() })
 }
 
 /// The host kind whose crate-root attribute `path` (relative to the repository `root`) may carry: `src/lib.rs` or
@@ -1449,10 +1267,7 @@ fn host_crate_root(root: &Path, path: &str) -> Option<&'static str> {
         [kind @ ("desktop" | "mobile"), dir @ .., "src", "lib.rs" | "main.rs"] => (*kind, dir),
         _ => return None,
     };
-    let crate_dir = std::iter::once(kind)
-        .chain(dir.iter().copied())
-        .collect::<Vec<_>>()
-        .join("/");
+    let crate_dir = std::iter::once(kind).chain(dir.iter().copied()).collect::<Vec<_>>().join("/");
     // A library the manifest moves (`[lib] path` elsewhere than `src/lib.rs`) is not in `src/lib.rs`.
     let manifest = std::fs::read_to_string(root.join(&crate_dir).join("Cargo.toml")).ok()?;
     let manifest: toml::Table = manifest.parse().ok()?;
@@ -1462,20 +1277,13 @@ fn host_crate_root(root: &Path, path: &str) -> Option<&'static str> {
             .and_then(|lib| lib.get("path"))
             .and_then(toml::Value::as_str)
             .is_some_and(|lib| Loads::join(&crate_dir, lib) != format!("{crate_dir}/src/lib.rs"));
-    (!moved).then_some(if kind == "desktop" {
-        "desktop"
-    } else {
-        "mobile"
-    })
+    (!moved).then_some(if kind == "desktop" { "desktop" } else { "mobile" })
 }
 
 /// `platform/mod.rs`: the module root, which only declares and picks.
 fn platform_root(path: &Path) -> bool {
     path.file_name().is_some_and(|name| name == "mod.rs")
-        && path
-            .parent()
-            .and_then(Path::file_name)
-            .is_some_and(|dir| dir == "platform")
+        && path.parent().and_then(Path::file_name).is_some_and(|dir| dir == "platform")
 }
 
 /// Platform code (the `platform` module, `platform.rs`) is where the OS belongs.
@@ -1492,16 +1300,7 @@ pub fn check() -> Result<()> {
 fn inspect(root: &Path) -> Result<()> {
     // Git's inventory includes every crate and build script, without target/, vendored caches or worktrees.
     let output = std::process::Command::new("git")
-        .args([
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-            "--",
-            "*.rs",
-            "*Cargo.toml",
-        ])
+        .args(["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.rs", "*Cargo.toml"])
         .current_dir(root)
         .output()
         .map_err(|e| e.to_string())?;
@@ -1510,17 +1309,12 @@ fn inspect(root: &Path) -> Result<()> {
     }
     let (mut files, mut manifests) = (Vec::new(), Vec::new());
     for path in output.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-        let path = std::str::from_utf8(path)
-            .map_err(|e| e.to_string())?
-            .to_string();
-        let manifest = Path::new(&path)
-            .file_name()
-            .is_some_and(|name| name == "Cargo.toml");
+        let path = std::str::from_utf8(path).map_err(|e| e.to_string())?.to_string();
+        let manifest = Path::new(&path).file_name().is_some_and(|name| name == "Cargo.toml");
         if !manifest && !path.ends_with(".rs") {
             continue;
         }
-        let source =
-            std::fs::read_to_string(root.join(&path)).map_err(|e| format!("{path}: {e}"))?;
+        let source = std::fs::read_to_string(root.join(&path)).map_err(|e| format!("{path}: {e}"))?;
         (if manifest { &mut manifests } else { &mut files }).push((path, source));
     }
     // OS aliases, host-kind aliases and macros, and command wrappers are defined in one file and used in others, and
@@ -1530,21 +1324,13 @@ fn inspect(root: &Path) -> Result<()> {
         let before = shared.clone();
         // Platform files too: an alias defined there (a build module) gates code everywhere.
         for (path, source) in &files {
-            let found = scan(source, &shared)
-                .map_err(|e| format!("{path}: {e}"))?
-                .shared;
+            let found = scan(source, &shared).map_err(|e| format!("{path}: {e}"))?.shared;
             shared.cfg_aliases.extend(found.cfg_aliases);
             shared.command_types.extend(found.command_types);
-            let hosts = scan_host(source, &shared, build_script(path))
-                .map_err(|e| format!("{path}: {e}"))?
-                .shared;
+            let hosts = scan_host(source, &shared, build_script(path)).map_err(|e| format!("{path}: {e}"))?.shared;
             shared.host_aliases.extend(hosts.host_aliases);
             for (name, reach) in hosts.gate_macros {
-                shared
-                    .gate_macros
-                    .entry(name)
-                    .and_modify(|known| known.merge(&reach))
-                    .or_insert(reach);
+                shared.gate_macros.entry(name).and_modify(|known| known.merge(&reach)).or_insert(reach);
             }
         }
         if shared == before {
@@ -1554,35 +1340,18 @@ fn inspect(root: &Path) -> Result<()> {
     // What each file holds: its OS occurrences, and its host-kind conditions (the host kinds are everyone's: `platform`
     // files and the Cargo manifests are read for them too).
     let mut reports = Vec::new();
-    let roots: BTreeSet<String> = files
-        .iter()
-        .filter(|(path, _)| host_crate_root(root, path).is_some())
-        .map(|(path, _)| path.clone())
-        .collect();
+    let roots: BTreeSet<String> =
+        files.iter().filter(|(path, _)| host_crate_root(root, path).is_some()).map(|(path, _)| path.clone()).collect();
     for (path, source) in &files {
         let os = if exempt(Path::new(path)) {
             scan_platform(source, platform_root(Path::new(path)), &shared)
         } else {
             scan_file(source, &shared, binary_root(root, path))
         };
-        reports.push((
-            path,
-            os.map_err(|e| format!("{path}: {e}"))?,
-            "OS occurrences",
-            "move OS code into platform",
-        ));
-        let loads = Loads {
-            file: path.clone(),
-            roots: roots.clone(),
-        };
-        let hosts = scan_host_of(
-            source,
-            &shared,
-            build_script(path),
-            host_crate_root(root, path),
-            Some(loads),
-        )
-        .map_err(|e| format!("{path}: {e}"))?;
+        reports.push((path, os.map_err(|e| format!("{path}: {e}"))?, "OS occurrences", "move OS code into platform"));
+        let loads = Loads { file: path.clone(), roots: roots.clone() };
+        let hosts = scan_host_of(source, &shared, build_script(path), host_crate_root(root, path), Some(loads))
+            .map_err(|e| format!("{path}: {e}"))?;
         reports.push((path, hosts, "host-kind conditions", HOST_FIX));
     }
     for (path, source) in &manifests {
@@ -1590,27 +1359,16 @@ fn inspect(root: &Path) -> Result<()> {
         reports.push((path, hosts, "host-kind conditions", HOST_FIX));
     }
     let (mut errors, mut total, mut reported) = (Vec::new(), 0, BTreeSet::new());
-    for (path, report, what, fix) in reports
-        .into_iter()
-        .filter(|(_, report, ..)| report.count > 0)
-    {
+    for (path, report, what, fix) in reports.into_iter().filter(|(_, report, ..)| report.count > 0) {
         total += report.count;
         reported.insert(path);
         let lines: Vec<String> = report.lines.iter().map(usize::to_string).collect();
-        errors.push(format!(
-            "{path}: {} {what} (lines {}); {fix}",
-            report.count,
-            lines.join(", ")
-        ));
+        errors.push(format!("{path}: {} {what} (lines {}); {fix}", report.count, lines.join(", ")));
     }
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "{}\nPlatform boundary: {total} violations in {} files",
-            errors.join("\n"),
-            reported.len()
-        ))
+        Err(format!("{}\nPlatform boundary: {total} violations in {} files", errors.join("\n"), reported.len()))
     }
 }
 
@@ -1620,9 +1378,7 @@ const HOST_FIX: &str = "host kind is a crate boundary: put the code in the crate
 fn build_script(path: &str) -> bool {
     let path = Path::new(path);
     path.file_name().is_some_and(|name| name == "build.rs")
-        || path
-            .parent()
-            .is_some_and(|dir| dir.components().any(|part| part.as_os_str() == "build"))
+        || path.parent().is_some_and(|dir| dir.components().any(|part| part.as_os_str() == "build"))
 }
 
 #[cfg(test)]
@@ -1639,10 +1395,7 @@ mod tests {
             n("#[cfg_attr(\n all(target_os = \"linux\", unix), ignore)]\nuse std::os::unix::fs::PermissionsExt;"),
             2
         );
-        assert_eq!(
-            n("fn f() { if cfg!(windows) {} let _ = std::env::consts::OS; }"),
-            2
-        );
+        assert_eq!(n("fn f() { if cfg!(windows) {} let _ = std::env::consts::OS; }"), 2);
         assert_eq!(n("fn f() { unsafe { libc::getpid() }; }"), 1);
     }
 
@@ -1668,27 +1421,15 @@ mod tests {
     #[test]
     fn follows_import_aliases() {
         assert_eq!(n("use libc as sys; fn f() { sys::getpid(); }"), 2);
-        assert_eq!(
-            n("use std::os as o; fn f() -> o::unix::raw::pid_t { 0 }"),
-            2
-        );
-        assert_eq!(
-            n("use windows_sys::Win32::Foundation as f; fn g() { let _ = f::CloseHandle; }"),
-            2
-        );
+        assert_eq!(n("use std::os as o; fn f() -> o::unix::raw::pid_t { 0 }"), 2);
+        assert_eq!(n("use windows_sys::Win32::Foundation as f; fn g() { let _ = f::CloseHandle; }"), 2);
         assert_eq!(n("extern crate libc as l; fn f() { l::getpid(); }"), 2);
     }
 
     #[test]
     fn allows_only_the_console_subsystem_attribute_of_a_crate_root() {
-        let attribute =
-            "#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")] fn main() {}";
-        assert_eq!(
-            scan_file(attribute, &Shared::default(), true)
-                .unwrap()
-                .count,
-            0
-        );
+        let attribute = "#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")] fn main() {}";
+        assert_eq!(scan_file(attribute, &Shared::default(), true).unwrap().count, 0);
         assert_eq!(n(attribute), 1, "not in a module");
         for other in [
             "#![windows_subsystem = \"windows\"] fn main() {}",
@@ -1707,15 +1448,10 @@ mod tests {
 
     #[test]
     fn only_cargo_binary_roots_may_carry_the_subsystem_attribute() {
-        let root =
-            std::env::temp_dir().join(format!("platform-guard-roots-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("platform-guard-roots-{}", std::process::id()));
         std::fs::create_dir_all(root.join("app")).unwrap();
         std::fs::write(root.join("app/Cargo.toml"), "").unwrap();
-        for path in [
-            "app/src/main.rs",
-            "app/src/bin/tool.rs",
-            "app/src/bin/tool/main.rs",
-        ] {
+        for path in ["app/src/main.rs", "app/src/bin/tool.rs", "app/src/bin/tool/main.rs"] {
             assert!(binary_root(&root, path), "{path}");
         }
         for path in [
@@ -1733,10 +1469,7 @@ mod tests {
     #[test]
     fn catches_os_in_macros_and_attribute_forms() {
         assert_eq!(n("fn f() { println!(\"{}\", libc::getpid()); }"), 1);
-        assert_eq!(
-            n("cfg_if::cfg_if! { if #[cfg(unix)] { fn a() {} } else { fn a() {} } }"),
-            1
-        );
+        assert_eq!(n("cfg_if::cfg_if! { if #[cfg(unix)] { fn a() {} } else { fn a() {} } }"), 1);
         assert_eq!(n("#![cfg(target_os = \"macos\")]"), 1);
         assert_eq!(n("#![windows_subsystem = \"windows\"] #[cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")] fn main() {}"), 2);
     }
@@ -1746,41 +1479,23 @@ mod tests {
         let build = "fn main() { cfg_aliases::cfg_aliases! { apple: { target_vendor = \"apple\" }, mac: { all(apple, x) }, other: { feature = \"x\" } } }";
         let aliases = scan(build, &Shared::default()).unwrap();
         assert_eq!(aliases.count, 2);
-        assert_eq!(
-            aliases.shared.cfg_aliases,
-            HashSet::from(["apple".to_string(), "mac".to_string()])
-        );
+        assert_eq!(aliases.shared.cfg_aliases, HashSet::from(["apple".to_string(), "mac".to_string()]));
         let user = "#[cfg(mac)] fn a() {} #[cfg(other)] fn b() {} fn c() { if cfg!(apple) {} }";
         assert_eq!(scan(user, &aliases.shared).unwrap().count, 2);
     }
 
     #[test]
     fn catches_os_commands() {
-        assert_eq!(
-            n("fn f() { std::process::Command::new(\"uname\").arg(\"-a\"); }"),
-            1
-        );
-        assert_eq!(
-            n("fn f() { tokio::process::Command::new(\"/bin/sh\"); }"),
-            1
-        );
+        assert_eq!(n("fn f() { std::process::Command::new(\"uname\").arg(\"-a\"); }"), 1);
+        assert_eq!(n("fn f() { tokio::process::Command::new(\"/bin/sh\"); }"), 1);
         assert_eq!(n("fn f() { Command::new(\"PowerShell.exe\"); }"), 1);
-        assert_eq!(
-            n("use std::process::Command as Cmd; fn f() { Cmd::new(\"launchctl\"); }"),
-            1
-        );
-        assert_eq!(
-            n("fn f() { Command::new(\"git\"); Command::new(\"cargo\"); }"),
-            0
-        );
+        assert_eq!(n("use std::process::Command as Cmd; fn f() { Cmd::new(\"launchctl\"); }"), 1);
+        assert_eq!(n("fn f() { Command::new(\"git\"); Command::new(\"cargo\"); }"), 0);
     }
 
     #[test]
     fn catches_cargo_os_variables() {
-        assert_eq!(
-            n("fn main() { let _ = std::env::var(\"CARGO_CFG_TARGET_OS\"); }"),
-            1
-        );
+        assert_eq!(n("fn main() { let _ = std::env::var(\"CARGO_CFG_TARGET_OS\"); }"), 1);
     }
 
     #[test]
@@ -1789,24 +1504,15 @@ mod tests {
     }
 
     fn with_wrapper(source: &str) -> usize {
-        let shared = Shared {
-            command_types: HashSet::from(["Cmd".to_string()]),
-            ..Shared::default()
-        };
+        let shared = Shared { command_types: HashSet::from(["Cmd".to_string()]), ..Shared::default() };
         scan(source, &shared).unwrap().count
     }
 
     #[test]
     fn resolves_portable_parent_imports() {
         assert_eq!(n("use std::env; fn f() { let _ = env::consts::OS; }"), 1);
-        assert_eq!(
-            n("use std::env::consts; fn f() { let _ = consts::FAMILY; }"),
-            1
-        );
-        assert_eq!(
-            n("use std as s; fn f() { let _ = s::os::unix::fs::chown; }"),
-            1
-        );
+        assert_eq!(n("use std::env::consts; fn f() { let _ = consts::FAMILY; }"), 1);
+        assert_eq!(n("use std as s; fn f() { let _ = s::os::unix::fs::chown; }"), 1);
         assert_eq!(n("use std::{env as e, os}; fn f() { let _ = e::consts::OS; os::unix::raw::pid_t::MAX; }"), 3);
         // Portable uses of the same parents stay allowed.
         assert_eq!(n("use std::env; fn f() { let _ = env::var(\"PORTABLE_SETTING\"); let _ = env::consts::ARCH; }"), 0);
@@ -1820,122 +1526,54 @@ mod tests {
         );
         let build = "fn main() { cfg_aliases::cfg_aliases! { mac: { target_os = \"macos\" } } }";
         let aliases = scan(build, &Shared::default()).unwrap();
-        assert_eq!(
-            scan(
-                "fn f() { let _ = cfg![mac]; let _ = cfg! { mac }; }",
-                &aliases.shared
-            )
-            .unwrap()
-            .count,
-            2
-        );
+        assert_eq!(scan("fn f() { let _ = cfg![mac]; let _ = cfg! { mac }; }", &aliases.shared).unwrap().count, 2);
     }
 
     #[test]
     fn sees_commands_through_generics_raw_names_and_wrappers() {
-        assert_eq!(
-            n("fn f() { std::process::Command::new::<&str>(\"sh\"); }"),
-            1
-        );
-        assert_eq!(
-            n("use std::process::Command as r#Run; fn f() { r#Run::new(\"sh\"); }"),
-            1
-        );
-        assert_eq!(
-            n("use std::process::Command as Run; fn f() { Run::new(\"cmd.exe\"); }"),
-            1
-        );
-        assert_eq!(
-            with_wrapper("use crate::util::Cmd; fn f() { Cmd::new(\"powershell.exe\"); }"),
-            1
-        );
-        assert_eq!(
-            with_wrapper("use crate::util::Cmd; fn f() { Cmd::new(\"git\").arg(\"status\"); }"),
-            0
-        );
+        assert_eq!(n("fn f() { std::process::Command::new::<&str>(\"sh\"); }"), 1);
+        assert_eq!(n("use std::process::Command as r#Run; fn f() { r#Run::new(\"sh\"); }"), 1);
+        assert_eq!(n("use std::process::Command as Run; fn f() { Run::new(\"cmd.exe\"); }"), 1);
+        assert_eq!(with_wrapper("use crate::util::Cmd; fn f() { Cmd::new(\"powershell.exe\"); }"), 1);
+        assert_eq!(with_wrapper("use crate::util::Cmd; fn f() { Cmd::new(\"git\").arg(\"status\"); }"), 0);
         let defined = "pub struct Cmd { command: Command, shown: Vec<String> } type Run = tokio::process::Command;";
-        let learned = scan(defined, &Shared::default())
-            .unwrap()
-            .shared
-            .command_types;
-        assert_eq!(
-            learned,
-            HashSet::from(["Cmd".to_string(), "Run".to_string()])
-        );
-        assert_eq!(
-            n("struct Plain { shown: Vec<String> } fn f() { Plain::new(\"sh\"); }"),
-            0
-        );
+        let learned = scan(defined, &Shared::default()).unwrap().shared.command_types;
+        assert_eq!(learned, HashSet::from(["Cmd".to_string(), "Run".to_string()]));
+        assert_eq!(n("struct Plain { shown: Vec<String> } fn f() { Plain::new(\"sh\"); }"), 0);
     }
 
     #[test]
     fn catches_local_sockets() {
-        assert_eq!(
-            n("fn f() { let _ = tokio::net::UnixStream::connect(\"socket\"); }"),
-            1
-        );
+        assert_eq!(n("fn f() { let _ = tokio::net::UnixStream::connect(\"socket\"); }"), 1);
         assert_eq!(n("use tokio::net::{TcpStream, UnixListener}; fn f() {}"), 1);
-        assert_eq!(
-            n("fn f() { let _ = tokio::net::windows::named_pipe::ClientOptions::new(); }"),
-            1
-        );
-        assert_eq!(
-            n("fn f() { let _ = tokio::net::TcpStream::connect(\"127.0.0.1:1\"); }"),
-            0
-        );
+        assert_eq!(n("fn f() { let _ = tokio::net::windows::named_pipe::ClientOptions::new(); }"), 1);
+        assert_eq!(n("fn f() { let _ = tokio::net::TcpStream::connect(\"127.0.0.1:1\"); }"), 0);
     }
 
     #[test]
     fn catches_os_paths_in_operations_only() {
-        assert_eq!(
-            n("fn f() { let _ = std::fs::read_to_string(\"/proc/self/status\"); }"),
-            1
-        );
-        assert_eq!(
-            n("fn f() { let _ = std::path::PathBuf::from(\"C:\\\\Windows\\\\x\"); }"),
-            1
-        );
-        assert_eq!(
-            n("fn f(c: &mut C) { c.args([\"-o\", \"/dev/null\"]).arg(r\"\\\\.\\pipe\\x\"); }"),
-            2
-        );
+        assert_eq!(n("fn f() { let _ = std::fs::read_to_string(\"/proc/self/status\"); }"), 1);
+        assert_eq!(n("fn f() { let _ = std::path::PathBuf::from(\"C:\\\\Windows\\\\x\"); }"), 1);
+        assert_eq!(n("fn f(c: &mut C) { c.args([\"-o\", \"/dev/null\"]).arg(r\"\\\\.\\pipe\\x\"); }"), 2);
         assert_eq!(n("fn f() { std::fs::read(Path::new(\"/etc/hosts\")); }"), 1);
-        assert_eq!(
-            n("fn f() { let _ = std::path::PathBuf::from(\"/tmp\"); }"),
-            1
-        );
+        assert_eq!(n("fn f() { let _ = std::path::PathBuf::from(\"/tmp\"); }"), 1);
         // Documentation and data are not operations.
         assert_eq!(n("/// Reads /proc/self/status.\nfn f() { let _ = \"/proc/self/status\"; let _ = String::from(\"/dev/null\"); }"), 0);
-        assert_eq!(
-            n("fn f() { std::fs::read_to_string(\"notes/readme.txt\"); }"),
-            0
-        );
+        assert_eq!(n("fn f() { std::fs::read_to_string(\"notes/readme.txt\"); }"), 0);
     }
 
     #[test]
     fn catches_native_framework_links() {
-        assert_eq!(
-            n("#[link(name = \"AppKit\", kind = \"framework\")] extern \"C\" {}"),
-            1
-        );
+        assert_eq!(n("#[link(name = \"AppKit\", kind = \"framework\")] extern \"C\" {}"), 1);
         assert_eq!(n("#[cfg_attr(feature = \"x\", link(name = \"AppKit\", kind = \"framework\"))] extern \"C\" {}"), 1);
         assert_eq!(n("#[link(name = \"m\")] extern \"C\" {}"), 0);
     }
 
     #[test]
     fn counts_cargo_variables_only_when_read() {
-        assert_eq!(
-            n("fn main() { let _ = std::env::var_os(\"CARGO_CFG_TARGET_FAMILY\"); }"),
-            1
-        );
-        assert_eq!(
-            n("use std::env::var as get; fn main() { let _ = get(\"CARGO_CFG_UNIX\"); }"),
-            1
-        );
-        assert_eq!(
-            n("use std::env; fn main() { let _ = env::var(\"CARGO_CFG_UNIX\"); }"),
-            1
-        );
+        assert_eq!(n("fn main() { let _ = std::env::var_os(\"CARGO_CFG_TARGET_FAMILY\"); }"), 1);
+        assert_eq!(n("use std::env::var as get; fn main() { let _ = get(\"CARGO_CFG_UNIX\"); }"), 1);
+        assert_eq!(n("use std::env; fn main() { let _ = env::var(\"CARGO_CFG_UNIX\"); }"), 1);
         assert_eq!(
             n("const X: &str = env!(\"CARGO_CFG_TARGET_OS\"); fn f() { option_env![\"CARGO_CFG_WINDOWS\"]; }"),
             2
@@ -1944,30 +1582,20 @@ mod tests {
     }
 
     fn root(source: &str) -> usize {
-        scan_platform(source, true, &Shared::default())
-            .unwrap()
-            .count
+        scan_platform(source, true, &Shared::default()).unwrap().count
     }
 
     fn other(source: &str) -> usize {
-        scan_platform(source, false, &Shared::default())
-            .unwrap()
-            .count
+        scan_platform(source, false, &Shared::default()).unwrap().count
     }
 
     #[test]
     fn platform_root_rejects_os_cfg_and_unused_allows() {
-        assert_eq!(
-            root("#[cfg(target_os = \"macos\")] mod tray; #[cfg(windows)] mod tray;"),
-            2
-        );
+        assert_eq!(root("#[cfg(target_os = \"macos\")] mod tray; #[cfg(windows)] mod tray;"), 2);
         assert_eq!(root("#[cfg_attr(unix, derive(Debug))] pub struct A;"), 1);
         assert_eq!(root("#![allow(dead_code)] #[allow(unused_imports)] use a::b; #[expect(unused)] fn f() {}"), 3);
         assert_eq!(root("#[cfg_attr(test, allow(dead_code))] fn f() {}"), 1);
-        assert_eq!(
-            root("#[cfg_attr(not(debug_assertions), cfg_attr(unix, allow(dead_code)))] fn f() {}"),
-            1
-        );
+        assert_eq!(root("#[cfg_attr(not(debug_assertions), cfg_attr(unix, allow(dead_code)))] fn f() {}"), 1);
     }
 
     #[test]
@@ -1980,29 +1608,15 @@ mod tests {
             root("#[cfg(feature = \"windows\")] mod a; #[derive(Debug)] struct B; #[deny(dead_code)] fn f() {}"),
             0
         );
-        assert_eq!(
-            root(
-                "/// Uses #[cfg(unix)] and allow(dead_code).\nfn f() { let _ = \"#[cfg(unix)]\"; }"
-            ),
-            0
-        );
+        assert_eq!(root("/// Uses #[cfg(unix)] and allow(dead_code).\nfn f() { let _ = \"#[cfg(unix)]\"; }"), 0);
     }
 
     #[test]
     fn root_rules_apply_to_mod_rs_only() {
-        assert_eq!(
-            other("#[cfg(target_os = \"macos\")] mod mac; #[allow(dead_code)] fn f() {}"),
-            0
-        );
-        assert!(platform_root(Path::new(
-            "desktop/tauri/src/platform/mod.rs"
-        )));
-        assert!(!platform_root(Path::new(
-            "desktop/tauri/src/platform/tray.rs"
-        )));
-        assert!(!platform_root(Path::new(
-            "desktop/tauri/src/platform/tray/mod.rs"
-        )));
+        assert_eq!(other("#[cfg(target_os = \"macos\")] mod mac; #[allow(dead_code)] fn f() {}"), 0);
+        assert!(platform_root(Path::new("desktop/tauri/src/platform/mod.rs")));
+        assert!(!platform_root(Path::new("desktop/tauri/src/platform/tray.rs")));
+        assert!(!platform_root(Path::new("desktop/tauri/src/platform/tray/mod.rs")));
         assert!(!platform_root(Path::new("desktop/tauri/src/other/mod.rs")));
     }
 
@@ -2017,109 +1631,57 @@ mod tests {
             ),
             3
         );
-        assert_eq!(
-            other("trait T { #[cfg_attr(unix, inline)] fn f(&self) {} }"),
-            1
-        );
-        assert_eq!(
-            other("mod m { pub trait T { #[cfg(not(target_os = \"linux\"))] fn f(&self); } }"),
-            1
-        );
+        assert_eq!(other("trait T { #[cfg_attr(unix, inline)] fn f(&self) {} }"), 1);
+        assert_eq!(other("mod m { pub trait T { #[cfg(not(target_os = \"linux\"))] fn f(&self); } }"), 1);
         // The same rule holds in a root.
         assert_eq!(root("trait T { #[cfg(unix)] fn f(&self); }"), 2);
-        let aliases = Shared {
-            cfg_aliases: HashSet::from(["mac".to_string()]),
-            ..Shared::default()
-        };
-        assert_eq!(
-            scan_platform("trait T { #[cfg(mac)] fn f(&self); }", false, &aliases)
-                .unwrap()
-                .count,
-            1
-        );
+        let aliases = Shared { cfg_aliases: HashSet::from(["mac".to_string()]), ..Shared::default() };
+        assert_eq!(scan_platform("trait T { #[cfg(mac)] fn f(&self); }", false, &aliases).unwrap().count, 1);
     }
 
     #[test]
     fn traits_accept_portable_items() {
         assert_eq!(other("trait T { fn f(&self); #[cfg(test)] fn g(&self); #[cfg(feature = \"x\")] fn h(&self); }"), 0);
-        assert_eq!(
-            other("trait T { #[doc = \"unix\"] fn f(&self) { #[cfg(unix)] let _ = 1; } }"),
-            0
-        );
+        assert_eq!(other("trait T { #[doc = \"unix\"] fn f(&self) { #[cfg(unix)] let _ = 1; } }"), 0);
         // OS gates on the implementing side are the OS file's own business.
-        assert_eq!(
-            other("impl T for A { #[cfg(unix)] fn f(&self) {} } fn g<T: Trait>() {}"),
-            0
-        );
-        assert_eq!(
-            other("fn f() -> impl Trait { 1 } struct S; #[cfg(unix)] fn g() {}"),
-            0
-        );
+        assert_eq!(other("impl T for A { #[cfg(unix)] fn f(&self) {} } fn g<T: Trait>() {}"), 0);
+        assert_eq!(other("fn f() -> impl Trait { 1 } struct S; #[cfg(unix)] fn g() {}"), 0);
     }
 
     #[test]
     fn traits_reject_gates_on_the_trait_its_modules_and_its_file() {
         assert_eq!(other("#[cfg(unix)] pub trait T { fn f(); }"), 1);
         assert_eq!(other("#[cfg(unix)] mod m { pub trait T { fn f(); } }"), 1);
-        assert_eq!(
-            other("mod a { #[cfg(windows)] mod b { trait T {} trait U {} } trait V {} }"),
-            2
-        );
+        assert_eq!(other("mod a { #[cfg(windows)] mod b { trait T {} trait U {} } trait V {} }"), 2);
         assert_eq!(other("#![cfg(unix)]\npub trait T { fn f(); }"), 1);
         // Selecting an OS implementation or gating an implementation stays allowed.
         assert_eq!(other("#[cfg(unix)] mod unix; #[cfg(unix)] impl T for A { fn f() {} } trait V { fn f(); }"), 0);
-        assert_eq!(
-            other("#[cfg(unix)] mod m { pub struct S; impl T for S {} }"),
-            0
-        );
+        assert_eq!(other("#[cfg(unix)] mod m { pub struct S; impl T for S {} }"), 0);
     }
 
     #[test]
     fn traits_are_found_behind_braces_in_their_header() {
-        assert_eq!(
-            other("pub trait T<const N: usize = { 1 }> { #[cfg(unix)] fn f(); }"),
-            1
-        );
+        assert_eq!(other("pub trait T<const N: usize = { 1 }> { #[cfg(unix)] fn f(); }"), 1);
         assert_eq!(other("trait T: P<{ 1 }> { #[cfg(unix)] fn f(); }"), 1);
         assert_eq!(other("trait T<const N: usize = { 1 }> { fn f(); }"), 0);
     }
 
     #[test]
     fn os_words_in_a_portable_payload_are_not_conditions() {
-        assert_eq!(
-            other("trait T { #[cfg_attr(test, doc = stringify!(unix))] fn f(); }"),
-            0
-        );
+        assert_eq!(other("trait T { #[cfg_attr(test, doc = stringify!(unix))] fn f(); }"), 0);
         assert_eq!(root("#[cfg_attr(test, doc = stringify!(unix))] mod a;"), 0);
-        assert_eq!(
-            other("trait T { #[cfg_attr(test, cfg(windows))] fn f(); }"),
-            1
-        );
-        assert_eq!(
-            other("trait T { #[cfg_attr(test, cfg_attr(unix, inline))] fn f(); }"),
-            1
-        );
+        assert_eq!(other("trait T { #[cfg_attr(test, cfg(windows))] fn f(); }"), 1);
+        assert_eq!(other("trait T { #[cfg_attr(test, cfg_attr(unix, inline))] fn f(); }"), 1);
         assert_eq!(n("#[cfg_attr(test, doc = stringify!(unix))] fn f() {}"), 0);
         assert_eq!(n("#[cfg_attr(test, cfg(unix))] fn f() {}"), 1);
     }
 
     #[test]
     fn aliases_defined_in_platform_files_reach_every_check() {
-        let build =
-            "pub fn configure() { cfg_aliases::cfg_aliases! { apple: { target_os = \"macos\" } } }";
+        let build = "pub fn configure() { cfg_aliases::cfg_aliases! { apple: { target_os = \"macos\" } } }";
         let shared = scan(build, &Shared::default()).unwrap().shared;
-        assert_eq!(
-            scan_platform("#[cfg(apple)] mod concern;", true, &shared)
-                .unwrap()
-                .count,
-            1
-        );
-        assert_eq!(
-            scan_platform("trait T { #[cfg(apple)] fn f(); }", false, &shared)
-                .unwrap()
-                .count,
-            1
-        );
+        assert_eq!(scan_platform("#[cfg(apple)] mod concern;", true, &shared).unwrap().count, 1);
+        assert_eq!(scan_platform("trait T { #[cfg(apple)] fn f(); }", false, &shared).unwrap().count, 1);
     }
 
     #[test]
@@ -2140,60 +1702,28 @@ mod tests {
             std::fs::write(path, source).unwrap();
         }
         let git = |args: &[&str]| {
-            assert!(std::process::Command::new("git")
-                .args(args)
-                .current_dir(dir.path())
-                .status()
-                .unwrap()
-                .success());
+            assert!(std::process::Command::new("git").args(args).current_dir(dir.path()).status().unwrap().success());
         };
         git(&["init", "-q"]);
         git(&["add", "-A"]);
         let message = inspect(dir.path()).unwrap_err();
-        assert!(
-            message.contains("src/platform/mod.rs") && message.contains("src/platform/concern.rs"),
-            "{message}"
-        );
+        assert!(message.contains("src/platform/mod.rs") && message.contains("src/platform/concern.rs"), "{message}");
     }
 
     #[test]
     fn a_lint_allowance_gated_by_os_does_not_gate_the_traits_it_encloses() {
-        assert_eq!(
-            other("#![cfg_attr(windows, allow(dead_code))]\npub trait T { fn f(); }"),
-            0
-        );
-        assert_eq!(
-            other("#[cfg_attr(windows, allow(dead_code))] mod m { pub trait T { fn f(); } }"),
-            0
-        );
-        assert_eq!(
-            other("#[cfg_attr(test, cfg(windows))] pub trait T { fn f(); }"),
-            1
-        );
+        assert_eq!(other("#![cfg_attr(windows, allow(dead_code))]\npub trait T { fn f(); }"), 0);
+        assert_eq!(other("#[cfg_attr(windows, allow(dead_code))] mod m { pub trait T { fn f(); } }"), 0);
+        assert_eq!(other("#[cfg_attr(test, cfg(windows))] pub trait T { fn f(); }"), 1);
     }
 
     #[test]
     fn an_os_cfg_attr_applying_a_portable_cfg_gates_what_it_encloses() {
-        assert_eq!(
-            other("#[cfg_attr(windows, cfg(feature = \"x\"))] pub trait T { fn f(); }"),
-            1
-        );
-        assert_eq!(
-            other("#[cfg_attr(unix, cfg_attr(test, cfg(feature = \"x\")))] mod m { trait T {} }"),
-            1
-        );
-        assert_eq!(
-            other("#![cfg_attr(windows, cfg(feature = \"x\"))]\ntrait T { fn f(); }"),
-            1
-        );
-        assert_eq!(
-            other("#[cfg_attr(test, cfg(feature = \"x\"))] mod m { trait T { fn f(); } }"),
-            0
-        );
-        assert_eq!(
-            other("#[cfg_attr(windows, allow(dead_code))] mod m { trait T { fn f(); } }"),
-            0
-        );
+        assert_eq!(other("#[cfg_attr(windows, cfg(feature = \"x\"))] pub trait T { fn f(); }"), 1);
+        assert_eq!(other("#[cfg_attr(unix, cfg_attr(test, cfg(feature = \"x\")))] mod m { trait T {} }"), 1);
+        assert_eq!(other("#![cfg_attr(windows, cfg(feature = \"x\"))]\ntrait T { fn f(); }"), 1);
+        assert_eq!(other("#[cfg_attr(test, cfg(feature = \"x\"))] mod m { trait T { fn f(); } }"), 0);
+        assert_eq!(other("#[cfg_attr(windows, allow(dead_code))] mod m { trait T { fn f(); } }"), 0);
     }
 
     fn host(source: &str) -> usize {
@@ -2255,11 +1785,7 @@ mod tests {
         assert_eq!(defined.count, 3, "handheld, tablet, desktop");
         assert_eq!(
             defined.shared.host_aliases,
-            HashSet::from([
-                "handheld".to_string(),
-                "tablet".to_string(),
-                "desktop".to_string()
-            ])
+            HashSet::from(["handheld".to_string(), "tablet".to_string(), "desktop".to_string()])
         );
         let user = "#[cfg(handheld)] fn a() {} #[cfg(plain)] #[cfg(os)] fn b() {} fn c() { let _ = cfg!(tablet); }";
         assert_eq!(scan_host(user, &defined.shared, false).unwrap().count, 2);
@@ -2294,10 +1820,7 @@ mod tests {
         // Only the arguments that reach the `cfg` are looked at: `desktop` as the name of a function is a name.
         let named = "macro_rules! named { ($condition:meta, $name:ident) => { #[cfg($condition)] fn $name() {} }; }";
         assert_eq!(host(&format!("{named} named!(mobile, test);")), 1);
-        assert_eq!(
-            host(&format!("{named} named!(any(unix, desktop), test);")),
-            1
-        );
+        assert_eq!(host(&format!("{named} named!(any(unix, desktop), test);")), 1);
         for source in [
             format!("{named} named!(test, desktop); named!(unix, mobile);"),
             // The same, across arms: the position is the arm's own.
@@ -2321,12 +1844,7 @@ mod tests {
         // Defined in one file, used in another.
         let defined = scan_host(gate, &Shared::default(), false).unwrap();
         assert!(defined.count == 0 && defined.shared.gate_macros.contains_key("gate"));
-        assert_eq!(
-            scan_host("gate!(mobile);", &defined.shared, false)
-                .unwrap()
-                .count,
-            1
-        );
+        assert_eq!(scan_host("gate!(mobile);", &defined.shared, false).unwrap().count, 1);
     }
 
     #[test]
@@ -2354,11 +1872,8 @@ mod tests {
         ] {
             assert!(build_script(path), "{path}");
         }
-        for path in [
-            "desktop/tauri/src/lib.rs",
-            "desktop/core/src/build_info.rs",
-            "xtask/src/platform/build_tools.rs",
-        ] {
+        for path in ["desktop/tauri/src/lib.rs", "desktop/core/src/build_info.rs", "xtask/src/platform/build_tools.rs"]
+        {
             assert!(!build_script(path), "{path}");
         }
     }
@@ -2386,25 +1901,10 @@ mod tests {
         ] {
             assert_eq!(manifest(text), 0, "{text}");
         }
-        let aliases = Shared {
-            host_aliases: HashSet::from(["handheld".to_string()]),
-            ..Shared::default()
-        };
-        assert_eq!(
-            scan_manifest(
-                "[target.'cfg(handheld)'.dependencies]\nx = \"1\"\n",
-                &aliases
-            )
-            .unwrap()
-            .count,
-            1
-        );
-        let lines = scan_manifest(
-            "[package]\nname = \"a\"\n\n[features]\nmobile = []\n",
-            &Shared::default(),
-        )
-        .unwrap()
-        .lines;
+        let aliases = Shared { host_aliases: HashSet::from(["handheld".to_string()]), ..Shared::default() };
+        assert_eq!(scan_manifest("[target.'cfg(handheld)'.dependencies]\nx = \"1\"\n", &aliases).unwrap().count, 1);
+        let lines =
+            scan_manifest("[package]\nname = \"a\"\n\n[features]\nmobile = []\n", &Shared::default()).unwrap().lines;
         assert_eq!(lines, BTreeSet::from([5]));
         assert!(scan_manifest("[features", &Shared::default()).is_err());
     }
@@ -2413,37 +1913,16 @@ mod tests {
     fn host_kinds_are_found_inside_platform_and_outside_it() {
         let files = [
             ("app/src/lib.rs", "#[cfg(mobile)] pub fn outside() {}"),
-            (
-                "app/src/platform/concern.rs",
-                "#[cfg(desktop)] pub fn inside() {}",
-            ),
-            (
-                "app/src/platform/concern/ios.rs",
-                "#[cfg(target_os = \"ios\")] pub fn os() {}",
-            ),
-            (
-                "app/src/platform/mod.rs",
-                "mod concern; #[cfg(feature = \"mobile\")] mod gated;",
-            ),
-            (
-                "app/build/platform.rs",
-                "pub fn configure() { cfg_aliases::cfg_aliases! { handheld: { mobile } } }",
-            ),
+            ("app/src/platform/concern.rs", "#[cfg(desktop)] pub fn inside() {}"),
+            ("app/src/platform/concern/ios.rs", "#[cfg(target_os = \"ios\")] pub fn os() {}"),
+            ("app/src/platform/mod.rs", "mod concern; #[cfg(feature = \"mobile\")] mod gated;"),
+            ("app/build/platform.rs", "pub fn configure() { cfg_aliases::cfg_aliases! { handheld: { mobile } } }"),
             ("app/src/other.rs", "#[cfg(handheld)] pub fn by_alias() {}"),
             // Through a macro defined in another file, in a manifest, and printed by a build script.
-            (
-                "app/src/macros.rs",
-                "macro_rules! gate { ($c:meta) => { #[cfg($c)] fn f() {} }; }",
-            ),
+            ("app/src/macros.rs", "macro_rules! gate { ($c:meta) => { #[cfg($c)] fn f() {} }; }"),
             ("app/src/gated.rs", "gate!(mobile);"),
-            (
-                "app/Cargo.toml",
-                "[package]\nname = \"app\"\n[features]\nmobile = []\n",
-            ),
-            (
-                "app/build.rs",
-                "fn main() { println!(\"cargo:rustc-cfg=desktop\"); }",
-            ),
+            ("app/Cargo.toml", "[package]\nname = \"app\"\n[features]\nmobile = []\n"),
+            ("app/build.rs", "fn main() { println!(\"cargo:rustc-cfg=desktop\"); }"),
         ];
         let message = fixture_repo(&files).unwrap_err();
         for path in [
@@ -2456,16 +1935,10 @@ mod tests {
             "Cargo.toml",
             "build.rs",
         ] {
-            let line = message
-                .lines()
-                .find(|line| line.contains(&format!("app/{path}:")))
-                .unwrap_or_default();
+            let line = message.lines().find(|line| line.contains(&format!("app/{path}:"))).unwrap_or_default();
             assert!(line.contains("host-kind conditions"), "{path}: {message}");
         }
-        assert!(
-            !message.contains("ios.rs") && !message.contains("macros.rs"),
-            "{message}"
-        );
+        assert!(!message.contains("ios.rs") && !message.contains("macros.rs"), "{message}");
         assert!(message.contains("8 violations in 8 files"), "{message}");
         // The rest of the tree passes: the OS in `platform`, a feature of another name, a string that only looks like
         // what a build script prints.
@@ -2487,22 +1960,14 @@ mod tests {
     }
 
     fn root_host(source: &str, kind: &'static str) -> usize {
-        scan_host_of(source, &Shared::default(), false, Some(kind), None)
-            .unwrap()
-            .count
+        scan_host_of(source, &Shared::default(), false, Some(kind), None).unwrap().count
     }
 
     #[test]
     fn a_crate_root_of_its_kind_carries_only_that_kind_as_an_inner_attribute() {
         // The attribute, with docs and other inner attributes around it, in either kind's own crate.
         assert_eq!(root_host("#![cfg(mobile)]\n//! Docs.\nmod a;", "mobile"), 0);
-        assert_eq!(
-            root_host(
-                "//! Docs.\n#![allow(dead_code)]\n#![cfg( desktop )]\nfn f() {}",
-                "desktop"
-            ),
-            0
-        );
+        assert_eq!(root_host("//! Docs.\n#![allow(dead_code)]\n#![cfg( desktop )]\nfn f() {}", "desktop"), 0);
         // Every other form still counts: the other kind, a longer predicate, an outer attribute, one nested in a group.
         for (source, kind) in [
             ("#![cfg(desktop)]", "mobile"),
@@ -2513,42 +1978,25 @@ mod tests {
             ("#![cfg_attr(test, cfg(mobile))]", "mobile"),
             ("#![cfg_attr(mobile, allow(dead_code))]", "mobile"),
             ("#![cfg(feature = \"mobile\")]", "mobile"),
-            (
-                "#![cfg(mobile)] #![cfg(mobile)] mod a { #![cfg(mobile)] }",
-                "mobile",
-            ),
+            ("#![cfg(mobile)] #![cfg(mobile)] mod a { #![cfg(mobile)] }", "mobile"),
             ("#[cfg(mobile)] fn f() {}", "mobile"),
             ("#[cfg(mobile)] mod a;", "mobile"),
             ("mod a { #![cfg(mobile)] }", "mobile"),
             ("fn f() { if cfg!(mobile) {} }", "mobile"),
-            (
-                "cfg_if::cfg_if! { if #[cfg(mobile)] { fn a() {} } }",
-                "mobile",
-            ),
+            ("cfg_if::cfg_if! { if #[cfg(mobile)] { fn a() {} } }", "mobile"),
         ] {
             assert!(root_host(source, kind) > 0, "{source} in a {kind} crate");
         }
         // Only the second of two nested ones, and the attribute with a crate that is not a host's root, counts.
-        assert_eq!(
-            root_host("#![cfg(mobile)] mod a { #![cfg(mobile)] }", "mobile"),
-            1
-        );
-        assert_eq!(
-            host("#![cfg(mobile)]"),
-            1,
-            "a file that is no host crate's root"
-        );
+        assert_eq!(root_host("#![cfg(mobile)] mod a { #![cfg(mobile)] }", "mobile"), 1);
+        assert_eq!(host("#![cfg(mobile)]"), 1, "a file that is no host crate's root");
         assert_eq!(host("#![cfg(desktop)]"), 1);
     }
 
     #[test]
     fn only_the_root_of_a_crate_below_its_kinds_directory_may_carry_the_attribute() {
         let dir = tempfile::tempdir().unwrap();
-        for manifest in [
-            "desktop/tauri/Cargo.toml",
-            "mobile/tauri/plugin/Cargo.toml",
-            "shared/core/Cargo.toml",
-        ] {
+        for manifest in ["desktop/tauri/Cargo.toml", "mobile/tauri/plugin/Cargo.toml", "shared/core/Cargo.toml"] {
             let path = dir.path().join(manifest);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "[package]\nname = \"x\"\n").unwrap();
@@ -2558,17 +2006,9 @@ mod tests {
         assert_eq!(at("desktop/tauri/src/main.rs"), Some("desktop"));
         assert_eq!(at("mobile/tauri/plugin/src/lib.rs"), Some("mobile"));
         assert_eq!(at("mobile/tauri/src/lib.rs"), None, "no crate there");
-        assert_eq!(
-            at("desktop/tauri/src/tray.rs"),
-            None,
-            "a module is not the root"
-        );
+        assert_eq!(at("desktop/tauri/src/tray.rs"), None, "a module is not the root");
         assert_eq!(at("desktop/tauri/src/platform/lib.rs"), None);
-        assert_eq!(
-            at("shared/core/src/lib.rs"),
-            None,
-            "a shared crate is no host's"
-        );
+        assert_eq!(at("shared/core/src/lib.rs"), None, "a shared crate is no host's");
         assert_eq!(at("xtask/src/lib.rs"), None);
     }
 
@@ -2587,31 +2027,18 @@ mod tests {
             ("shared/core/src/lib.rs", "pub fn shared() {}"),
         ];
         fixture_repo(&ok).unwrap();
-        let wrong_kind = [
-            ("mobile/tauri/Cargo.toml", "[package]\nname = \"m\"\n"),
-            ("mobile/tauri/src/lib.rs", "#![cfg(desktop)]"),
-        ];
-        assert!(fixture_repo(&wrong_kind)
-            .unwrap_err()
-            .contains("mobile/tauri/src/lib.rs"));
-        let shared = [
-            ("shared/core/Cargo.toml", "[package]\nname = \"c\"\n"),
-            ("shared/core/src/lib.rs", "#![cfg(mobile)]"),
-        ];
-        assert!(fixture_repo(&shared)
-            .unwrap_err()
-            .contains("shared/core/src/lib.rs"));
+        let wrong_kind =
+            [("mobile/tauri/Cargo.toml", "[package]\nname = \"m\"\n"), ("mobile/tauri/src/lib.rs", "#![cfg(desktop)]")];
+        assert!(fixture_repo(&wrong_kind).unwrap_err().contains("mobile/tauri/src/lib.rs"));
+        let shared =
+            [("shared/core/Cargo.toml", "[package]\nname = \"c\"\n"), ("shared/core/src/lib.rs", "#![cfg(mobile)]")];
+        assert!(fixture_repo(&shared).unwrap_err().contains("shared/core/src/lib.rs"));
         // A library the manifest moves is no root; the same path written out is the root.
         let moved = [
-            (
-                "desktop/tauri/Cargo.toml",
-                "[package]\nname = \"d\"\n[lib]\npath = \"src/other.rs\"\n",
-            ),
+            ("desktop/tauri/Cargo.toml", "[package]\nname = \"d\"\n[lib]\npath = \"src/other.rs\"\n"),
             ("desktop/tauri/src/lib.rs", "#![cfg(desktop)]"),
         ];
-        assert!(fixture_repo(&moved)
-            .unwrap_err()
-            .contains("desktop/tauri/src/lib.rs"));
+        assert!(fixture_repo(&moved).unwrap_err().contains("desktop/tauri/src/lib.rs"));
         let explicit = [
             (
                 "desktop/tauri/Cargo.toml",
@@ -2628,45 +2055,29 @@ mod tests {
         // A crate root loaded as a module of another file is gated as that module.
         for (file, loader) in [
             ("mobile/tauri/src/a.rs", "#[path = \"lib.rs\"] mod root;"),
-            (
-                "mobile/tauri/src/a.rs",
-                "#[path = \"../src/lib.rs\"] mod root;",
-            ),
-            (
-                "mobile/tauri/src/a.rs",
-                "#[cfg_attr(test, path = \"lib.rs\")] mod root;",
-            ),
-            (
-                "mobile/tauri/src/b/mod.rs",
-                "#[path = \"../lib.rs\"] mod root;",
-            ),
+            ("mobile/tauri/src/a.rs", "#[path = \"../src/lib.rs\"] mod root;"),
+            ("mobile/tauri/src/a.rs", "#[cfg_attr(test, path = \"lib.rs\")] mod root;"),
+            ("mobile/tauri/src/b/mod.rs", "#[path = \"../lib.rs\"] mod root;"),
         ] {
             let loaded = [
                 ("mobile/tauri/Cargo.toml", "[package]\nname = \"m\"\n"),
                 ("mobile/tauri/src/lib.rs", "#![cfg(mobile)]\nmod a;\nmod b;"),
                 (file, loader),
             ];
-            assert!(
-                fixture_repo(&loaded).unwrap_err().contains(file),
-                "{loader}"
-            );
+            assert!(fixture_repo(&loaded).unwrap_err().contains(file), "{loader}");
         }
         let both = [
             ("desktop/tauri/Cargo.toml", "[package]\nname = \"d\"\n"),
             ("desktop/tauri/src/lib.rs", "#![cfg(desktop)]"),
             ("desktop/tauri/src/main.rs", "#![cfg(desktop)]\nmod lib;"),
         ];
-        assert!(fixture_repo(&both)
-            .unwrap_err()
-            .contains("desktop/tauri/src/main.rs"));
+        assert!(fixture_repo(&both).unwrap_err().contains("desktop/tauri/src/main.rs"));
         let module = [
             ("desktop/tauri/Cargo.toml", "[package]\nname = \"d\"\n"),
             ("desktop/tauri/src/lib.rs", "#![cfg(desktop)]\nmod a;"),
             ("desktop/tauri/src/a.rs", "#![cfg(desktop)]"),
         ];
-        assert!(fixture_repo(&module)
-            .unwrap_err()
-            .contains("desktop/tauri/src/a.rs"));
+        assert!(fixture_repo(&module).unwrap_err().contains("desktop/tauri/src/a.rs"));
     }
 
     /// `inspect` over a Git repository holding `files`.

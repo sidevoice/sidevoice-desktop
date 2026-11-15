@@ -52,22 +52,10 @@ const APIS: &[(Shows, &str, &[&str])] = &[
     (Shows::Function, "fstat", &[FILE_TIMESTAMP]),
     (Shows::Function, "fstatat", &[FILE_TIMESTAMP]),
     (Shows::Function, "lstat", &[FILE_TIMESTAMP]),
-    (
-        Shows::Function,
-        "getattrlist",
-        &[FILE_TIMESTAMP, DISK_SPACE],
-    ),
+    (Shows::Function, "getattrlist", &[FILE_TIMESTAMP, DISK_SPACE]),
     (Shows::Function, "getattrlistbulk", &[FILE_TIMESTAMP]),
-    (
-        Shows::Function,
-        "fgetattrlist",
-        &[FILE_TIMESTAMP, DISK_SPACE],
-    ),
-    (
-        Shows::Function,
-        "getattrlistat",
-        &[FILE_TIMESTAMP, DISK_SPACE],
-    ),
+    (Shows::Function, "fgetattrlist", &[FILE_TIMESTAMP, DISK_SPACE]),
+    (Shows::Function, "getattrlistat", &[FILE_TIMESTAMP, DISK_SPACE]),
     // FileAttributeKey.creationDate and .modificationDate, UIDocument.fileModificationDate, URLResourceKey
     // .creationDateKey and .contentModificationDateKey, and the NSFile… and NSURL… constants they are.
     (Shows::Name, "creationdate", &[FILE_TIMESTAMP]),
@@ -95,10 +83,7 @@ const LONGEST_NAME: usize = 200;
 fn required_reason_apis(executable: &[u8]) -> BTreeMap<String, &'static [&'static str]> {
     let mut found = BTreeMap::new();
     for string in executable.split(|byte| *byte == 0) {
-        if string.len() < 3
-            || string.len() > LONGEST_NAME
-            || !string.iter().all(|b| b.is_ascii_graphic())
-        {
+        if string.len() < 3 || string.len() > LONGEST_NAME || !string.iter().all(|b| b.is_ascii_graphic()) {
             continue;
         }
         let string = String::from_utf8_lossy(string);
@@ -135,19 +120,11 @@ impl Bundle {
     fn read(mut read: impl FnMut(&str) -> Result<Option<Vec<u8>>>) -> Result<Bundle> {
         let info = read("Info.plist")?.ok_or("no Info.plist")?;
         let info = dictionary(&info, "Info.plist")?;
-        let manifest = read(MANIFEST)?
-            .map(|bytes| dictionary(&bytes, MANIFEST))
-            .transpose()?;
-        let name = info
-            .get("CFBundleExecutable")
-            .and_then(plist::Value::as_string);
+        let manifest = read(MANIFEST)?.map(|bytes| dictionary(&bytes, MANIFEST)).transpose()?;
+        let name = info.get("CFBundleExecutable").and_then(plist::Value::as_string);
         let name = name.ok_or("Info.plist: no CFBundleExecutable")?;
         let executable = read(name)?.ok_or_else(|| format!("no executable {name}"))?;
-        Ok(Bundle {
-            info,
-            manifest,
-            executable,
-        })
+        Ok(Bundle { info, manifest, executable })
     }
 
     /// An app directory (`Sidevoice.app`).
@@ -166,24 +143,15 @@ pub const MANIFEST: &str = "PrivacyInfo.xcprivacy";
 /// The categories a privacy manifest declares a reason for.
 fn declared_categories(manifest: &plist::Dictionary) -> Result<BTreeSet<String>> {
     let mut declared = BTreeSet::new();
-    let entries = manifest
-        .get("NSPrivacyAccessedAPITypes")
-        .and_then(plist::Value::as_array);
+    let entries = manifest.get("NSPrivacyAccessedAPITypes").and_then(plist::Value::as_array);
     for entry in entries.ok_or("the privacy manifest has no NSPrivacyAccessedAPITypes array")? {
-        let entry = entry
-            .as_dictionary()
-            .ok_or("NSPrivacyAccessedAPITypes: an entry is not a dictionary")?;
+        let entry = entry.as_dictionary().ok_or("NSPrivacyAccessedAPITypes: an entry is not a dictionary")?;
         let category = entry
             .get("NSPrivacyAccessedAPIType")
             .and_then(plist::Value::as_string)
             .ok_or("NSPrivacyAccessedAPITypes: an entry has no NSPrivacyAccessedAPIType")?;
-        let reasons = entry
-            .get("NSPrivacyAccessedAPITypeReasons")
-            .and_then(plist::Value::as_array);
-        ensure(
-            reasons.is_some_and(|r| !r.is_empty()),
-            format!("{category} is declared with no reason"),
-        )?;
+        let reasons = entry.get("NSPrivacyAccessedAPITypeReasons").and_then(plist::Value::as_array);
+        ensure(reasons.is_some_and(|r| !r.is_empty()), format!("{category} is declared with no reason"))?;
         declared.insert(category.to_owned());
     }
     Ok(declared)
@@ -200,29 +168,17 @@ pub fn check_bundle(bundle: &Bundle) -> Result<()> {
         bundle.info.get("ITSAppUsesNonExemptEncryption").is_some_and(|v| v.as_boolean().is_some()),
         "Info.plist does not say whether the app uses encryption beyond the system's (ITSAppUsesNonExemptEncryption, set in mobile/tauri/Info.ios.plist)",
     )?;
-    let modes = bundle
-        .info
-        .get("UIBackgroundModes")
-        .and_then(plist::Value::as_array);
-    let modes: Vec<&str> = modes
-        .into_iter()
-        .flatten()
-        .filter_map(plist::Value::as_string)
-        .collect();
+    let modes = bundle.info.get("UIBackgroundModes").and_then(plist::Value::as_array);
+    let modes: Vec<&str> = modes.into_iter().flatten().filter_map(plist::Value::as_string).collect();
     for mode in BACKGROUND_MODES {
         ensure(
             modes.contains(&mode),
             format!("Info.plist's UIBackgroundModes has no `{mode}` (set in mobile/tauri/Info.ios.plist)"),
         )?;
     }
-    let manifest = bundle
-        .manifest
-        .as_ref()
-        .ok_or(format!("{MANIFEST} is not at the root of the bundle"))?;
+    let manifest = bundle.manifest.as_ref().ok_or(format!("{MANIFEST} is not at the root of the bundle"))?;
     ensure(
-        manifest
-            .get("NSPrivacyTracking")
-            .is_some_and(|v| v.as_boolean().is_some()),
+        manifest.get("NSPrivacyTracking").is_some_and(|v| v.as_boolean().is_some()),
         format!("{MANIFEST} does not say whether the app tracks (NSPrivacyTracking)"),
     )?;
     let declared = declared_categories(manifest)?;
@@ -240,10 +196,7 @@ pub fn check_bundle(bundle: &Bundle) -> Result<()> {
         ),
     )?;
     for category in &declared {
-        if !called
-            .values()
-            .any(|categories| categories.contains(&category.as_str()))
-        {
+        if !called.values().any(|categories| categories.contains(&category.as_str())) {
             println!("note: {category} is declared and the executable shows no call of its APIs");
         }
     }
@@ -270,13 +223,7 @@ pub fn check_app(app: &Path) -> Result<()> {
 const EXTENSION: &str = "PlugIns/SidevoiceActivity.appex";
 
 /// The Live Activity's buttons (`LiveActivityIntent`s, mobile/tauri/apple/Intents, compiled into the app and the extension).
-const INTENTS: [&str; 5] = [
-    "ToggleMic",
-    "SkipReply",
-    "CancelSend",
-    "HangUp",
-    "ToggleRoute",
-];
+const INTENTS: [&str; 5] = ["ToggleMic", "SkipReply", "CancelSend", "HangUp", "ToggleRoute"];
 
 /// The module of the Live Activity's Swift package (mobile/tauri/apple/CallActivity), linked statically: no intent may be
 /// declared there.
@@ -292,35 +239,24 @@ const PACKAGE_MODULE: &str = "CallActivity";
 /// an array of objects with an `identifier`; an identifier is the intent's name, alone or after its module
 /// (`CallActivity.ToggleMic`); the module of its type is its `fullyQualifiedTypeName`'s.
 fn check_intents(actions_data: &[u8], what: &str) -> Result<()> {
-    let json: serde_json::Value =
-        serde_json::from_slice(actions_data).map_err(|e| format!("{what}: {e}"))?;
+    let json: serde_json::Value = serde_json::from_slice(actions_data).map_err(|e| format!("{what}: {e}"))?;
     let actions: Vec<(String, Option<String>)> = match json.get("actions") {
-        Some(serde_json::Value::Object(map)) => map
-            .iter()
-            .map(|(id, action)| (id.clone(), type_name(action)))
-            .collect(),
-        Some(serde_json::Value::Array(list)) => list
-            .iter()
-            .filter_map(|a| Some((a.get("identifier")?.as_str()?.to_owned(), type_name(a))))
-            .collect(),
+        Some(serde_json::Value::Object(map)) => {
+            map.iter().map(|(id, action)| (id.clone(), type_name(action))).collect()
+        }
+        Some(serde_json::Value::Array(list)) => {
+            list.iter().filter_map(|a| Some((a.get("identifier")?.as_str()?.to_owned(), type_name(a)))).collect()
+        }
         _ => return Err(format!("{what}: no actions in the App Intents metadata")),
     };
     for intent in INTENTS {
-        let found: Vec<&(String, Option<String>)> = actions
-            .iter()
-            .filter(|(id, _)| *id == intent || id.ends_with(&format!(".{intent}")))
-            .collect();
+        let found: Vec<&(String, Option<String>)> =
+            actions.iter().filter(|(id, _)| *id == intent || id.ends_with(&format!(".{intent}"))).collect();
         ensure(
             !found.is_empty(),
             format!("{what}: the App Intents metadata lacks {intent}: its button would do nothing"),
         )?;
-        ensure(
-            found.len() == 1,
-            format!(
-                "{what}: the App Intents metadata lists {intent} {} times",
-                found.len()
-            ),
-        )?;
+        ensure(found.len() == 1, format!("{what}: the App Intents metadata lists {intent} {} times", found.len()))?;
         let package = format!("{PACKAGE_MODULE}.");
         let (id, type_name) = found[0];
         ensure(
@@ -336,21 +272,14 @@ fn check_intents(actions_data: &[u8], what: &str) -> Result<()> {
 
 /// The type an action of the metadata names (`fullyQualifiedTypeName`, `Module.Type`).
 fn type_name(action: &serde_json::Value) -> Option<String> {
-    action
-        .get("fullyQualifiedTypeName")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
+    action.get("fullyQualifiedTypeName").and_then(serde_json::Value::as_str).map(str::to_owned)
 }
 
 /// The App Intents packages a bundle's metadata includes (`extract.packagedata`): none may be, since the one package
 /// there is linked statically and the device cannot resolve an include of it ([`check_intents`]).
 fn check_packages(package_data: &[u8], what: &str) -> Result<()> {
-    let json: serde_json::Value =
-        serde_json::from_slice(package_data).map_err(|e| format!("{what}: {e}"))?;
-    let includes = json
-        .get("includes")
-        .and_then(serde_json::Value::as_array)
-        .map_or(0, Vec::len);
+    let json: serde_json::Value = serde_json::from_slice(package_data).map_err(|e| format!("{what}: {e}"))?;
+    let includes = json.get("includes").and_then(serde_json::Value::as_array).map_or(0, Vec::len);
     ensure(
         includes == 0,
         format!(
@@ -365,16 +294,10 @@ fn check_packages(package_data: &[u8], what: &str) -> Result<()> {
 /// the app (`None` for one that is not there).
 fn check_intent_metadata(mut read: impl FnMut(&str) -> Result<Option<Vec<u8>>>) -> Result<()> {
     for bundle in ["", EXTENSION] {
-        let metadata = if bundle.is_empty() {
-            "Metadata.appintents".to_owned()
-        } else {
-            format!("{bundle}/Metadata.appintents")
-        };
+        let metadata =
+            if bundle.is_empty() { "Metadata.appintents".to_owned() } else { format!("{bundle}/Metadata.appintents") };
         let actions = format!("{metadata}/extract.actionsdata");
-        check_intents(
-            &read(&actions)?.ok_or_else(|| format!("no {actions}"))?,
-            &actions,
-        )?;
+        check_intents(&read(&actions)?.ok_or_else(|| format!("no {actions}"))?, &actions)?;
         let packages = format!("{metadata}/extract.packagedata");
         if let Some(bytes) = read(&packages)? {
             check_packages(&bytes, &packages)?;
@@ -390,10 +313,8 @@ fn check_intent_metadata(mut read: impl FnMut(&str) -> Result<Option<Vec<u8>>>) 
 pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> {
     let file = fs::File::open(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", ipa.display()))?;
-    let names: Vec<String> = archive
-        .file_names()
-        .filter_map(|name| name.ok().map(std::borrow::Cow::into_owned))
-        .collect();
+    let names: Vec<String> =
+        archive.file_names().filter_map(|name| name.ok().map(std::borrow::Cow::into_owned)).collect();
     let root = names
         .iter()
         .filter_map(|name| name.strip_prefix("Payload/")?.split('/').next())
@@ -402,100 +323,56 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
         .ok_or_else(|| format!("{}: no Payload/<name>.app", ipa.display()))?;
     let bundle = Bundle::read(|name| {
         let path = format!("{root}{name}");
-        let Ok(mut entry) = archive.by_name(&path) else {
-            return Ok(None);
-        };
+        let Ok(mut entry) = archive.by_name(&path) else { return Ok(None) };
         let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|e| format!("{path}: {e}"))?;
+        entry.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
         Ok(Some(bytes))
     })?;
-    let text = |key: &str| {
-        bundle
-            .info
-            .get(key)
-            .and_then(plist::Value::as_string)
-            .unwrap_or_default()
-            .to_owned()
-    };
+    let text = |key: &str| bundle.info.get(key).and_then(plist::Value::as_string).unwrap_or_default().to_owned();
     ensure(
         text("CFBundleIdentifier") == identifier,
-        format!(
-            "the app is {}, not {identifier}",
-            text("CFBundleIdentifier")
-        ),
+        format!("the app is {}, not {identifier}", text("CFBundleIdentifier")),
     )?;
     ensure(
         text("CFBundleVersion") == build_number.to_string(),
-        format!(
-            "the build number is {}, not {build_number}",
-            text("CFBundleVersion")
-        ),
+        format!("the build number is {}, not {build_number}", text("CFBundleVersion")),
     )?;
     // The Live Activity's extension, at the app's build number (App Store Connect refuses an extension whose version
     // differs from its app's).
     let appex = format!("{root}{EXTENSION}/Info.plist");
     let appex_info = {
-        let mut entry = archive
-            .by_name(&appex)
-            .map_err(|_| format!("{}: no {EXTENSION}", ipa.display()))?;
+        let mut entry = archive.by_name(&appex).map_err(|_| format!("{}: no {EXTENSION}", ipa.display()))?;
         let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|e| format!("{appex}: {e}"))?;
+        entry.read_to_end(&mut bytes).map_err(|e| format!("{appex}: {e}"))?;
         dictionary(&bytes, &appex)?
     };
-    let appex_version = appex_info
-        .get("CFBundleVersion")
-        .and_then(plist::Value::as_string)
-        .unwrap_or_default();
+    let appex_version = appex_info.get("CFBundleVersion").and_then(plist::Value::as_string).unwrap_or_default();
     ensure(
         appex_version == build_number.to_string(),
         format!("{EXTENSION}'s build number is {appex_version}, not {build_number}"),
     )?;
     let short = |info: &plist::Dictionary| {
-        info.get("CFBundleShortVersionString")
-            .and_then(plist::Value::as_string)
-            .unwrap_or_default()
-            .to_owned()
+        info.get("CFBundleShortVersionString").and_then(plist::Value::as_string).unwrap_or_default().to_owned()
     };
     ensure(
         short(&appex_info) == short(&bundle.info),
-        format!(
-            "{EXTENSION}'s version is {:?}, not the app's {:?}",
-            short(&appex_info),
-            short(&bundle.info)
-        ),
+        format!("{EXTENSION}'s version is {:?}, not the app's {:?}", short(&appex_info), short(&bundle.info)),
     )?;
     for sealed in ["embedded.mobileprovision", "_CodeSignature/CodeResources"] {
-        ensure(
-            names.contains(&format!("{root}{sealed}")),
-            format!("{}: not signed: no {sealed}", ipa.display()),
-        )?;
+        ensure(names.contains(&format!("{root}{sealed}")), format!("{}: not signed: no {sealed}", ipa.display()))?;
     }
     ensure(
-        names
-            .iter()
-            .any(|name| name.starts_with("Symbols/") && name.ends_with(".symbols")),
-        format!(
-            "{}: no Symbols/*.symbols: TestFlight's crash reports would not be symbolicated",
-            ipa.display()
-        ),
+        names.iter().any(|name| name.starts_with("Symbols/") && name.ends_with(".symbols")),
+        format!("{}: no Symbols/*.symbols: TestFlight's crash reports would not be symbolicated", ipa.display()),
     )?;
     // What the app and its extension were signed with, as the system will grant it: automatic provisioning decides it, not
     // the entitlements files.
-    let appex_executable = match appex_info
-        .get("CFBundleExecutable")
-        .and_then(plist::Value::as_string)
-    {
+    let appex_executable = match appex_info.get("CFBundleExecutable").and_then(plist::Value::as_string) {
         Some(name) => {
             let path = format!("{root}{EXTENSION}/{name}");
             let mut bytes = Vec::new();
             if let Ok(mut entry) = archive.by_name(&path) {
-                entry
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| format!("{path}: {e}"))?;
+                entry.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
             }
             bytes
         }
@@ -503,44 +380,26 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
     };
     // Both are printed before either is refused, so a refused archive's log shows what each was signed with.
     let mut missing = Vec::new();
-    for (what, executable) in [
-        ("the app", &bundle.executable),
-        (EXTENSION, &appex_executable),
-    ] {
+    for (what, executable) in [("the app", &bundle.executable), (EXTENSION, &appex_executable)] {
         let entitlements = signed_entitlements(executable);
         if let Some(entitlements) = &entitlements {
             let mut xml = Vec::new();
-            plist::Value::Dictionary(entitlements.clone())
-                .to_writer_xml(&mut xml)
-                .map_err(|e| e.to_string())?;
-            println!(
-                "{what}'s signed entitlements:\n{}",
-                String::from_utf8_lossy(&xml)
-            );
+            plist::Value::Dictionary(entitlements.clone()).to_writer_xml(&mut xml).map_err(|e| e.to_string())?;
+            println!("{what}'s signed entitlements:\n{}", String::from_utf8_lossy(&xml));
         }
         missing.extend(app_group_missing(what, entitlements.as_ref(), identifier));
     }
-    ensure(
-        missing.is_empty(),
-        format!("{}: {}", ipa.display(), missing.join("; ")),
-    )?;
+    ensure(missing.is_empty(), format!("{}: {}", ipa.display(), missing.join("; ")))?;
     check_bundle(&bundle)?;
     check_intent_metadata(|name| {
         let path = format!("{root}{name}");
-        let Ok(mut entry) = archive.by_name(&path) else {
-            return Ok(None);
-        };
+        let Ok(mut entry) = archive.by_name(&path) else { return Ok(None) };
         let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|e| format!("{path}: {e}"))?;
+        entry.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
         Ok(Some(bytes))
     })
     .map_err(|e| format!("{}: {e}", ipa.display()))?;
-    println!(
-        "{}: {identifier} build {build_number}, signed",
-        ipa.display()
-    );
+    println!("{}: {identifier} build {build_number}, signed", ipa.display());
     Ok(())
 }
 
@@ -549,43 +408,27 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
 /// file (the signature is at its end). None in an executable signed without entitlements, or not signed.
 fn signed_entitlements(executable: &[u8]) -> Option<plist::Dictionary> {
     const MAGIC: [u8; 4] = [0xfa, 0xde, 0x71, 0x71];
-    let at: Vec<usize> = executable
-        .windows(4)
-        .enumerate()
-        .filter(|(_, bytes)| *bytes == MAGIC)
-        .map(|(at, _)| at)
-        .collect();
+    let at: Vec<usize> =
+        executable.windows(4).enumerate().filter(|(_, bytes)| *bytes == MAGIC).map(|(at, _)| at).collect();
     at.into_iter().rev().find_map(|at| {
         let length = u32::from_be_bytes(executable.get(at + 4..at + 8)?.try_into().ok()?) as usize;
         let blob = executable.get(at + 8..at.checked_add(length)?)?;
-        blob.starts_with(b"<?xml")
-            .then(|| dictionary(blob, "entitlements").ok())
-            .flatten()
+        blob.starts_with(b"<?xml").then(|| dictionary(blob, "entitlements").ok()).flatten()
     })
 }
 
 /// Why `what` (the app or its extension) is refused when it was signed without the App Group `group.<identifier>`
 /// (mobile/tauri/ios-project.yml), which both need: the app keeps the creatures' stills in its container and the extension
 /// draws them from there, so without it every creature on the Live Activity is the placeholder mark.
-fn app_group_missing(
-    what: &str,
-    entitlements: Option<&plist::Dictionary>,
-    identifier: &str,
-) -> Option<String> {
+fn app_group_missing(what: &str, entitlements: Option<&plist::Dictionary>, identifier: &str) -> Option<String> {
     let group = format!("group.{identifier}");
     let Some(entitlements) = entitlements else {
         return Some(format!(
             "{what} is signed with no entitlements: no App Group {group}, so the Live Activity draws no creature"
         ));
     };
-    let groups = entitlements
-        .get("com.apple.security.application-groups")
-        .and_then(plist::Value::as_array);
-    let groups: Vec<&str> = groups
-        .into_iter()
-        .flatten()
-        .filter_map(plist::Value::as_string)
-        .collect();
+    let groups = entitlements.get("com.apple.security.application-groups").and_then(plist::Value::as_array);
+    let groups: Vec<&str> = groups.into_iter().flatten().filter_map(plist::Value::as_string).collect();
     (!groups.contains(&group.as_str())).then(|| {
         format!("{what} is signed without the App Group {group} (it has {groups:?}), so the Live Activity draws no creature")
     })
@@ -610,10 +453,7 @@ mod tests {
     fn the_signed_entitlements_are_read_from_the_code_signature() {
         let group = "<dict><key>com.apple.security.application-groups</key><array><string>group.ai.sidevoice.mobile</string></array></dict>";
         let entitlements = signed_entitlements(&signed(group)).unwrap();
-        assert_eq!(
-            app_group_missing("the app", Some(&entitlements), "ai.sidevoice.mobile"),
-            None
-        );
+        assert_eq!(app_group_missing("the app", Some(&entitlements), "ai.sidevoice.mobile"), None);
         assert_eq!(signed_entitlements(b"\xcf\xfa\xed\xfe unsigned"), None);
     }
 
@@ -622,26 +462,17 @@ mod tests {
         let other = signed_entitlements(&signed(
             "<dict><key>com.apple.security.application-groups</key><array><string>group.other</string></array></dict>",
         ));
-        let warning = app_group_missing(
-            "PlugIns/SidevoiceActivity.appex",
-            other.as_ref(),
-            "ai.sidevoice.mobile",
-        )
-        .unwrap();
+        let warning =
+            app_group_missing("PlugIns/SidevoiceActivity.appex", other.as_ref(), "ai.sidevoice.mobile").unwrap();
         assert!(
-            warning.contains("without the App Group group.ai.sidevoice.mobile")
-                && warning.contains("group.other"),
+            warning.contains("without the App Group group.ai.sidevoice.mobile") && warning.contains("group.other"),
             "{warning}"
         );
         let none = signed_entitlements(&signed("<dict><key>get-task-allow</key><false/></dict>"));
-        assert!(
-            app_group_missing("the app", none.as_ref(), "ai.sidevoice.mobile")
-                .unwrap()
-                .contains("without the App Group")
-        );
-        assert!(app_group_missing("the app", None, "ai.sidevoice.mobile")
+        assert!(app_group_missing("the app", none.as_ref(), "ai.sidevoice.mobile")
             .unwrap()
-            .contains("no entitlements"));
+            .contains("without the App Group"));
+        assert!(app_group_missing("the app", None, "ai.sidevoice.mobile").unwrap().contains("no entitlements"));
     }
 
     fn executable(strings: &[&str]) -> Vec<u8> {
@@ -649,11 +480,7 @@ mod tests {
     }
 
     fn dict(xml: &str) -> plist::Dictionary {
-        dictionary(
-            format!("<plist version=\"1.0\">{xml}</plist>").as_bytes(),
-            "test",
-        )
-        .unwrap()
+        dictionary(format!("<plist version=\"1.0\">{xml}</plist>").as_bytes(), "test").unwrap()
     }
 
     fn manifest(categories: &[&str]) -> plist::Dictionary {
@@ -672,24 +499,17 @@ mod tests {
     }
 
     /// The background modes a built app declares (Info.ios.plist's).
-    const MODES: &str =
-        "<key>UIBackgroundModes</key><array><string>audio</string><string>voip</string></array>";
+    const MODES: &str = "<key>UIBackgroundModes</key><array><string>audio</string><string>voip</string></array>";
 
     fn info(declared: bool) -> plist::Dictionary {
         match declared {
-            true => dict(&format!(
-                "<dict><key>ITSAppUsesNonExemptEncryption</key><false/>{MODES}</dict>"
-            )),
+            true => dict(&format!("<dict><key>ITSAppUsesNonExemptEncryption</key><false/>{MODES}</dict>")),
             false => dict("<dict/>"),
         }
     }
 
     fn bundle(strings: &[&str], categories: &[&str]) -> Bundle {
-        Bundle {
-            info: info(true),
-            manifest: Some(manifest(categories)),
-            executable: executable(strings),
-        }
+        Bundle { info: info(true), manifest: Some(manifest(categories)), executable: executable(strings) }
     }
 
     #[test]
@@ -702,10 +522,7 @@ mod tests {
             "_stat_value",
             "_mach_absolute_time",
         ]));
-        assert_eq!(
-            found.keys().collect::<Vec<_>>(),
-            ["_fstat", "_mach_absolute_time", "_stat"]
-        );
+        assert_eq!(found.keys().collect::<Vec<_>>(), ["_fstat", "_mach_absolute_time", "_stat"]);
     }
 
     #[test]
@@ -725,15 +542,8 @@ mod tests {
     #[test]
     fn a_declared_category_passes_and_an_undeclared_one_names_what_called_it() {
         check_bundle(&bundle(&["_stat", "_fstat"], &[FILE_TIMESTAMP])).unwrap();
-        let error = check_bundle(&bundle(
-            &["_stat", "_mach_absolute_time"],
-            &[FILE_TIMESTAMP],
-        ))
-        .unwrap_err();
-        assert!(
-            error.contains("_mach_absolute_time: NSPrivacyAccessedAPICategorySystemBootTime"),
-            "{error}"
-        );
+        let error = check_bundle(&bundle(&["_stat", "_mach_absolute_time"], &[FILE_TIMESTAMP])).unwrap_err();
+        assert!(error.contains("_mach_absolute_time: NSPrivacyAccessedAPICategorySystemBootTime"), "{error}");
         assert!(!error.contains("_stat:"), "{error}");
     }
 
@@ -741,9 +551,7 @@ mod tests {
     fn a_call_listed_under_two_categories_needs_one_of_them() {
         check_bundle(&bundle(&["_getattrlist"], &[DISK_SPACE])).unwrap();
         check_bundle(&bundle(&["_getattrlist"], &[FILE_TIMESTAMP])).unwrap();
-        assert!(check_bundle(&bundle(&["_getattrlist"], &[USER_DEFAULTS]))
-            .unwrap_err()
-            .contains(" or "));
+        assert!(check_bundle(&bundle(&["_getattrlist"], &[USER_DEFAULTS])).unwrap_err().contains(" or "));
     }
 
     #[test]
@@ -755,18 +563,12 @@ mod tests {
     fn the_declarations_must_be_there() {
         let mut app = bundle(&[], &[]);
         app.info = info(false);
-        assert!(check_bundle(&app)
-            .unwrap_err()
-            .contains("ITSAppUsesNonExemptEncryption"));
+        assert!(check_bundle(&app).unwrap_err().contains("ITSAppUsesNonExemptEncryption"));
         app = bundle(&[], &[]);
         app.manifest = None;
         assert!(check_bundle(&app).unwrap_err().contains("not at the root"));
-        app.manifest = Some(dict(
-            "<dict><key>NSPrivacyAccessedAPITypes</key><array/></dict>",
-        ));
-        assert!(check_bundle(&app)
-            .unwrap_err()
-            .contains("NSPrivacyTracking"));
+        app.manifest = Some(dict("<dict><key>NSPrivacyAccessedAPITypes</key><array/></dict>"));
+        assert!(check_bundle(&app).unwrap_err().contains("NSPrivacyTracking"));
     }
 
     #[test]
@@ -788,11 +590,8 @@ mod tests {
         let path = dir.join("Sidevoice.ipa");
         let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
         for (name, bytes) in files {
-            let name = name
-                .strip_prefix('/')
-                .map_or_else(|| format!("Payload/Sidevoice.app/{name}"), str::to_owned);
-            zip.start_file(name, zip::write::SimpleFileOptions::default())
-                .unwrap();
+            let name = name.strip_prefix('/').map_or_else(|| format!("Payload/Sidevoice.app/{name}"), str::to_owned);
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
             zip.write_all(bytes).unwrap();
         }
         zip.finish().unwrap();
@@ -820,22 +619,10 @@ mod tests {
             ("Sidevoice", app),
             ("embedded.mobileprovision", b"profile".to_vec()),
             ("_CodeSignature/CodeResources", b"seal".to_vec()),
-            (
-                "PlugIns/SidevoiceActivity.appex/Info.plist",
-                appex_info(version),
-            ),
-            (
-                "PlugIns/SidevoiceActivity.appex/SidevoiceActivity",
-                signed(&group),
-            ),
-            (
-                "Metadata.appintents/extract.actionsdata",
-                actions_data(&INTENTS),
-            ),
-            (
-                "PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata",
-                actions_data(&INTENTS),
-            ),
+            ("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info(version)),
+            ("PlugIns/SidevoiceActivity.appex/SidevoiceActivity", signed(&group)),
+            ("Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
+            ("PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
             (SYMBOLS, b"symbols".to_vec()),
         ]
     }
@@ -877,24 +664,16 @@ mod tests {
                 )
             })
             .collect();
-        serde_json::json!({ "version": 1, "actions": actions })
-            .to_string()
-            .into_bytes()
+        serde_json::json!({ "version": 1, "actions": actions }).to_string().into_bytes()
     }
 
     #[test]
     fn intents_of_the_statically_linked_package_are_refused() {
         let files = app_files("ai.sidevoice.mobile", "42");
         let mut app = without(&files, "Metadata.appintents/extract.actionsdata");
-        app.push((
-            "Metadata.appintents/extract.actionsdata",
-            actions_in("CallActivity", &INTENTS),
-        ));
+        app.push(("Metadata.appintents/extract.actionsdata", actions_in("CallActivity", &INTENTS)));
         let error = check(&app, "ai.sidevoice.mobile", 42).unwrap_err();
-        assert!(
-            error.contains("statically linked CallActivity package"),
-            "{error}"
-        );
+        assert!(error.contains("statically linked CallActivity package"), "{error}");
         // As TestFlight build 26 had it: the package included.
         let mut included = files.clone();
         included.push((
@@ -904,10 +683,7 @@ mod tests {
         let error = check(&included, "ai.sidevoice.mobile", 42).unwrap_err();
         assert!(error.contains("includes 1 package"), "{error}");
         let mut none: Vec<(&str, Vec<u8>)> = files.clone();
-        none.push((
-            "Metadata.appintents/extract.packagedata",
-            br#"{"includes":[],"version":1}"#.to_vec(),
-        ));
+        none.push(("Metadata.appintents/extract.packagedata", br#"{"includes":[],"version":1}"#.to_vec()));
         check(&none, "ai.sidevoice.mobile", 42).unwrap();
     }
 
@@ -919,73 +695,41 @@ mod tests {
         app.push(("Metadata.appintents/extract.actionsdata", lacking));
         let error = check(&app, "ai.sidevoice.mobile", 42).unwrap_err();
         assert!(error.contains("lacks ToggleMic"), "{error}");
-        let no_metadata = without(
-            &files,
-            "PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata",
-        );
-        assert!(check(&no_metadata, "ai.sidevoice.mobile", 42)
-            .unwrap_err()
-            .contains("appex/Metadata.appintents"));
+        let no_metadata = without(&files, "PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata");
+        assert!(check(&no_metadata, "ai.sidevoice.mobile", 42).unwrap_err().contains("appex/Metadata.appintents"));
         let listed: Vec<u8> = serde_json::json!({ "actions": [
             {"identifier": "ToggleMic"}, {"identifier": "ToggleMic"}, {"identifier": "SkipReply"},
             {"identifier": "CancelSend"}, {"identifier": "HangUp"}, {"identifier": "ToggleRoute"} ] })
         .to_string()
         .into_bytes();
-        assert!(check_intents(&listed, "x")
-            .unwrap_err()
-            .contains("ToggleMic 2 times"));
+        assert!(check_intents(&listed, "x").unwrap_err().contains("ToggleMic 2 times"));
     }
     #[test]
     fn a_signed_archive_of_the_app_at_the_build_passes() {
-        check(
-            &app_files("ai.sidevoice.mobile", "42"),
-            "ai.sidevoice.mobile",
-            42,
-        )
-        .unwrap();
+        check(&app_files("ai.sidevoice.mobile", "42"), "ai.sidevoice.mobile", 42).unwrap();
     }
 
     #[test]
     fn an_archive_of_another_app_or_build_or_unsigned_is_refused() {
         let files = app_files("ai.sidevoice.mobile", "42");
-        assert!(check(&files, "ai.sidevoice.other", 42)
-            .unwrap_err()
-            .contains("not ai.sidevoice.other"));
-        assert!(check(&files, "ai.sidevoice.mobile", 43)
-            .unwrap_err()
-            .contains("build number is 42, not 43"));
+        assert!(check(&files, "ai.sidevoice.other", 42).unwrap_err().contains("not ai.sidevoice.other"));
+        assert!(check(&files, "ai.sidevoice.mobile", 43).unwrap_err().contains("build number is 42, not 43"));
         let unsigned = without(&files, "embedded.mobileprovision");
-        assert!(check(&unsigned, "ai.sidevoice.mobile", 42)
-            .unwrap_err()
-            .contains("not signed"));
+        assert!(check(&unsigned, "ai.sidevoice.mobile", 42).unwrap_err().contains("not signed"));
         let no_manifest = without(&files, MANIFEST);
-        assert!(check(&no_manifest, "ai.sidevoice.mobile", 42)
-            .unwrap_err()
-            .contains("not at the root"));
-        assert!(check(&[], "ai.sidevoice.mobile", 42)
-            .unwrap_err()
-            .contains("no Payload"));
+        assert!(check(&no_manifest, "ai.sidevoice.mobile", 42).unwrap_err().contains("not at the root"));
+        assert!(check(&[], "ai.sidevoice.mobile", 42).unwrap_err().contains("no Payload"));
         let no_extension = without(&files, "PlugIns/SidevoiceActivity.appex/Info.plist");
         assert!(check(&no_extension, "ai.sidevoice.mobile", 42)
             .unwrap_err()
             .contains("no PlugIns/SidevoiceActivity.appex"));
         let mut stale = without(&files, "PlugIns/SidevoiceActivity.appex/Info.plist");
-        stale.push((
-            "PlugIns/SidevoiceActivity.appex/Info.plist",
-            appex_info("0.1.0"),
-        ));
-        assert!(check(&stale, "ai.sidevoice.mobile", 42)
-            .unwrap_err()
-            .contains("build number is 0.1.0, not 42"));
+        stale.push(("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info("0.1.0")));
+        assert!(check(&stale, "ai.sidevoice.mobile", 42).unwrap_err().contains("build number is 0.1.0, not 42"));
         let no_symbols = without(&files, SYMBOLS);
-        assert!(check(&no_symbols, "ai.sidevoice.mobile", 42)
-            .unwrap_err()
-            .contains("no Symbols/*.symbols"));
+        assert!(check(&no_symbols, "ai.sidevoice.mobile", 42).unwrap_err().contains("no Symbols/*.symbols"));
         let mut no_group = without(&files, "PlugIns/SidevoiceActivity.appex/SidevoiceActivity");
-        no_group.push((
-            "PlugIns/SidevoiceActivity.appex/SidevoiceActivity",
-            signed("<dict/>"),
-        ));
+        no_group.push(("PlugIns/SidevoiceActivity.appex/SidevoiceActivity", signed("<dict/>")));
         assert!(check(&no_group, "ai.sidevoice.mobile", 42)
             .unwrap_err()
             .contains("PlugIns/SidevoiceActivity.appex is signed without the App Group group.ai.sidevoice.mobile"));

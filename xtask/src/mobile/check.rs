@@ -21,10 +21,7 @@ pub fn build_tool(name: &str) -> Result<PathBuf> {
     let home = crate::util::required_env("ANDROID_HOME")?;
     let dir = Path::new(&home).join("build-tools");
     let version = |name: &std::ffi::OsStr| -> Vec<u32> {
-        name.to_string_lossy()
-            .split('.')
-            .map(|part| part.parse().unwrap_or(0))
-            .collect()
+        name.to_string_lossy().split('.').map(|part| part.parse().unwrap_or(0)).collect()
     };
     let newest = fs::read_dir(&dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?
@@ -37,29 +34,15 @@ pub fn build_tool(name: &str) -> Result<PathBuf> {
 /// `mobile check-16kb [APK]`.
 pub fn check_16kb(apk: &Path) -> Result<()> {
     ensure(apk.exists(), format!("{}: no such file", apk.display()))?;
-    let (aligned, listing) = Cmd::new(build_tool("zipalign")?)
-        .args(["-c", "-P", "16", "-v", "4"])
-        .arg(apk)
-        .attempt()?;
-    let misaligned: Vec<_> = listing
-        .lines()
-        .filter(|line| line.contains("BAD"))
-        .collect();
-    ensure(
-        aligned,
-        format!(
-            "{} is not aligned to 16 KB pages:\n{}",
-            apk.display(),
-            misaligned.join("\n")
-        ),
-    )?;
+    let (aligned, listing) =
+        Cmd::new(build_tool("zipalign")?).args(["-c", "-P", "16", "-v", "4"]).arg(apk).attempt()?;
+    let misaligned: Vec<_> = listing.lines().filter(|line| line.contains("BAD")).collect();
+    ensure(aligned, format!("{} is not aligned to 16 KB pages:\n{}", apk.display(), misaligned.join("\n")))?;
     let file = fs::File::open(apk).map_err(|e| format!("{}: {e}", apk.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", apk.display()))?;
     let mut checked = 0;
     for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|e| format!("{}: {e}", apk.display()))?;
+        let mut entry = archive.by_index(index).map_err(|e| format!("{}: {e}", apk.display()))?;
         let name = entry
             .name()
             .map(std::borrow::Cow::into_owned)
@@ -68,9 +51,7 @@ pub fn check_16kb(apk: &Path) -> Result<()> {
             continue;
         }
         let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|e| format!("{name}: {e}"))?;
+        entry.read_to_end(&mut bytes).map_err(|e| format!("{name}: {e}"))?;
         // Google Play's rule is for 64-bit apps: a 32-bit library (armeabi-v7a) is counted, not measured.
         if bytes.starts_with(b"\x7fELF") && bytes.get(4) == Some(&1) {
             println!("{name}: 32-bit, outside the 16 KB rule");
@@ -79,10 +60,7 @@ pub fn check_16kb(apk: &Path) -> Result<()> {
         }
         let alignments = load_alignments(&bytes).map_err(|e| format!("{name}: {e}"))?;
         for align in &alignments {
-            ensure(
-                *align >= PAGE,
-                format!("{name}: a loadable segment is aligned to {align} bytes, not {PAGE}"),
-            )?;
+            ensure(*align >= PAGE, format!("{name}: a loadable segment is aligned to {align} bytes, not {PAGE}"))?;
         }
         println!(
             "{name}: {} loadable segments, aligned to {} bytes",
@@ -91,37 +69,21 @@ pub fn check_16kb(apk: &Path) -> Result<()> {
         );
         checked += 1;
     }
-    ensure(
-        checked > 0,
-        format!("{}: no native library in lib/", apk.display()),
-    )?;
-    println!(
-        "{}: {checked} native libraries, the APK and every loadable segment aligned to 16 KB",
-        apk.display()
-    );
+    ensure(checked > 0, format!("{}: no native library in lib/", apk.display()))?;
+    println!("{}: {checked} native libraries, the APK and every loadable segment aligned to 16 KB", apk.display());
     Ok(())
 }
 
 /// The alignment of each loadable segment (`PT_LOAD`) of a 64-bit little-endian ELF file, which every Android ABI the
 /// 16 KB rule applies to (arm64-v8a, x86_64; the 32-bit armeabi-v7a libraries are skipped by the caller).
 fn load_alignments(elf: &[u8]) -> Result<Vec<u64>> {
-    let at = |offset: usize, len: usize| {
-        elf.get(offset..offset + len)
-            .ok_or("a truncated ELF file".to_owned())
-    };
+    let at = |offset: usize, len: usize| elf.get(offset..offset + len).ok_or("a truncated ELF file".to_owned());
     let u16_at = |offset| at(offset, 2).map(|b| u16::from_le_bytes(b.try_into().expect("2 bytes")));
     let u32_at = |offset| at(offset, 4).map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")));
     let u64_at = |offset| at(offset, 8).map(|b| u64::from_le_bytes(b.try_into().expect("8 bytes")));
     ensure(elf.starts_with(b"\x7fELF"), "not an ELF file")?;
-    ensure(
-        elf.get(4) == Some(&2) && elf.get(5) == Some(&1),
-        "not a 64-bit little-endian ELF file",
-    )?;
-    let (table, size, count) = (
-        u64_at(0x20)? as usize,
-        u16_at(0x36)? as usize,
-        u16_at(0x38)? as usize,
-    );
+    ensure(elf.get(4) == Some(&2) && elf.get(5) == Some(&1), "not a 64-bit little-endian ELF file")?;
+    let (table, size, count) = (u64_at(0x20)? as usize, u16_at(0x36)? as usize, u16_at(0x38)? as usize);
     const PT_LOAD: u32 = 1;
     let mut alignments = Vec::new();
     for index in 0..count {
@@ -156,30 +118,17 @@ mod tests {
     #[test]
     fn the_loadable_segments_alignments_are_read() {
         // PT_LOAD, PT_DYNAMIC (not loadable: its alignment is no matter), PT_LOAD.
-        assert_eq!(
-            load_alignments(&elf(&[(1, 16384), (2, 8), (1, 65536)])).unwrap(),
-            [16384, 65536]
-        );
-        assert_eq!(
-            load_alignments(&elf(&[(1, 4096)])).unwrap(),
-            [4096],
-            "4 KB is read as it is, the check refuses it"
-        );
+        assert_eq!(load_alignments(&elf(&[(1, 16384), (2, 8), (1, 65536)])).unwrap(), [16384, 65536]);
+        assert_eq!(load_alignments(&elf(&[(1, 4096)])).unwrap(), [4096], "4 KB is read as it is, the check refuses it");
     }
 
     #[test]
     fn what_is_not_a_64_bit_elf_is_refused() {
-        assert!(load_alignments(b"PK\x03\x04")
-            .unwrap_err()
-            .contains("not an ELF"));
+        assert!(load_alignments(b"PK\x03\x04").unwrap_err().contains("not an ELF"));
         let mut thirty_two = elf(&[(1, 4096)]);
         thirty_two[4] = 1;
         assert!(load_alignments(&thirty_two).unwrap_err().contains("64-bit"));
-        assert!(load_alignments(&elf(&[(2, 8)]))
-            .unwrap_err()
-            .contains("no loadable"));
-        assert!(load_alignments(&elf(&[(1, 4096)])[..70])
-            .unwrap_err()
-            .contains("truncated"));
+        assert!(load_alignments(&elf(&[(2, 8)])).unwrap_err().contains("no loadable"));
+        assert!(load_alignments(&elf(&[(1, 4096)])[..70]).unwrap_err().contains("truncated"));
     }
 }

@@ -16,10 +16,7 @@ pub const FAKE_NODE_PORT: &str = "8768";
 
 /// The bundle every `release` command works on, as `tauri build --target aarch64-apple-darwin` leaves it.
 pub fn app() -> PathBuf {
-    repo()
-        .join("target")
-        .join(release_target().triple)
-        .join("release/bundle/macos/Sidevoice.app")
+    repo().join("target").join(release_target().triple).join("release/bundle/macos/Sidevoice.app")
 }
 
 /// The app's binary in [`app`].
@@ -33,9 +30,7 @@ pub fn app_data(home: &Path) -> PathBuf {
 }
 
 pub fn home() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME is not set".into())
+    std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| "HOME is not set".into())
 }
 
 /// The app's binary, its diagnostics on (`SIDEVOICE_DEBUG=1`), with `env`.
@@ -49,9 +44,7 @@ pub fn app_command(env: &[(&str, &str)]) -> Cmd {
 
 /// The stand-in node (test/fixtures/fake-node.py) on loopback, logging every request with its Origin.
 pub fn fake_node(log: &Path) -> Result<crate::util::Background> {
-    Cmd::new("python3")
-        .args(["-u", "test/fixtures/fake-node.py", FAKE_NODE_PORT])
-        .spawn(log)
+    Cmd::new("python3").args(["-u", "test/fixtures/fake-node.py", FAKE_NODE_PORT]).spawn(log)
 }
 
 /// The home a step starts the app with (`util::scratch_home` decides which): the person's on a runner or a scratch one.
@@ -65,14 +58,8 @@ pub struct AppHome {
 impl AppHome {
     pub fn new(step: &str) -> Result<AppHome> {
         match scratch_home(step, Path::new("/tmp"))? {
-            Some(home) => Ok(AppHome {
-                home,
-                scratch: true,
-            }),
-            None => Ok(AppHome {
-                home: home()?,
-                scratch: false,
-            }),
+            Some(home) => Ok(AppHome { home, scratch: true }),
+            None => Ok(AppHome { home: home()?, scratch: false }),
         }
     }
 
@@ -104,9 +91,7 @@ pub const SIGNING_ENV: &[&str] = &[
 
 /// `cmd` without [`SIGNING_ENV`].
 pub fn unsigned(cmd: Cmd) -> Cmd {
-    SIGNING_ENV
-        .iter()
-        .fold(cmd, |cmd, name| cmd.env_remove(name))
+    SIGNING_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name))
 }
 
 /// What only the probe build carries (desktop/tauri/src/probe.rs): never in a release app.
@@ -120,25 +105,16 @@ pub const PROBE_ONLY: &[&str] = &[
 ];
 /// The paths in `security list-keychains`' output: one per line, indented and quoted.
 pub fn keychain_list(text: &str) -> Vec<String> {
-    text.lines()
-        .map(|line| line.trim().trim_matches('"').to_owned())
-        .filter(|path| !path.is_empty())
-        .collect()
+    text.lines().map(|line| line.trim().trim_matches('"').to_owned()).filter(|path| !path.is_empty()).collect()
 }
 
 /// `security` in its interactive mode (`security -i`), given the one command `words` on its standard
 /// input. `security` takes a password only as a `-p`/`-P`/`-k` argument, which any local user can read in the process
 /// list; its interactive mode reads the same commands from stdin, so the passwords never reach argv.
 pub fn security_session(words: &[&str]) -> Result<Cmd> {
-    let words = words
-        .iter()
-        .map(|word| security_word(word))
-        .collect::<Result<Vec<_>>>()?;
+    let words = words.iter().map(|word| security_word(word)).collect::<Result<Vec<_>>>()?;
     let line = words.join(" ");
-    ensure(
-        line.len() <= SECURITY_LINE_MAX,
-        "a command for `security` is too long for its input line",
-    )?;
+    ensure(line.len() <= SECURITY_LINE_MAX, "a command for `security` is too long for its input line")?;
     Ok(Cmd::new("security").arg("-i").stdin_text(line + "\n"))
 }
 
@@ -150,34 +126,18 @@ const SECURITY_LINE_MAX: usize = 4094;
 /// One word of an interactive `security` command: in double quotes, with `\` and `"` escaped. A line break cannot
 /// be carried by a line-based input, so a word with one is refused.
 fn security_word(word: &str) -> Result<String> {
-    ensure(
-        !word.contains(['\n', '\r', '\0']),
-        "a value for `security` holds a line break or a NUL",
-    )?;
-    Ok(format!(
-        "\"{}\"",
-        word.replace('\\', "\\\\").replace('"', "\\\"")
-    ))
+    ensure(!word.contains(['\n', '\r', '\0']), "a value for `security` holds a line break or a NUL")?;
+    Ok(format!("\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\"")))
 }
 
 /// `security create-keychain`, the keychain's password on stdin.
 pub fn create_keychain(keychain: &Path, password: &str) -> Result<Cmd> {
-    security_session(&[
-        "create-keychain",
-        "-p",
-        password,
-        &keychain.display().to_string(),
-    ])
+    security_session(&["create-keychain", "-p", password, &keychain.display().to_string()])
 }
 
 /// `security unlock-keychain`, the keychain's password on stdin.
 pub fn unlock_keychain(keychain: &Path, password: &str) -> Result<Cmd> {
-    security_session(&[
-        "unlock-keychain",
-        "-p",
-        password,
-        &keychain.display().to_string(),
-    ])
+    security_session(&["unlock-keychain", "-p", password, &keychain.display().to_string()])
 }
 
 /// `security import` of the .p12 `file` into `keychain` for codesign, the file's password on stdin.
@@ -243,13 +203,9 @@ impl Signature {
         let Some(team) = team else {
             return ensure(signature.adhoc, "not ad-hoc signed");
         };
+        ensure(signature.developer_id, "not signed by a Developer ID Application")?;
         ensure(
-            signature.developer_id,
-            "not signed by a Developer ID Application",
-        )?;
-        ensure(
-            text.lines()
-                .any(|line| line == format!("TeamIdentifier={team}")),
+            text.lines().any(|line| line == format!("TeamIdentifier={team}")),
             format!(
                 "not signed by the team APPLE_TEAM_ID names (TeamIdentifier={})",
                 signature.team.unwrap_or_default()
@@ -267,12 +223,8 @@ pub fn notarized(spctl: &str) -> bool {
 
 /// `notarytool submit --output-format json`'s status.
 pub fn notary_status(json: &str) -> Result<String> {
-    let answer: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("notarytool's answer: {e}"))?;
-    answer["status"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "notarytool's answer has no status".into())
+    let answer: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("notarytool's answer: {e}"))?;
+    answer["status"].as_str().map(str::to_owned).ok_or_else(|| "notarytool's answer has no status".into())
 }
 
 /// Whether a path on the search list is a signing step's own keychain ([`SIGNING`]/[`KEYCHAIN`]), however the temporary
@@ -287,13 +239,8 @@ pub const KEYCHAIN: &str = "sidevoice-signing.keychain-db";
 
 /// The screen region (`x,y,w,h`, the title bar's 28 points included) of a Finder window's bounds (`x1,y1,x2,y2`).
 pub fn region(bounds: &str) -> Option<String> {
-    let numbers: Vec<i64> = bounds
-        .split(',')
-        .map(|n| n.trim().parse().ok())
-        .collect::<Option<_>>()?;
-    let [x1, y1, x2, y2] = numbers[..] else {
-        return None;
-    };
+    let numbers: Vec<i64> = bounds.split(',').map(|n| n.trim().parse().ok()).collect::<Option<_>>()?;
+    let [x1, y1, x2, y2] = numbers[..] else { return None };
     Some(format!("{x1},{},{},{}", y1 - 28, x2 - x1, y2 - y1 + 28))
 }
 
@@ -330,31 +277,15 @@ TeamIdentifier=AB12CD34EF
     #[test]
     fn a_developer_id_signature_needs_the_team_and_a_timestamp() {
         assert_eq!(Signature::check(SIGNED, Some("AB12CD34EF")), Ok(()));
-        assert!(
-            Signature::check(SIGNED, None).is_err(),
-            "a signed app is not ad-hoc"
-        );
+        assert!(Signature::check(SIGNED, None).is_err(), "a signed app is not ad-hoc");
         let other_team = Signature::check(SIGNED, Some("ZZ99")).unwrap_err();
         assert!(other_team.contains("AB12CD34EF"), "{other_team}");
-        assert!(
-            Signature::check(SIGNED, Some("AB12CD34")).is_err(),
-            "the whole line, not a prefix"
-        );
-        assert!(Signature::check(
-            &SIGNED.replace("Timestamp=", "Signed Time="),
-            Some("AB12CD34EF")
-        )
-        .is_err());
-        assert!(Signature::check(
-            &SIGNED.replace("Developer ID Application", "Apple Development"),
-            Some("AB12CD34EF")
-        )
-        .is_err());
+        assert!(Signature::check(SIGNED, Some("AB12CD34")).is_err(), "the whole line, not a prefix");
+        assert!(Signature::check(&SIGNED.replace("Timestamp=", "Signed Time="), Some("AB12CD34EF")).is_err());
+        assert!(Signature::check(&SIGNED.replace("Developer ID Application", "Apple Development"), Some("AB12CD34EF"))
+            .is_err());
         let both = format!("{SIGNED}Signature=adhoc\n");
-        assert_eq!(
-            Signature::check(&both, Some("AB12CD34EF")).unwrap_err(),
-            "ad-hoc signed in a signed build"
-        );
+        assert_eq!(Signature::check(&both, Some("AB12CD34EF")).unwrap_err(), "ad-hoc signed in a signed build");
     }
 
     #[test]
@@ -362,23 +293,15 @@ TeamIdentifier=AB12CD34EF
         assert!(notarized(
             "/x/Sidevoice.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: X"
         ));
-        assert!(!notarized(
-            "/x/Sidevoice.app: rejected\nsource=Unnotarized Developer ID"
-        ));
-        assert_eq!(
-            notary_status(r#"{"id":"1","status":"Accepted","message":"ok"}"#).unwrap(),
-            "Accepted"
-        );
+        assert!(!notarized("/x/Sidevoice.app: rejected\nsource=Unnotarized Developer ID"));
+        assert_eq!(notary_status(r#"{"id":"1","status":"Accepted","message":"ok"}"#).unwrap(), "Accepted");
         assert_eq!(notary_status(r#"{"status":"Invalid"}"#).unwrap(), "Invalid");
         assert!(notary_status("Error: HTTP 401").is_err());
     }
 
     #[test]
     fn a_finder_window_becomes_a_screen_region() {
-        assert_eq!(
-            region("100,128,740,528").as_deref(),
-            Some("100,100,640,428")
-        );
+        assert_eq!(region("100,128,740,528").as_deref(), Some("100,100,640,428"));
         assert_eq!(region("0,28,1440,900").as_deref(), Some("0,0,1440,900"));
         assert_eq!(region("missing value"), None);
         assert_eq!(region("1,2,3"), None);
@@ -390,35 +313,21 @@ TeamIdentifier=AB12CD34EF
             "    \"/Users/me/Library/Keychains/login.keychain-db\"\n    \"/private/var/folders/x/T/abc.keychain-db\"\n";
         assert_eq!(
             keychain_list(out),
-            [
-                "/Users/me/Library/Keychains/login.keychain-db",
-                "/private/var/folders/x/T/abc.keychain-db"
-            ]
+            ["/Users/me/Library/Keychains/login.keychain-db", "/private/var/folders/x/T/abc.keychain-db"]
         );
     }
 
     #[test]
     fn the_signing_keychain_is_told_from_the_others_on_the_list() {
-        assert!(signing_keychain(
-            "/Users/runner/work/_temp/sidevoice-signing/sidevoice-signing.keychain-db"
-        ));
-        assert!(signing_keychain(
-            "/private/var/folders/x/T/sidevoice-signing/sidevoice-signing.keychain-db"
-        ));
-        assert!(!signing_keychain(
-            "/Users/me/Library/Keychains/login.keychain-db"
-        ));
-        assert!(!signing_keychain(
-            "/Users/runner/Library/Keychains/Nt0IPhmZAIYKjzRR.keychain-db"
-        ));
+        assert!(signing_keychain("/Users/runner/work/_temp/sidevoice-signing/sidevoice-signing.keychain-db"));
+        assert!(signing_keychain("/private/var/folders/x/T/sidevoice-signing/sidevoice-signing.keychain-db"));
+        assert!(!signing_keychain("/Users/me/Library/Keychains/login.keychain-db"));
+        assert!(!signing_keychain("/Users/runner/Library/Keychains/Nt0IPhmZAIYKjzRR.keychain-db"));
     }
 
     #[test]
     fn an_unsigned_build_drops_every_signing_variable() {
-        assert!(
-            SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY")
-                && SIGNING_ENV.contains(&"APPLE_API_KEY_P8")
-        );
+        assert!(SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY") && SIGNING_ENV.contains(&"APPLE_API_KEY_P8"));
     }
 
     const KEYCHAIN_PASSWORD: &str = "keychain-pw-0123456789abcdef";
@@ -441,11 +350,7 @@ TeamIdentifier=AB12CD34EF
         }
         let script = |cmd: &Cmd| cmd.input().unwrap().to_owned();
         assert!(script(&commands[0]).contains(KEYCHAIN_PASSWORD));
-        assert!(
-            script(&commands[2]).contains(r#""-P" "p12 \"pw\" \\ with spaces""#),
-            "{}",
-            script(&commands[2])
-        );
+        assert!(script(&commands[2]).contains(r#""-P" "p12 \"pw\" \\ with spaces""#), "{}", script(&commands[2]));
         assert!(script(&commands[3]).contains(KEYCHAIN_PASSWORD));
     }
 
@@ -458,34 +363,18 @@ TeamIdentifier=AB12CD34EF
     fn a_line_over_the_security_readers_limit_is_refused_without_naming_the_value() {
         let keychain = Path::new("k");
         // `"create-keychain" "-p" "" "k"` is 29 bytes.
-        let base = create_keychain(keychain, "")
-            .unwrap()
-            .input()
-            .unwrap()
-            .len()
-            - 1;
+        let base = create_keychain(keychain, "").unwrap().input().unwrap().len() - 1;
         let fits = |password: &str| create_keychain(keychain, password).is_ok();
         assert!(fits(&"a".repeat(4094 - base)));
         assert!(!fits(&"a".repeat(4095 - base)));
         assert!(!fits(&"a".repeat(4096 - base)));
         // Escaping counts: each `"` and `\` is two bytes on the line.
-        assert!(fits(&format!(
-            "{}{}",
-            "\"".repeat(10),
-            "a".repeat(4094 - base - 20)
-        )));
-        assert!(!fits(&format!(
-            "{}{}",
-            "\"".repeat(11),
-            "a".repeat(4094 - base - 20)
-        )));
+        assert!(fits(&format!("{}{}", "\"".repeat(10), "a".repeat(4094 - base - 20))));
+        assert!(!fits(&format!("{}{}", "\"".repeat(11), "a".repeat(4094 - base - 20))));
         // Bytes, not characters.
         assert!(fits(&"é".repeat((4094 - base) / 2)));
         assert!(!fits(&"é".repeat((4094 - base) / 2 + 1)));
         let secret = format!("SECRET{}", "a".repeat(5000));
-        assert!(!create_keychain(keychain, &secret)
-            .err()
-            .unwrap()
-            .contains("SECRET"));
+        assert!(!create_keychain(keychain, &secret).err().unwrap().contains("SECRET"));
     }
 }

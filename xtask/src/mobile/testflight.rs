@@ -67,12 +67,8 @@ const RUST_SYMBOL: &[u8] = b"rust_begin_unwind";
 pub fn identifier() -> Result<String> {
     let path = repo().join("mobile/tauri/tauri.conf.json");
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let config: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    config["identifier"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| format!("{}: no identifier", path.display()))
+    let config: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    config["identifier"].as_str().map(str::to_owned).ok_or_else(|| format!("{}: no identifier", path.display()))
 }
 
 /// The build number given: a whole number of at least 1.
@@ -110,10 +106,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
     let build = build_number(build_number_text)?;
     if in_ci() {
         let git_ref = std::env::var("GITHUB_REF").unwrap_or_default();
-        ensure(
-            git_ref == MAIN,
-            format!("a signed build runs from main only, not from {git_ref:?}"),
-        )?;
+        ensure(git_ref == MAIN, format!("a signed build runs from main only, not from {git_ref:?}"))?;
     }
     let key_id = required_env("APPLE_API_KEY")?;
     let issuer = required_env("APPLE_API_ISSUER")?;
@@ -123,10 +116,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
 
     // `private_keys/AuthKey_<id>.p8` is where altool looks, beside the directory it runs in; the CLI takes the path.
     let secrets = SecretDir::new(SECRETS)?;
-    let key = secrets.file(
-        &format!("private_keys/AuthKey_{key_id}.p8"),
-        format!("{p8}\n").as_bytes(),
-    )?;
+    let key = secrets.file(&format!("private_keys/AuthKey_{key_id}.p8"), format!("{p8}\n").as_bytes())?;
     drop(p8);
 
     archive(build, &["--export-method", "app-store-connect"], |cli| {
@@ -139,14 +129,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
 
     let out = repo().join("mobile/tauri/gen/apple").join(BUILD);
     let ipas = find_ipa(&out, 3)?;
-    ensure(
-        ipas.len() == 1,
-        format!(
-            "expected one .ipa below {}, found {}",
-            out.display(),
-            ipas.len()
-        ),
-    )?;
+    ensure(ipas.len() == 1, format!("expected one .ipa below {}, found {}", out.display(), ipas.len()))?;
     ios::check_ipa(&ipas[0], &identifier, build)?;
     ios_upload::upload(&ipas[0], &key_id, &issuer, &secrets.path)?;
     println!("{identifier} build {build} uploaded: App Store Connect processes it, then TestFlight offers it to the internal testers");
@@ -161,8 +144,7 @@ fn archive(build: u32, how: &[&str], sign: impl FnOnce(Cmd) -> Cmd) -> Result<()
     if out.exists() {
         fs::remove_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     }
-    let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } })
-        .to_string();
+    let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } }).to_string();
     let mut args = vec!["ios", "build", "--target", "aarch64"];
     args.extend(how);
     args.extend(["--config", &config, "--ci"]);
@@ -177,19 +159,12 @@ fn archive(build: u32, how: &[&str], sign: impl FnOnce(Cmd) -> Cmd) -> Result<()
 /// Zipped into dist/ as `Sidevoice-ios-<build>-symbols.zip`, which the workflows keep. The app's dSYM must name the Rust
 /// code ([`RUST_SYMBOL`]): an archive whose crashes in Rust would read as bare offsets is refused.
 pub fn keep_symbols(build: u32) -> Result<PathBuf> {
-    let archive = repo()
-        .join("mobile/tauri/gen/apple")
-        .join(BUILD)
-        .join(ARCHIVE);
+    let archive = repo().join("mobile/tauri/gen/apple").join(BUILD).join(ARCHIVE);
     let dsym = archive.join(APP_DSYM);
     let bytes = fs::read(&dsym).map_err(|e| format!("{}: {e}", dsym.display()))?;
     ensure(
         bytes.windows(RUST_SYMBOL.len()).any(|w| w == RUST_SYMBOL),
-        format!(
-            "{}: no Rust symbols (no {})",
-            dsym.display(),
-            String::from_utf8_lossy(RUST_SYMBOL)
-        ),
+        format!("{}: no Rust symbols (no {})", dsym.display(), String::from_utf8_lossy(RUST_SYMBOL)),
     )?;
     let dist = repo().join("dist");
     mkdir(&dist)?;
@@ -198,17 +173,8 @@ pub fn keep_symbols(build: u32) -> Result<PathBuf> {
         fs::remove_file(&zip).map_err(|e| format!("{}: {e}", zip.display()))?;
     }
     // A dSYM is a directory: zip keeps its tree (`-r`), and the executable goes at the root (`-j`).
-    Cmd::new("zip")
-        .args(["-qry"])
-        .arg(&zip)
-        .arg("dSYMs")
-        .dir(&archive)
-        .run()?;
-    Cmd::new("zip")
-        .args(["-qj"])
-        .arg(&zip)
-        .arg(archive.join(EXECUTABLE))
-        .run()?;
+    Cmd::new("zip").args(["-qry"]).arg(&zip).arg("dSYMs").dir(&archive).run()?;
+    Cmd::new("zip").args(["-qj"]).arg(&zip).arg(archive.join(EXECUTABLE)).run()?;
     println!("{}: the symbols of build {build}", zip.display());
     Ok(zip)
 }
@@ -231,8 +197,8 @@ fn parse_uuids(text: &str) -> Vec<String> {
 
 /// The `slice_uuid` (upper case, no dashes) in the header line of the `.ips` crash report `text`.
 fn ips_slice_uuid(text: &str) -> Result<String> {
-    let header: serde_json::Value = serde_json::from_str(text.lines().next().unwrap_or_default())
-        .map_err(|e| format!("the .ips header: {e}"))?;
+    let header: serde_json::Value =
+        serde_json::from_str(text.lines().next().unwrap_or_default()).map_err(|e| format!("the .ips header: {e}"))?;
     let uuid = header.get(IPS_SLICE_UUID).and_then(|value| value.as_str());
     uuid.map(|uuid| uuid.replace('-', "").to_ascii_uppercase())
         .ok_or_else(|| format!("the .ips header has no {IPS_SLICE_UUID}"))
@@ -245,10 +211,7 @@ fn check_uuids(archive: &Path, ips: Option<&Path>) -> Result<()> {
     println!("UUIDs of the rebuilt binary and dSYM (compare with the crash report's slice_uuid before trusting the symbols):");
     let executable = uuids(&archive.join(EXECUTABLE))?;
     let dsym = uuids(&archive.join(APP_DSYM))?;
-    ensure(
-        executable == dsym,
-        format!("the executable {executable:?} and its dSYM {dsym:?} differ"),
-    )?;
+    ensure(executable == dsym, format!("the executable {executable:?} and its dSYM {dsym:?} differ"))?;
     let Some(ips) = ips else { return Ok(()) };
     let text = fs::read_to_string(ips).map_err(|e| format!("{}: {e}", ips.display()))?;
     let wanted = ips_slice_uuid(&text)?;
@@ -267,13 +230,7 @@ fn check_uuids(archive: &Path, ips: Option<&Path>) -> Result<()> {
 pub fn symbols(build_number_text: &str, ips: Option<&Path>) -> Result<()> {
     let build = build_number(build_number_text)?;
     archive(build, &["--no-sign"], |cli| cli)?;
-    check_uuids(
-        &repo()
-            .join("mobile/tauri/gen/apple")
-            .join(BUILD)
-            .join(ARCHIVE),
-        ips,
-    )?;
+    check_uuids(&repo().join("mobile/tauri/gen/apple").join(BUILD).join(ARCHIVE), ips)?;
     keep_symbols(build).map(drop)
 }
 
@@ -299,10 +256,7 @@ mod tests {
         assert!(take_secret(name).unwrap_err().contains("is not set"));
         std::env::set_var(name, "");
         assert!(take_secret(name).is_err(), "an empty secret is none");
-        assert!(
-            std::env::var_os(name).is_some(),
-            "nothing taken, nothing removed"
-        );
+        assert!(std::env::var_os(name).is_some(), "nothing taken, nothing removed");
         std::env::remove_var(name);
     }
 
@@ -314,10 +268,7 @@ mod tests {
         fs::write(&ipa, b"x").unwrap();
         fs::write(dir.path().join("arm64/ExportOptions.plist"), b"x").unwrap();
         assert_eq!(find_ipa(dir.path(), 3).unwrap(), [ipa]);
-        assert!(
-            find_ipa(dir.path(), 1).unwrap().is_empty(),
-            "deeper than asked"
-        );
+        assert!(find_ipa(dir.path(), 1).unwrap().is_empty(), "deeper than asked");
     }
 
     #[test]
@@ -326,10 +277,7 @@ mod tests {
         assert_eq!(parse_uuids(out), ["1A2B3C4D000011112222333344445555"]);
         let ips =
             "{\"app_name\":\"Sidevoice\",\"slice_uuid\":\"1a2b3c4d-0000-1111-2222-333344445555\"}\n{\"usedImages\":[]}";
-        assert_eq!(
-            ips_slice_uuid(ips).unwrap(),
-            "1A2B3C4D000011112222333344445555"
-        );
+        assert_eq!(ips_slice_uuid(ips).unwrap(), "1A2B3C4D000011112222333344445555");
         assert!(ips_slice_uuid("{}\n").is_err());
     }
 

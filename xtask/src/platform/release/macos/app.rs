@@ -6,14 +6,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::platform::macos_app::{
-    allow_codesign, app, binary, create_keychain, import_certificate, keychain_list, notarized,
-    notary_status, region, release_target, signing_keychain, unlock_keychain, unsigned, Signature,
-    KEYCHAIN, PROBE_ONLY, SIGNING,
+    allow_codesign, app, binary, create_keychain, import_certificate, keychain_list, notarized, notary_status, region,
+    release_target, signing_keychain, unlock_keychain, unsigned, Signature, KEYCHAIN, PROBE_ONLY, SIGNING,
 };
 use crate::platform::private_files::{PrivateCreation, PrivateFiles};
 use crate::util::{
-    contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, random_hex, read, read_bytes, read_secret,
-    repo, required_env, secret_path, sleep, version, work, Channel, Cmd, SecretDir, TauriBuild,
+    contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, random_hex, read, read_bytes, read_secret, repo, required_env,
+    secret_path, sleep, version, work, Channel, Cmd, SecretDir, TauriBuild,
 };
 use crate::Result;
 
@@ -28,19 +27,14 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
                 let bytes = read_secret(Path::new(&path))?;
                 dir.file("AuthKey.p8", &bytes)
             }
-            _ => Err(
-                "neither APPLE_API_KEY_P8 nor APPLE_API_KEY_PATH (a file) is set (RELEASING.md)"
-                    .into(),
-            ),
+            _ => Err("neither APPLE_API_KEY_P8 nor APPLE_API_KEY_PATH (a file) is set (RELEASING.md)".into()),
         },
     }
 }
 
 /// The .dmg `release package` makes: `dist/Sidevoice_<version>_aarch64.dmg`.
 fn dmg_path() -> Result<PathBuf> {
-    Ok(repo()
-        .join("dist")
-        .join(format!("Sidevoice_{}_aarch64.dmg", version()?)))
+    Ok(repo().join("dist").join(format!("Sidevoice_{}_aarch64.dmg", version()?)))
 }
 
 /// `release app [--signed] [--channel release|nightly|dev]`: the app bundle (hardened runtime,
@@ -50,12 +44,7 @@ fn dmg_path() -> Result<PathBuf> {
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
 /// stapled. A release's (signed only) or a nightly's also makes the update artifact ([`update_artifact`]).
 pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
-    let build = TauriBuild {
-        target: Some(release_target().triple),
-        bundles: "app",
-        channel,
-        ..TauriBuild::default()
-    };
+    let build = TauriBuild { target: Some(release_target().triple), bundles: "app", channel, ..TauriBuild::default() };
     ensure(
         signed || channel != Channel::Release,
         "a release's app is signed: `release app --signed --channel release`",
@@ -73,11 +62,7 @@ pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
 }
 
 fn build_signed(build: TauriBuild) -> Result<()> {
-    for name in [
-        "APPLE_SIGNING_IDENTITY",
-        "APPLE_API_KEY",
-        "APPLE_API_ISSUER",
-    ] {
+    for name in ["APPLE_SIGNING_IDENTITY", "APPLE_API_KEY", "APPLE_API_ISSUER"] {
         required_env(name)?;
     }
     forget_secrets()?;
@@ -87,17 +72,9 @@ fn build_signed(build: TauriBuild) -> Result<()> {
     // The bundler imports the certificate into a keychain of its own, which it adds to the search list and removes
     // when done; one it left (a build that failed half-way) is removed here.
     let before = user_keychains()?;
-    let built = build
-        .command()
-        .and_then(|cmd| cmd.env("APPLE_API_KEY_PATH", &key).run());
-    for left in user_keychains()?
-        .into_iter()
-        .filter(|k| !before.contains(k))
-    {
-        let _ = Cmd::new("security")
-            .arg("delete-keychain")
-            .arg(&left)
-            .attempt();
+    let built = build.command().and_then(|cmd| cmd.env("APPLE_API_KEY_PATH", &key).run());
+    for left in user_keychains()?.into_iter().filter(|k| !before.contains(k)) {
+        let _ = Cmd::new("security").arg("delete-keychain").arg(&left).attempt();
     }
     built
 }
@@ -132,22 +109,11 @@ fn update_artifact(signed: bool) -> Result<()> {
             .args(["signer", "sign"])
             .arg(&update)
             .run()?;
-        ensure(
-            sig.is_file(),
-            format!(
-                "{} is not there: the updater's key signed nothing",
-                sig.display()
-            ),
-        )?;
+        ensure(sig.is_file(), format!("{} is not there: the updater's key signed nothing", sig.display()))?;
         // What it unpacks to is the notarized app, its ticket stapled.
         let unpacked = work("update-artifact")?.join("unpacked");
         fresh_dir(&unpacked)?;
-        Cmd::new("tar")
-            .arg("-xzf")
-            .arg(&update)
-            .arg("-C")
-            .arg(&unpacked)
-            .run()?;
+        Cmd::new("tar").arg("-xzf").arg(&update).arg("-C").arg(&unpacked).run()?;
         stapler("validate", unpacked.join("Sidevoice.app"))?;
     } else {
         fs::copy(&bundle, &update).map_err(|e| format!("{}: {e}", bundle.display()))?;
@@ -168,28 +134,16 @@ fn staple_app() -> Result<()> {
 
 /// The user's keychain search list (`security list-keychains -d user`).
 fn user_keychains() -> Result<Vec<String>> {
-    Ok(keychain_list(
-        &Cmd::new("security")
-            .args(["list-keychains", "-d", "user"])
-            .stdout()?,
-    ))
+    Ok(keychain_list(&Cmd::new("security").args(["list-keychains", "-d", "user"]).stdout()?))
 }
 
 fn plist(app: &Path, key: &str) -> Result<String> {
     let info = app.join("Contents/Info.plist");
-    Ok(Cmd::new("plutil")
-        .args(["-extract", key, "raw"])
-        .arg(info)
-        .stdout()?
-        .trim_end_matches('\n')
-        .to_owned())
+    Ok(Cmd::new("plutil").args(["-extract", key, "raw"]).arg(info).stdout()?.trim_end_matches('\n').to_owned())
 }
 
 pub fn entitlements(app: &Path) -> Result<String> {
-    Cmd::new("codesign")
-        .args(["-d", "--entitlements", "-", "--xml"])
-        .arg(app)
-        .stdout()
+    Cmd::new("codesign").args(["-d", "--entitlements", "-", "--xml"]).arg(app).stdout()
 }
 
 /// `release check-app [--signed]`: what a first open depends on, in the app as built: Info.plist, the signature (with
@@ -197,68 +151,34 @@ pub fn entitlements(app: &Path) -> Result<String> {
 /// the entitlements, the icon (its entries also copied to dmg-screens/ for the record), arm64, and no CI probe.
 pub fn check_app(signed: bool) -> Result<()> {
     let app = app();
-    ensure(
-        app.is_dir(),
-        format!(
-            "{} is not there: `cargo xtask release app` first",
-            app.display()
-        ),
-    )?;
-    let team = if signed {
-        Some(required_env("APPLE_TEAM_ID")?)
-    } else {
-        None
-    };
+    ensure(app.is_dir(), format!("{} is not there: `cargo xtask release app` first", app.display()))?;
+    let team = if signed { Some(required_env("APPLE_TEAM_ID")?) } else { None };
     eprintln!("--- Info.plist");
-    Cmd::new("plutil")
-        .arg("-p")
-        .arg(app.join("Contents/Info.plist"))
-        .run()?;
+    Cmd::new("plutil").arg("-p").arg(app.join("Contents/Info.plist")).run()?;
     eprintln!("{}", plist(&app, "NSMicrophoneUsageDescription")?);
-    ensure(
-        plist(&app, "LSMinimumSystemVersion")? == "13.0",
-        "LSMinimumSystemVersion is not 13.0",
-    )?;
+    ensure(plist(&app, "LSMinimumSystemVersion")? == "13.0", "LSMinimumSystemVersion is not 13.0")?;
 
     eprintln!("--- signature");
-    Cmd::new("codesign")
-        .args(["--verify", "--deep", "--strict", "--verbose=2"])
-        .arg(&app)
-        .run()?;
+    Cmd::new("codesign").args(["--verify", "--deep", "--strict", "--verbose=2"]).arg(&app).run()?;
     let signature = Cmd::new("codesign").arg("-dvvv").arg(&app).output()?;
     eprintln!("{signature}");
     Signature::check(&signature, team.as_deref())?;
     if signed {
         stapler("validate", &app)?;
-        let spctl = Cmd::new("spctl")
-            .args(["-a", "-vv", "-t", "exec"])
-            .arg(&app)
-            .output()?;
+        let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&app).output()?;
         eprintln!("{spctl}");
-        ensure(
-            notarized(&spctl),
-            "Gatekeeper does not take the app as a notarized Developer ID app",
-        )?;
+        ensure(notarized(&spctl), "Gatekeeper does not take the app as a notarized Developer ID app")?;
     }
 
     eprintln!("--- entitlements");
     let entitlements = entitlements(&app)?;
     eprintln!("{entitlements}");
-    ensure(
-        entitlements.contains("com.apple.security.device.audio-input"),
-        "no microphone entitlement",
-    )?;
+    ensure(entitlements.contains("com.apple.security.device.audio-input"), "no microphone entitlement")?;
     // The engine is linked into the app: no downloaded library is loaded, so library validation stays on.
-    ensure(
-        !entitlements.contains("com.apple.security.cs.disable-library-validation"),
-        "library validation is off",
-    )?;
+    ensure(!entitlements.contains("com.apple.security.cs.disable-library-validation"), "library validation is off")?;
 
     eprintln!("--- icon");
-    ensure(
-        plist(&app, "CFBundleIconFile")? == "icon.icns",
-        "CFBundleIconFile is not icon.icns",
-    )?;
+    ensure(plist(&app, "CFBundleIconFile")? == "icon.icns", "CFBundleIconFile is not icon.icns")?;
     let iconset = work("check-app")?.join("icon.iconset");
     if iconset.exists() {
         fs::remove_dir_all(&iconset).map_err(|e| format!("{}: {e}", iconset.display()))?;
@@ -271,44 +191,27 @@ pub fn check_app(signed: bool) -> Result<()> {
     Cmd::new("ls").arg(&iconset).run()?;
     for size in ICON_SIZES {
         let file = iconset.join(format!("icon_{size}.png"));
-        ensure(
-            fs::metadata(&file).is_ok_and(|m| m.len() > 0),
-            format!("the icon has no {size}"),
-        )?;
+        ensure(fs::metadata(&file).is_ok_and(|m| m.len() > 0), format!("the icon has no {size}"))?;
     }
-    let largest = Cmd::new("sips")
-        .args(["-g", "pixelWidth"])
-        .arg(iconset.join("icon_512x512@2x.png"))
-        .stdout()?;
-    ensure(
-        largest.contains("1024"),
-        "the largest icon is not 1024 pixels wide",
-    )?;
+    let largest = Cmd::new("sips").args(["-g", "pixelWidth"]).arg(iconset.join("icon_512x512@2x.png")).stdout()?;
+    ensure(largest.contains("1024"), "the largest icon is not 1024 pixels wide")?;
     // How macOS itself decodes every entry, for the record (uploaded with the .dmg window screenshots).
     let record = repo().join("dmg-screens/icon.iconset");
     if record.exists() {
         fs::remove_dir_all(&record).map_err(|e| format!("{}: {e}", record.display()))?;
     }
     copy_dir(&iconset, &record)?;
-    ensure(
-        plist(&app, "CFBundleName")? == "Sidevoice",
-        "CFBundleName is not Sidevoice",
-    )?;
+    ensure(plist(&app, "CFBundleName")? == "Sidevoice", "CFBundleName is not Sidevoice")?;
 
     eprintln!("--- architecture");
     let archs = Cmd::new("lipo").arg("-archs").arg(binary()).stdout()?;
     eprintln!("{archs}");
     ensure(archs.contains("arm64"), "the binary is not arm64")?;
 
-    eprintln!(
-        "--- no CI probe in a release (desktop/tauri/src/probe.rs is behind the probe feature)"
-    );
+    eprintln!("--- no CI probe in a release (desktop/tauri/src/probe.rs is behind the probe feature)");
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
-        ensure(
-            !contains(&bytes, marker),
-            format!("the release app carries {marker}: a CI probe is in it"),
-        )?;
+        ensure(!contains(&bytes, marker), format!("the release app carries {marker}: a CI probe is in it"))?;
     }
     Ok(())
 }
@@ -335,10 +238,7 @@ pub fn dmg(signed: bool) -> Result<()> {
     // No older image beside this one, to be checksummed or uploaded with it.
     let dist = repo().join("dist");
     mkdir(&dist)?;
-    for old in crate::util::files(&dist)?
-        .into_iter()
-        .filter(|p| crate::util::name(p).ends_with(".dmg"))
-    {
+    for old in crate::util::files(&dist)?.into_iter().filter(|p| crate::util::name(p).ends_with(".dmg")) {
         fs::remove_file(&old).map_err(|e| format!("{}: {e}", old.display()))?;
     }
     let dmg = dmg_path()?;
@@ -359,21 +259,12 @@ pub fn dmg(signed: bool) -> Result<()> {
     let mnt = &mount.path;
     Cmd::new("ls").arg("-la").arg(mnt).run()?;
     for name in [".background.tiff", ".DS_Store", ".VolumeIcon.icns"] {
-        ensure(
-            fs::metadata(mnt.join(name)).is_ok_and(|m| m.len() > 0),
-            format!("the .dmg has no {name}"),
-        )?;
+        ensure(fs::metadata(mnt.join(name)).is_ok_and(|m| m.len() > 0), format!("the .dmg has no {name}"))?;
     }
     let applications = fs::symlink_metadata(mnt.join("Applications"));
-    ensure(
-        applications.is_ok_and(|m| m.file_type().is_symlink()),
-        "the .dmg has no Applications link",
-    )?;
+    ensure(applications.is_ok_and(|m| m.file_type().is_symlink()), "the .dmg has no Applications link")?;
     let inside = mnt.join("Sidevoice.app");
-    Cmd::new("codesign")
-        .args(["--verify", "--deep", "--strict", "--verbose=2"])
-        .arg(&inside)
-        .run()?;
+    Cmd::new("codesign").args(["--verify", "--deep", "--strict", "--verbose=2"]).arg(&inside).run()?;
     ensure(
         entitlements(&inside)?.contains("com.apple.security.device.audio-input"),
         "the app in the .dmg has no microphone entitlement",
@@ -382,8 +273,7 @@ pub fn dmg(signed: bool) -> Result<()> {
     mount.detach()?;
     if !signed {
         let readme = repo().join("dist/LEEME-primera-apertura.txt");
-        fs::copy(repo().join("docs/FIRST_OPEN.txt"), &readme)
-            .map_err(|e| format!("{}: {e}", readme.display()))?;
+        fs::copy(repo().join("docs/FIRST_OPEN.txt"), &readme).map_err(|e| format!("{}: {e}", readme.display()))?;
     }
     Ok(())
 }
@@ -397,15 +287,8 @@ struct Mount {
 impl Mount {
     fn attach(dmg: &Path, path: &Path) -> Result<Mount> {
         fresh_dir(path)?;
-        Cmd::new("hdiutil")
-            .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
-            .arg(path)
-            .arg(dmg)
-            .run()?;
-        Ok(Mount {
-            path: path.to_owned(),
-            attached: true,
-        })
+        Cmd::new("hdiutil").args(["attach", "-readonly", "-nobrowse", "-mountpoint"]).arg(path).arg(dmg).run()?;
+        Ok(Mount { path: path.to_owned(), attached: true })
     }
 
     fn detach(mut self) -> Result<()> {
@@ -418,11 +301,7 @@ impl Mount {
 impl Drop for Mount {
     fn drop(&mut self) {
         if self.attached {
-            let _ = Cmd::new("hdiutil")
-                .arg("detach")
-                .arg(&self.path)
-                .arg("-force")
-                .attempt();
+            let _ = Cmd::new("hdiutil").arg("detach").arg(&self.path).arg("-force").attempt();
         }
     }
 }
@@ -441,35 +320,22 @@ impl Keychain {
         let certificate = required_env("APPLE_CERTIFICATE")?;
         let certificate_password = required_env("APPLE_CERTIFICATE_PASSWORD")?;
         let dir = SecretDir::new(SIGNING)?;
-        let keychain = Keychain {
-            path: dir.path.join(KEYCHAIN),
-            password: random_hex(24)?,
-            dir,
-        };
+        let keychain = Keychain { path: dir.path.join(KEYCHAIN), password: random_hex(24)?, dir };
         let (path, password) = (&keychain.path, &keychain.password);
         create_keychain(path, password)?.output()?;
-        Cmd::new("security")
-            .args(["set-keychain-settings", "-lut", "3600"])
-            .arg(path)
-            .run()?;
+        Cmd::new("security").args(["set-keychain-settings", "-lut", "3600"]).arg(path).run()?;
         unlock_keychain(path, password)?.output()?;
         let p12 = keychain.dir.path.join("certificate.p12");
         Cmd::new("base64").arg("--decode").pipe(
             certificate.as_bytes(),
-            Files::open_private(&p12, Create::New)
-                .map_err(|e| format!("{}: {e}", p12.display()))?,
+            Files::open_private(&p12, Create::New).map_err(|e| format!("{}: {e}", p12.display()))?,
         )?;
-        let imported = import_certificate(&p12, path, &certificate_password)
-            .and_then(Cmd::output)
-            .map(drop);
+        let imported = import_certificate(&p12, path, &certificate_password).and_then(Cmd::output).map(drop);
         let _ = fs::remove_file(&p12);
         imported?;
         allow_codesign(path, password)?.output()?;
         // `security -i` need not fail when a command does, so the keychain itself says whether the import worked.
-        let identities = Cmd::new("security")
-            .args(["find-identity", "-p", "codesigning"])
-            .arg(path)
-            .stdout()?;
+        let identities = Cmd::new("security").args(["find-identity", "-p", "codesigning"]).arg(path).stdout()?;
         ensure(
             !identities.contains(" 0 identities found"),
             "the certificate was not imported into the signing keychain",
@@ -486,19 +352,13 @@ impl Keychain {
 
 impl Drop for Keychain {
     fn drop(&mut self) {
-        let _ = Cmd::new("security")
-            .arg("delete-keychain")
-            .arg(&self.path)
-            .attempt();
+        let _ = Cmd::new("security").arg("delete-keychain").arg(&self.path).attempt();
     }
 }
 
 /// The user's keychain search list set to `keychains`.
 fn set_user_keychains(keychains: &[String]) -> Result<()> {
-    Cmd::new("security")
-        .args(["list-keychains", "-d", "user", "-s"])
-        .args(keychains)
-        .run()
+    Cmd::new("security").args(["list-keychains", "-d", "user", "-s"]).args(keychains).run()
 }
 
 /// `release sign-package`: the .dmg signed with the Developer ID (`APPLE_SIGNING_IDENTITY`; from a keychain of this
@@ -513,13 +373,7 @@ pub fn sign_dmg() -> Result<()> {
     let key_id = required_env("APPLE_API_KEY")?;
     let issuer = required_env("APPLE_API_ISSUER")?;
     let dmg = dmg_path()?;
-    ensure(
-        dmg.is_file(),
-        format!(
-            "{} is not there: `cargo xtask release package --signed` first",
-            dmg.display()
-        ),
-    )?;
+    ensure(dmg.is_file(), format!("{} is not there: `cargo xtask release package --signed` first", dmg.display()))?;
     let keychain = match std::env::var("APPLE_CERTIFICATE") {
         Ok(certificate) if !certificate.is_empty() => Some(Keychain::with_certificate()?),
         _ if !in_ci() => None,
@@ -550,33 +404,17 @@ pub fn sign_dmg() -> Result<()> {
     stapler("staple", &dmg)?;
     stapler("validate", &dmg)?;
     let spctl = Cmd::new("spctl")
-        .args([
-            "-a",
-            "-vv",
-            "-t",
-            "open",
-            "--context",
-            "context:primary-signature",
-        ])
+        .args(["-a", "-vv", "-t", "open", "--context", "context:primary-signature"])
         .arg(&dmg)
         .output()?;
     eprintln!("{spctl}");
-    ensure(
-        notarized(&spctl),
-        "Gatekeeper does not take the .dmg as a notarized Developer ID image",
-    )?;
+    ensure(notarized(&spctl), "Gatekeeper does not take the .dmg as a notarized Developer ID image")?;
     // The app inside, as a download would have it: notarized, stapled, accepted.
     let mount = Mount::attach(&dmg, &work("sign-dmg")?.join("mount"))?;
     let inside = mount.path.join("Sidevoice.app");
     stapler("validate", &inside)?;
-    let spctl = Cmd::new("spctl")
-        .args(["-a", "-vv", "-t", "exec"])
-        .arg(&inside)
-        .output()?;
-    ensure(
-        notarized(&spctl),
-        "Gatekeeper does not take the app in the .dmg as a notarized Developer ID app",
-    )?;
+    let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&inside).output()?;
+    ensure(notarized(&spctl), "Gatekeeper does not take the app in the .dmg as a notarized Developer ID app")?;
     mount.detach()
 }
 
@@ -588,16 +426,10 @@ const NOTARY: &str = "sidevoice-notary";
 /// also runs this at the end of the job, whatever happened.
 pub fn forget_secrets() -> Result<()> {
     let signing = secret_path(SIGNING);
-    let _ = Cmd::new("security")
-        .arg("delete-keychain")
-        .arg(signing.join(KEYCHAIN))
-        .attempt();
+    let _ = Cmd::new("security").arg("delete-keychain").arg(signing.join(KEYCHAIN)).attempt();
     let keychains = user_keychains()?;
     if keychains.iter().any(|k| signing_keychain(k)) {
-        let kept: Vec<String> = keychains
-            .into_iter()
-            .filter(|k| !signing_keychain(k))
-            .collect();
+        let kept: Vec<String> = keychains.into_iter().filter(|k| !signing_keychain(k)).collect();
         set_user_keychains(&kept)?;
     }
     for dir in [signing, secret_path(NOTARY)] {
@@ -611,10 +443,8 @@ pub fn forget_secrets() -> Result<()> {
 /// `release checksums`: `dist/SHA256SUMS.txt`, the SHA-256 of each .dmg in dist/ (`shasum -a 256 *.dmg`).
 pub fn checksums() -> Result<()> {
     let dist = repo().join("dist");
-    let dmgs: Vec<PathBuf> = crate::util::files(&dist)?
-        .into_iter()
-        .filter(|p| crate::util::name(p).ends_with(".dmg"))
-        .collect();
+    let dmgs: Vec<PathBuf> =
+        crate::util::files(&dist)?.into_iter().filter(|p| crate::util::name(p).ends_with(".dmg")).collect();
     ensure(!dmgs.is_empty(), "no .dmg in dist/")?;
     let sums = crate::publish::sums(&dmgs)?;
     print!("{sums}");
@@ -628,19 +458,11 @@ pub fn dmg_screens() -> Result<()> {
     let screens = repo().join("dmg-screens");
     mkdir(&screens)?;
     let dmg = dmg_path()?;
-    let attached = Cmd::new("hdiutil")
-        .args(["attach", "-readonly"])
-        .arg(&dmg)
-        .output()?;
+    let attached = Cmd::new("hdiutil").args(["attach", "-readonly"]).arg(&dmg).output()?;
     eprintln!("{attached}");
-    let volume = crate::util::re("/Volumes/.*")
-        .find(&attached)
-        .map(|m| m.as_str().to_owned())
-        .unwrap_or_default();
+    let volume = crate::util::re("/Volumes/.*").find(&attached).map(|m| m.as_str().to_owned()).unwrap_or_default();
     // The appearance as it was, put back at the end (it matters on a laptop).
-    let dark = osa(&[
-        "tell application \"System Events\" to tell appearance preferences to get dark mode",
-    ]);
+    let dark = osa(&["tell application \"System Events\" to tell appearance preferences to get dark mode"]);
     for mode in ["false", "true"] {
         let _ = osa(&[&format!(
             "tell application \"System Events\" to tell appearance preferences to set dark mode to {mode}"
@@ -651,30 +473,17 @@ pub fn dmg_screens() -> Result<()> {
             "tell application \"Finder\" to activate",
         ]);
         sleep(4.0);
-        let bounds = osa(&["tell application \"Finder\" to get bounds of front window"])
-            .unwrap_or_default()
-            .replace(' ', "");
+        let bounds =
+            osa(&["tell application \"Finder\" to get bounds of front window"]).unwrap_or_default().replace(' ', "");
         let bounds = bounds.trim();
         eprintln!("window bounds ({mode}): {bounds}");
         let shot = screens.join(format!("dmg-dark-{mode}.png"));
-        let region = region(if bounds.is_empty() {
-            "0,28,1440,900"
-        } else {
-            bounds
-        });
+        let region = region(if bounds.is_empty() { "0,28,1440,900" } else { bounds });
         let taken = region.is_some_and(|region| {
-            Cmd::new("screencapture")
-                .arg("-x")
-                .arg(format!("-R{region}"))
-                .arg(&shot)
-                .run()
-                .is_ok()
+            Cmd::new("screencapture").arg("-x").arg(format!("-R{region}")).arg(&shot).run().is_ok()
         });
         if !taken {
-            let _ = Cmd::new("screencapture")
-                .arg("-x")
-                .arg(screens.join(format!("dmg-dark-{mode}-full.png")))
-                .run();
+            let _ = Cmd::new("screencapture").arg("-x").arg(screens.join(format!("dmg-dark-{mode}-full.png"))).run();
         }
     }
     let _ = osa(&["tell application \"Finder\" to close every window"]);
@@ -722,11 +531,7 @@ fn stapler_waiting(action: &str, path: impl AsRef<Path>, waits: &[f64]) -> Resul
         match Cmd::new("xcrun").args(["stapler", action]).arg(path).run() {
             Ok(()) => return Ok(()),
             Err(e) => {
-                eprintln!(
-                    "xtask: {e}; retrying in {wait} s ({} of {})",
-                    attempt + 1,
-                    waits.len()
-                );
+                eprintln!("xtask: {e}; retrying in {wait} s ({} of {})", attempt + 1, waits.len());
                 crate::util::sleep(*wait);
             }
         }
@@ -747,17 +552,10 @@ fn assemble_disk_image(
 ) -> Result<()> {
     let venv = work.join("dmgbuild");
     Cmd::new("python3").args(["-m", "venv"]).arg(&venv).run()?;
-    Cmd::new(venv.join("bin/pip"))
-        .args(["install", "--quiet", "dmgbuild==1.6.7"])
-        .run()?;
+    Cmd::new(venv.join("bin/pip")).args(["install", "--quiet", "dmgbuild==1.6.7"]).run()?;
     // One TIFF with the 1x and 2x drawings: Finder picks the one for the screen.
     let tiff = work.join("background.tiff");
-    Cmd::new("tiffutil")
-        .arg("-cathidpicheck")
-        .args(background)
-        .arg("-out")
-        .arg(&tiff)
-        .run()?;
+    Cmd::new("tiffutil").arg("-cathidpicheck").args(background).arg("-out").arg(&tiff).run()?;
     Cmd::new(venv.join("bin/dmgbuild"))
         .args(["-s", "scripts/dmg-settings.py"])
         .arg("-D")

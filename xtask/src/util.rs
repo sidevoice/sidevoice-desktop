@@ -25,10 +25,7 @@ use crate::Result;
 
 /// The repository's root: xtask/ is a package of its own, one level down.
 pub fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask/ is in the repository")
-        .to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("xtask/ is in the repository").to_path_buf()
 }
 
 /// Where the commands keep their logs and scratch files: `target/xtask/<name>` in the repository (ignored by git).
@@ -41,12 +38,9 @@ pub fn work(name: &str) -> Result<PathBuf> {
 /// The app's one version (desktop/tauri/tauri.conf.json; release-please moves it with the others).
 pub fn version() -> Result<String> {
     let path = repo().join("desktop/tauri/tauri.conf.json");
-    let conf: serde_json::Value = serde_json::from_slice(&read_bytes(&path)?)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    conf["version"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| format!("{} names no version", path.display()))
+    let conf: serde_json::Value =
+        serde_json::from_slice(&read_bytes(&path)?).map_err(|e| format!("{}: {e}", path.display()))?;
+    conf["version"].as_str().map(str::to_owned).ok_or_else(|| format!("{} names no version", path.display()))
 }
 
 pub fn read_bytes(path: &Path) -> Result<Vec<u8>> {
@@ -96,9 +90,7 @@ pub fn files(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 pub fn name(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 pub fn sleep(seconds: f64) {
@@ -156,10 +148,7 @@ pub fn scratch_home(step: &str, root: &Path) -> Result<Option<PathBuf>> {
     }
     let home = root.join(format!("svx-{step}"));
     fresh_dir(&home)?;
-    eprintln!(
-        "(off a runner: the app runs with HOME={}, this machine's own data untouched)",
-        home.display()
-    );
+    eprintln!("(off a runner: the app runs with HOME={}, this machine's own data untouched)", home.display());
     Ok(Some(home))
 }
 
@@ -167,9 +156,7 @@ pub fn scratch_home(step: &str, root: &Path) -> Result<Option<PathBuf>> {
 pub fn required_env(name: &str) -> Result<String> {
     match std::env::var(name) {
         Ok(value) if !value.is_empty() => Ok(value),
-        _ => Err(format!(
-            "{name} is not set (RELEASING.md: the signing secrets)"
-        )),
+        _ => Err(format!("{name} is not set (RELEASING.md: the signing secrets)")),
     }
 }
 
@@ -192,16 +179,10 @@ impl Cmd {
         let mut command = Command::new(program.as_ref());
         command.current_dir(repo());
         if std::env::var("RUSTUP_TOOLCHAIN_SOURCE").map_or(true, |source| source != "env") {
-            command
-                .env_remove("RUSTUP_TOOLCHAIN")
-                .env_remove("RUSTUP_TOOLCHAIN_SOURCE");
+            command.env_remove("RUSTUP_TOOLCHAIN").env_remove("RUSTUP_TOOLCHAIN_SOURCE");
         }
         command.env_remove("CARGO");
-        Cmd {
-            command,
-            shown: vec![program.as_ref().to_string_lossy().into_owned()],
-            input: None,
-        }
+        Cmd { command, shown: vec![program.as_ref().to_string_lossy().into_owned()], input: None }
     }
 
     pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Cmd {
@@ -235,19 +216,9 @@ impl Cmd {
     /// The program and its arguments as the process will get them.
     #[cfg(test)]
     pub fn argv(&self) -> Vec<String> {
-        let program = self
-            .command
-            .as_std()
-            .get_program()
-            .to_string_lossy()
-            .into_owned();
+        let program = self.command.as_std().get_program().to_string_lossy().into_owned();
         std::iter::once(program)
-            .chain(
-                self.command
-                    .as_std()
-                    .get_args()
-                    .map(|arg| arg.to_string_lossy().into_owned()),
-            )
+            .chain(self.command.as_std().get_args().map(|arg| arg.to_string_lossy().into_owned()))
             .collect()
     }
 
@@ -282,9 +253,7 @@ impl Cmd {
         let what = self.shown();
         eprintln!("$ {what}");
         runtime().block_on(async {
-            let mut child = Processes::spawn_tree(self.command)
-                .await
-                .map_err(|e| format!("{what}: {e}"))?;
+            let mut child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
             let status = tokio::select! {
                 status = child.wait() => status.map_err(|e| format!("{what}: {e}")),
                 () = cancelled() => Err("interrupted".into()),
@@ -295,10 +264,7 @@ impl Cmd {
                 child.kill_tree().await;
             }
             let status = status?;
-            status
-                .success()
-                .then_some(())
-                .ok_or_else(|| format!("{what}: {status}"))
+            status.success().then_some(()).ok_or_else(|| format!("{what}: {status}"))
         })
     }
 
@@ -306,8 +272,7 @@ impl Cmd {
     /// succeeds.
     pub fn output(self) -> Result<String> {
         let (ok, text, what) = self.capture(true)?;
-        ok.then_some(text.clone())
-            .ok_or_else(|| format!("{what} failed:\n{text}"))
+        ok.then_some(text.clone()).ok_or_else(|| format!("{what} failed:\n{text}"))
     }
 
     /// Runs it and returns its standard output alone (its standard error goes through); fails unless it succeeds.
@@ -329,9 +294,7 @@ impl Cmd {
         eprintln!("$ {what} < (input) > (file)");
         self.command.stdin(Stdio::piped()).stdout(Stdio::from(out));
         runtime().block_on(async {
-            let mut child = Processes::spawn_tree(self.command)
-                .await
-                .map_err(|e| format!("{what}: {e}"))?;
+            let mut child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
             let mut stdin = child.stdin().expect("piped");
             let result = tokio::select! {
                 result = async {
@@ -356,18 +319,8 @@ impl Cmd {
         let what = self.shown();
         eprintln!("$ {what}");
         let input = self.input.take();
-        self.command
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped());
-        self.command.stderr(if with_stderr {
-            Stdio::piped()
-        } else {
-            Stdio::inherit()
-        });
+        self.command.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped());
+        self.command.stderr(if with_stderr { Stdio::piped() } else { Stdio::inherit() });
         let out = runtime().block_on(async {
             let mut child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
             let stdin = input.map(|input| (child.stdin().expect("piped"), input));
@@ -406,18 +359,9 @@ impl Cmd {
         let file = File::create(log).map_err(|e| format!("{}: {e}", log.display()))?;
         let err = file.try_clone().map_err(|e| e.to_string())?;
         eprintln!("$ {what} > {} 2>&1 &", log.display());
-        self.command
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(file))
-            .stderr(Stdio::from(err));
-        let child = runtime()
-            .block_on(Processes::spawn_tree(self.command))
-            .map_err(|e| format!("{what}: {e}"))?;
-        Ok(Background {
-            pid: child.id().expect("owned child leader"),
-            child,
-            readers: Vec::new(),
-        })
+        self.command.stdin(Stdio::null()).stdout(Stdio::from(file)).stderr(Stdio::from(err));
+        let child = runtime().block_on(Processes::spawn_tree(self.command)).map_err(|e| format!("{what}: {e}"))?;
+        Ok(Background { pid: child.id().expect("owned child leader"), child, readers: Vec::new() })
     }
 
     /// Starts it in the background, each line it writes (either stream) into `log` with the time before it
@@ -425,17 +369,10 @@ impl Cmd {
     pub fn spawn_timed(mut self, log: &Path) -> Result<Background> {
         interrupted()?;
         let what = self.shown();
-        let file = Arc::new(Mutex::new(
-            File::create(log).map_err(|e| format!("{}: {e}", log.display()))?,
-        ));
+        let file = Arc::new(Mutex::new(File::create(log).map_err(|e| format!("{}: {e}", log.display()))?));
         eprintln!("$ {what} > (timed) {} 2>&1 &", log.display());
-        self.command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = runtime()
-            .block_on(Processes::spawn_tree(self.command))
-            .map_err(|e| format!("{what}: {e}"))?;
+        self.command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = runtime().block_on(Processes::spawn_tree(self.command)).map_err(|e| format!("{what}: {e}"))?;
         let stdout: Box<dyn AsyncRead + Send + Unpin> = Box::new(child.stdout().expect("piped"));
         let stderr: Box<dyn AsyncRead + Send + Unpin> = Box::new(child.stderr().expect("piped"));
         let readers = [stdout, stderr]
@@ -445,15 +382,8 @@ impl Cmd {
                 runtime().spawn(async move {
                     let mut reader = BufReader::new(stream);
                     let mut line = Vec::new();
-                    while reader
-                        .read_until(b'\n', &mut line)
-                        .await
-                        .is_ok_and(|n| n > 0)
-                    {
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs_f64();
+                    while reader.read_until(b'\n', &mut line).await.is_ok_and(|n| n > 0) {
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
                         let mut file = file.lock().expect("the log's lock");
                         let _ = write!(file, "{now:.2} ");
                         let _ = file.write_all(&line);
@@ -463,11 +393,7 @@ impl Cmd {
                 })
             })
             .collect();
-        Ok(Background {
-            pid: child.id().expect("owned child leader"),
-            child,
-            readers,
-        })
+        Ok(Background { pid: child.id().expect("owned child leader"), child, readers })
     }
 }
 
@@ -528,9 +454,7 @@ impl Drop for Background {
 
 /// A log's text so far ("" when there is none yet).
 pub fn read(log: &Path) -> String {
-    fs::read(log)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default()
+    fs::read(log).map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default()
 }
 
 /// A regular expression written in the code: it compiles.
@@ -541,9 +465,7 @@ pub fn re(pattern: &str) -> Regex {
 /// The lines of `text` after its first `after` (as `tail -n +<after + 1>` gives them), the last one even if it is
 /// not finished yet.
 pub fn lines_after(text: &str, after: usize) -> impl Iterator<Item = &str> {
-    text.split_inclusive('\n')
-        .skip(after)
-        .map(|line| line.trim_end_matches('\n'))
+    text.split_inclusive('\n').skip(after).map(|line| line.trim_end_matches('\n'))
 }
 
 /// Whether a line of `text` matches `pattern` (`grep -q`).
@@ -586,9 +508,7 @@ pub fn ensure(ok: bool, what: impl Into<String>) -> Result<()> {
 
 /// Whether `bytes` holds `text` (`grep -q` on a binary).
 pub fn contains(bytes: &[u8], text: &str) -> bool {
-    bytes
-        .windows(text.len())
-        .any(|window| window == text.as_bytes())
+    bytes.windows(text.len()).any(|window| window == text.as_bytes())
 }
 
 /// What a build is for (RELEASING.md → "Channels"): `dev`, the default, is a laptop's, a PR's or a manual run's.
@@ -648,14 +568,9 @@ pub fn numeric_version(version: &str) -> &str {
 /// 0.4.3-nightly.17): above that release, below the next, and higher every run (`RUN` is a number, compared as one), as
 /// the updater needs: it offers only a higher version on the nightly's feed.
 pub fn nightly_version(released: &str, run: &str) -> Result<String> {
-    let numbers: std::result::Result<Vec<u64>, _> = numeric_version(released)
-        .split('.')
-        .map(str::parse)
-        .collect();
+    let numbers: std::result::Result<Vec<u64>, _> = numeric_version(released).split('.').map(str::parse).collect();
     let (Ok([major, minor, patch]), Ok(run)) = (numbers.as_deref(), run.parse::<u64>()) else {
-        return Err(format!(
-            "no nightly version from release {released:?} and run {run:?}"
-        ));
+        return Err(format!("no nightly version from release {released:?} and run {run:?}"));
     };
     Ok(format!("{major}.{minor}.{}-nightly.{run}", patch + 1))
 }
@@ -664,18 +579,15 @@ pub fn nightly_version(released: &str, run: &str) -> Result<String> {
 /// its package `.`) and `GITHUB_RUN_NUMBER`.
 pub fn ci_nightly_version() -> Result<String> {
     let path = repo().join(".release-please-manifest.json");
-    let manifest: serde_json::Value = serde_json::from_slice(&read_bytes(&path)?)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    let run = std::env::var("GITHUB_RUN_NUMBER")
-        .map_err(|_| "a nightly is CI's: GITHUB_RUN_NUMBER is not set")?;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&read_bytes(&path)?).map_err(|e| format!("{}: {e}", path.display()))?;
+    let run = std::env::var("GITHUB_RUN_NUMBER").map_err(|_| "a nightly is CI's: GITHUB_RUN_NUMBER is not set")?;
     nightly_version(manifest["."].as_str().unwrap_or_default(), &run)
 }
 
 /// HEAD's short commit and that commit's date (`YYYY-MM-DD`): what a nightly build says it is (`SIDEVOICE_BUILD_COMMIT`, `_DATE`).
 pub fn head_commit() -> Result<(String, String)> {
-    let head = Cmd::new("git")
-        .args(["log", "-1", "--abbrev=7", "--format=%h %cs"])
-        .stdout()?;
+    let head = Cmd::new("git").args(["log", "-1", "--abbrev=7", "--format=%h %cs"]).stdout()?;
     let (commit, date) = head.trim().split_once(' ').ok_or("git log: no commit")?;
     Ok((commit.to_owned(), date.to_owned()))
 }
@@ -714,13 +626,9 @@ impl TauriBuild<'_> {
     /// The command: the CLI's script run by Node (what `npx tauri` runs), for its channel; only a release or a nightly
     /// sees the updater's key, and the app's build script is told the channel (and a nightly's commit and date).
     pub fn command(&self) -> Result<Cmd> {
-        let mut cmd = Cmd::new("node")
-            .arg(repo().join("node_modules/@tauri-apps/cli/tauri.js"))
-            .args(self.args());
+        let mut cmd = Cmd::new("node").arg(repo().join("node_modules/@tauri-apps/cli/tauri.js")).args(self.args());
         if self.channel == Channel::Dev {
-            cmd = cmd
-                .env_remove("TAURI_SIGNING_PRIVATE_KEY")
-                .env_remove("TAURI_SIGNING_PRIVATE_KEY_PASSWORD");
+            cmd = cmd.env_remove("TAURI_SIGNING_PRIVATE_KEY").env_remove("TAURI_SIGNING_PRIVATE_KEY_PASSWORD");
         }
         // A nightly's version, short commit and that commit's date (`YYYY-MM-DD`).
         let (version, commit, date) = match self.channel {
@@ -743,10 +651,7 @@ impl TauriBuild<'_> {
 /// Where the secrets directory `name` goes: under `RUNNER_TEMP` on a runner, the system's temporary directory
 /// elsewhere. A fixed place, so that `release forget-secrets` finds what a run that was cut short left.
 pub fn secret_path(name: &str) -> PathBuf {
-    std::env::var_os("RUNNER_TEMP")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(name)
+    std::env::var_os("RUNNER_TEMP").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(name)
 }
 
 /// A directory for secrets ([`secret_path`]), only this user may enter it (0700), removed with everything in it
@@ -781,10 +686,7 @@ impl Drop for SecretDir {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_dir_all(&self.path) {
             if self.path.exists() {
-                eprintln!(
-                    "::warning::could not remove {}: {error}",
-                    self.path.display()
-                );
+                eprintln!("::warning::could not remove {}: {error}", self.path.display());
             }
         }
     }
@@ -818,12 +720,7 @@ mod tests {
 
     fn fixture(mode: &str) -> Cmd {
         Cmd::new(std::env::current_exe().unwrap())
-            .args([
-                "--ignored",
-                "--exact",
-                "--nocapture",
-                "util::tests::child_fixture",
-            ])
+            .args(["--ignored", "--exact", "--nocapture", "util::tests::child_fixture"])
             .env("SIDEVOICE_XTASK_FIXTURE", mode)
     }
 
@@ -833,12 +730,8 @@ mod tests {
     fn child_fixture() {
         match std::env::var("SIDEVOICE_XTASK_FIXTURE").unwrap().as_str() {
             "output" => {
-                std::io::stdout()
-                    .write_all(&vec![b'o'; 128 * 1024])
-                    .unwrap();
-                std::io::stderr()
-                    .write_all(&vec![b'e'; 128 * 1024])
-                    .unwrap();
+                std::io::stdout().write_all(&vec![b'o'; 128 * 1024]).unwrap();
+                std::io::stderr().write_all(&vec![b'e'; 128 * 1024]).unwrap();
                 println!("\nfixture-out");
                 eprintln!("fixture-err");
             }
@@ -849,9 +742,7 @@ mod tests {
             "output-then-input" => {
                 // More output than the pipes hold before any input is read: both ends block unless the parent reads
                 // while it writes.
-                std::io::stdout()
-                    .write_all(&vec![b'o'; 1024 * 1024])
-                    .unwrap();
+                std::io::stdout().write_all(&vec![b'o'; 1024 * 1024]).unwrap();
                 let text = std::io::read_to_string(std::io::stdin()).unwrap();
                 println!("\ninput-len={}", text.len());
             }
@@ -861,12 +752,7 @@ mod tests {
                 // Deliberately leave a descendant holding both output pipes; the outer command owns cleanup.
                 #[allow(clippy::zombie_processes)]
                 let child = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--ignored",
-                        "--exact",
-                        "--nocapture",
-                        "util::tests::child_fixture",
-                    ])
+                    .args(["--ignored", "--exact", "--nocapture", "util::tests::child_fixture"])
                     .env("SIDEVOICE_XTASK_FIXTURE", "sleep")
                     .spawn()
                     .unwrap();
@@ -875,8 +761,7 @@ mod tests {
             "interrupt" => {
                 on_interrupt().unwrap();
                 // Keep the process-global interruption flag in this subprocess, isolated from sibling tests.
-                let dir =
-                    SecretDir::new(&format!("xtask-interrupt-{}", std::process::id())).unwrap();
+                let dir = SecretDir::new(&format!("xtask-interrupt-{}", std::process::id())).unwrap();
                 dir.file("key", b"fixture-secret").unwrap();
                 println!("secret-dir={}", dir.path.display());
                 if std::env::var_os("SIDEVOICE_XTASK_WAIT_FOR_SIGNAL").is_none() {
@@ -896,28 +781,15 @@ mod tests {
 
     #[test]
     fn input_is_written_while_the_output_is_read() {
-        let (ok, text) = fixture("output-then-input")
-            .stdin_text("x".repeat(1024 * 1024))
-            .attempt()
-            .unwrap();
+        let (ok, text) = fixture("output-then-input").stdin_text("x".repeat(1024 * 1024)).attempt().unwrap();
         assert!(ok);
-        assert!(
-            text.contains("input-len=1048576"),
-            "{}",
-            &text[text.len().saturating_sub(200)..]
-        );
+        assert!(text.contains("input-len=1048576"), "{}", &text[text.len().saturating_sub(200)..]);
     }
 
     #[test]
     fn a_child_that_succeeds_without_reading_its_input_is_a_failure() {
-        let err = fixture("exit-unread")
-            .stdin_text("x".repeat(4 * 1024 * 1024))
-            .attempt()
-            .unwrap_err();
-        assert!(
-            err.contains("input was not delivered") && !err.contains("xxxx"),
-            "{err}"
-        );
+        let err = fixture("exit-unread").stdin_text("x".repeat(4 * 1024 * 1024)).attempt().unwrap_err();
+        assert!(err.contains("input was not delivered") && !err.contains("xxxx"), "{err}");
     }
 
     #[test]
@@ -926,10 +798,7 @@ mod tests {
         assert!(ok);
         assert!(text.contains(&"o".repeat(128 * 1024)) && text.contains(&"e".repeat(128 * 1024)));
         assert!(text.find("fixture-out").unwrap() < text.find("fixture-err").unwrap());
-        let err = Cmd::new("sidevoice-xtask-missing-fixture")
-            .secret("fixture-secret")
-            .run()
-            .unwrap_err();
+        let err = Cmd::new("sidevoice-xtask-missing-fixture").secret("fixture-secret").run().unwrap_err();
         assert!(err.contains("***") && !err.contains("fixture-secret"));
     }
 
@@ -937,29 +806,18 @@ mod tests {
     fn piped_input_closes_and_background_logs_keep_both_streams() {
         let dir = tempfile::tempdir().unwrap();
         let piped = dir.path().join("input");
-        fixture("input")
-            .pipe(b"fixture-input", File::create(&piped).unwrap())
-            .unwrap();
+        fixture("input").pipe(b"fixture-input", File::create(&piped).unwrap()).unwrap();
         assert!(read(&piped).contains("input=fixture-input"));
         for timed in [false, true] {
             let log = dir.path().join("log");
-            let mut child = if timed {
-                fixture("output").spawn_timed(&log)
-            } else {
-                fixture("output").spawn(&log)
-            }
-            .unwrap();
+            let mut child =
+                if timed { fixture("output").spawn_timed(&log) } else { fixture("output").spawn(&log) }.unwrap();
             assert!(child.ended(10).unwrap().success());
             child.stop();
             let text = read(&log);
             assert!(text.contains("fixture-out") && text.contains("fixture-err"));
             if timed {
-                assert!(text.lines().all(|line| line
-                    .split_once(' ')
-                    .unwrap()
-                    .0
-                    .parse::<f64>()
-                    .is_ok()));
+                assert!(text.lines().all(|line| line.split_once(' ').unwrap().0.parse::<f64>().is_ok()));
             }
         }
     }
@@ -969,10 +827,7 @@ mod tests {
         while Processes::identity(pid).is_some() && Instant::now() < deadline {
             sleep(0.02);
         }
-        assert!(
-            Processes::identity(pid).is_none(),
-            "owned descendant stayed alive"
-        );
+        assert!(Processes::identity(pid).is_none(), "owned descendant stayed alive");
     }
 
     #[test]
@@ -980,24 +835,14 @@ mod tests {
         let start = Instant::now();
         let text = fixture("orphan").output().unwrap();
         assert!(start.elapsed() < Duration::from_secs(15));
-        let pid = text
-            .lines()
-            .find_map(|line| line.strip_prefix("descendant="))
-            .unwrap()
-            .parse()
-            .unwrap();
+        let pid = text.lines().find_map(|line| line.strip_prefix("descendant=")).unwrap().parse().unwrap();
         assert_gone(pid);
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("log");
         let mut child = fixture("orphan").spawn(&log).unwrap();
         assert!(child.ended(10).unwrap().success());
         drop(child);
-        let pid = read(&log)
-            .lines()
-            .find_map(|line| line.strip_prefix("descendant="))
-            .unwrap()
-            .parse()
-            .unwrap();
+        let pid = read(&log).lines().find_map(|line| line.strip_prefix("descendant=")).unwrap().parse().unwrap();
         assert_gone(pid);
     }
 
@@ -1005,10 +850,7 @@ mod tests {
     fn interruption_stops_work_and_unwinds_secret_guards() {
         let text = fixture("interrupt").output().unwrap();
         assert!(text.contains("unwound"));
-        let path = text
-            .lines()
-            .find_map(|line| line.strip_prefix("secret-dir="))
-            .unwrap();
+        let path = text.lines().find_map(|line| line.strip_prefix("secret-dir=")).unwrap();
         assert!(!Path::new(path).exists());
     }
 
@@ -1022,16 +864,11 @@ mod tests {
             assert_eq!(read_secret(&key).unwrap(), b"fixture-secret");
             use sidevoice_platform::fs::TestFiles;
             Files::let_others_read(&key);
-            assert!(
-                read_secret(&key).is_err(),
-                "a readable-by-others key was accepted"
-            );
+            assert!(read_secret(&key).is_err(), "a readable-by-others key was accepted");
             Files::shut_others_out(&key);
             assert_eq!(read_secret(&key).unwrap(), b"fixture-secret");
             assert!(dir.file("key", b"replacement").is_err());
-            let nested = dir
-                .file("private_keys/AuthKey_1.p8", b"nested-secret")
-                .unwrap();
+            let nested = dir.file("private_keys/AuthKey_1.p8", b"nested-secret").unwrap();
             assert_eq!(read_secret(&nested).unwrap(), b"nested-secret");
             let missing = read_secret(&dir.path.join("missing")).unwrap_err();
             assert!(!missing.contains("fixture-secret"));
@@ -1041,46 +878,17 @@ mod tests {
 
     #[test]
     fn a_tauri_build_is_its_arguments_in_order() {
-        let build = TauriBuild {
-            target: Some("aarch64-apple-darwin"),
-            bundles: "app",
-            ..TauriBuild::default()
-        };
-        assert_eq!(
-            build.args(),
-            [
-                "build",
-                "--target",
-                "aarch64-apple-darwin",
-                "--bundles",
-                "app"
-            ]
-        );
-        let probe = TauriBuild {
-            features: Some("probe"),
-            ..build
-        };
-        assert_eq!(
-            probe.args().join(" "),
-            "build --target aarch64-apple-darwin --bundles app --features probe"
-        );
-        let host = TauriBuild {
-            bundles: "deb,appimage",
-            config: Some("{}"),
-            ..TauriBuild::default()
-        };
-        assert_eq!(
-            host.args().join(" "),
-            "build --bundles deb,appimage --config {}"
-        );
+        let build = TauriBuild { target: Some("aarch64-apple-darwin"), bundles: "app", ..TauriBuild::default() };
+        assert_eq!(build.args(), ["build", "--target", "aarch64-apple-darwin", "--bundles", "app"]);
+        let probe = TauriBuild { features: Some("probe"), ..build };
+        assert_eq!(probe.args().join(" "), "build --target aarch64-apple-darwin --bundles app --features probe");
+        let host = TauriBuild { bundles: "deb,appimage", config: Some("{}"), ..TauriBuild::default() };
+        assert_eq!(host.args().join(" "), "build --bundles deb,appimage --config {}");
     }
 
     #[test]
     fn a_release_and_a_nightly_make_the_update_artifacts_and_a_nightly_has_its_own_version() {
-        assert_eq!(
-            channel_config(Channel::Release, "").unwrap(),
-            r#"{"bundle":{"createUpdaterArtifacts":true}}"#
-        );
+        assert_eq!(channel_config(Channel::Release, "").unwrap(), r#"{"bundle":{"createUpdaterArtifacts":true}}"#);
         let nightly = channel_config(Channel::Nightly, "0.4.3-nightly.17").unwrap();
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&nightly).unwrap(),
@@ -1091,27 +899,14 @@ mod tests {
             "no feed: the app's, by its channel (core updater::feed)"
         );
         assert_eq!(channel_config(Channel::Dev, ""), None);
-        assert_eq!(
-            TauriBuild::default().channel,
-            Channel::Dev,
-            "a laptop's build is never a release"
-        );
+        assert_eq!(TauriBuild::default().channel, Channel::Dev, "a laptop's build is never a release");
     }
 
     #[test]
     fn a_nightly_s_version_is_above_the_last_release_and_grows_every_run() {
         assert_eq!(nightly_version("0.4.2", "17").unwrap(), "0.4.3-nightly.17");
-        assert_eq!(
-            nightly_version("0.3.0-rc.1", "5").unwrap(),
-            "0.3.1-nightly.5"
-        );
-        for (released, run) in [
-            ("0.4", "17"),
-            ("0.4.x", "17"),
-            ("0.4.2", ""),
-            ("0.4.2", "a"),
-            ("0.4.2", "-1"),
-        ] {
+        assert_eq!(nightly_version("0.3.0-rc.1", "5").unwrap(), "0.3.1-nightly.5");
+        for (released, run) in [("0.4", "17"), ("0.4.x", "17"), ("0.4.2", ""), ("0.4.2", "a"), ("0.4.2", "-1")] {
             assert!(nightly_version(released, run).is_err(), "{released} {run}");
         }
     }
@@ -1129,10 +924,7 @@ mod tests {
         assert!(nightly("0.3.0-rc.1", "5") < nightly("0.3.0", "6"));
         // Above the release it is built after, below whichever comes next (a patch, a minor, a major).
         for next in ["0.4.3", "0.5.0", "1.0.0"] {
-            assert!(
-                v("0.4.2") < nightly("0.4.2", "17") && nightly("0.4.2", "17") < v(next),
-                "{next}"
-            );
+            assert!(v("0.4.2") < nightly("0.4.2", "17") && nightly("0.4.2", "17") < v(next), "{next}");
         }
     }
 
@@ -1144,18 +936,12 @@ mod tests {
         // macOS: CFBundleVersion is one to three numbers, dot-separated.
         let nightly = nightly_version("0.4.2", "17").unwrap();
         let parts: Vec<&str> = numeric_version(&nightly).split('.').collect();
-        assert!(
-            parts.len() <= 3 && parts.iter().all(|p| p.parse::<u64>().is_ok()),
-            "{parts:?}"
-        );
+        assert!(parts.len() <= 3 && parts.iter().all(|p| p.parse::<u64>().is_ok()), "{parts:?}");
     }
 
     #[test]
     fn a_secret_argument_is_never_shown() {
-        let cmd = Cmd::new("tool")
-            .args(["unlock", "-p"])
-            .secret("hunter2")
-            .arg("k.db");
+        let cmd = Cmd::new("tool").args(["unlock", "-p"]).secret("hunter2").arg("k.db");
         assert_eq!(cmd.shown(), "tool unlock -p *** k.db");
     }
 
@@ -1177,10 +963,7 @@ mod tests {
 
     #[test]
     fn a_binary_contains_a_marker() {
-        assert!(contains(
-            b"\0\0SIDEVOICE_DEBUG_PAGE\0",
-            "SIDEVOICE_DEBUG_PAGE"
-        ));
+        assert!(contains(b"\0\0SIDEVOICE_DEBUG_PAGE\0", "SIDEVOICE_DEBUG_PAGE"));
         assert!(!contains(b"SIDEVOICE_DEBUG_PAG", "SIDEVOICE_DEBUG_PAGE"));
     }
 }

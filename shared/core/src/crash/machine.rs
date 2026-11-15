@@ -4,7 +4,8 @@
 //!
 //! - An app set to `never` neither fetches nor acknowledges: [`sync`] does not call the machine at all.
 //! - A record is read again here ([`MachineRecord::parse`]): only the closed list is taken, every text bounded and free of
-//!   control characters, the id a UUID v4. One that does not parse is skipped, never sent and never acknowledged.
+//!   control characters, the id a UUID v4, the message printable ASCII or the marker, and every tail line a warning or an
+//!   error of the piece's own log with its time as an offset from the crash ([`super::tail`]). One that does not parse is skipped, never sent and never acknowledged.
 //! - Send first, acknowledge after. A failed send leaves the record for the next pass; a failed acknowledgement means the
 //!   next pass sends it again under the same `event_id`, which Sentry keeps once.
 
@@ -86,6 +87,14 @@ impl MachineRecord {
         {
             return None;
         }
+        let message = text(&value["exception"]["message"], 200)?;
+        if message != super::event::FORMATTED_MARKER && !message.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+            return None;
+        }
+        let log_tail = lines(&value["log_tail"], MAX_TAIL, 600)?;
+        if !log_tail.iter().all(|line| super::tail::is_tail_line(line, piece)) {
+            return None;
+        }
         let (first_at, last_at) = (time_of(&value["first_at"])?, time_of(&value["last_at"])?);
         Some(MachineRecord {
             id,
@@ -97,9 +106,9 @@ impl MachineRecord {
             last_at: first_at.max(last_at),
             count: u32::try_from(value["count"].as_u64().unwrap_or(1).clamp(1, u64::from(u32::MAX))).unwrap_or(1),
             exception_type,
-            message: text(&value["exception"]["message"], 200)?,
+            message,
             backtrace: lines(&value["backtrace"], MAX_FRAMES, 240)?,
-            log_tail: lines(&value["log_tail"], MAX_TAIL, 600)?,
+            log_tail,
         })
     }
 

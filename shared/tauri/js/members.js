@@ -420,10 +420,12 @@
   }
 
   /** The app's crash reports setting (docs/BRIDGE.md -> "Crash reports"): the app keeps it and holds to it; the page reads it
-   *  and passes on the person's choice (`auto` or `never`). A rejection means the app did not keep the choice. */
+   *  and passes on the person's choice (`auto` or `never`). A rejection means the app did not keep the choice.
+   *  `installId()` is the id its own reports carry (what "Ver qué se envía" shows), `null` under `never`. */
   function crashReports() {
     return Object.freeze({
       get: () => call("crash_reports", { action: "get" }).then((answer) => answer?.mode),
+      installId: () => call("crash_reports", { action: "install_id" }).then((answer) => answer?.installId ?? null),
       set: (mode) => call("crash_reports", { action: "set", mode }).then(() => undefined),
     });
   }

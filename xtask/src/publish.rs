@@ -40,10 +40,7 @@ pub fn published_name(file: &str, nightly: bool) -> Result<String> {
     if !nightly {
         return Ok(file.to_owned());
     }
-    match file
-        .split_once('_')
-        .and_then(|(product, rest)| Some((product, rest.split_once('_')?)))
-    {
+    match file.split_once('_').and_then(|(product, rest)| Some((product, rest.split_once('_')?))) {
         Some((product, (version, rest))) if version.starts_with(|c: char| c.is_ascii_digit()) => {
             Ok(format!("{product}_nightly_{rest}"))
         }
@@ -53,11 +50,7 @@ pub fn published_name(file: &str, nightly: bool) -> Result<String> {
 
 /// The kinds of installer missing from `names`.
 pub fn missing_kinds(names: &[String]) -> Vec<&'static str> {
-    KINDS
-        .iter()
-        .copied()
-        .filter(|kind| !names.iter().any(|name| name.ends_with(&format!(".{kind}"))))
-        .collect()
+    KINDS.iter().copied().filter(|kind| !names.iter().any(|name| name.ends_with(&format!(".{kind}")))).collect()
 }
 
 /// `sha256sum` of `paths`: one `<hex>  <name>` line each.
@@ -89,12 +82,7 @@ fn all_files(dir: &Path) -> Result<Vec<PathBuf>> {
 
 /// The updates by how their names end: macOS's app as a .tar.gz (Linux's and Windows' are the installers), and the
 /// signatures.
-const UPDATES: &[&str] = &[
-    ".app.tar.gz",
-    ".app.tar.gz.sig",
-    ".AppImage.sig",
-    "-setup.exe.sig",
-];
+const UPDATES: &[&str] = &[".app.tar.gz", ".app.tar.gz.sig", ".AppImage.sig", "-setup.exe.sig"];
 
 pub fn is_update(file: &str) -> bool {
     UPDATES.iter().any(|end| file.ends_with(end))
@@ -109,13 +97,8 @@ pub fn update_files(version: &str) -> [(&'static str, String); 3] {
         ("linux", "x86_64", "amd64.AppImage"),
     ]
     .map(|(os, arch, suffix)| {
-        let target =
-            sidevoice_platform::target::for_platform(os, arch).expect("published desktop target");
-        let key = if target.os == "macos" {
-            "darwin-aarch64"
-        } else {
-            target.name
-        };
+        let target = sidevoice_platform::target::for_platform(os, arch).expect("published desktop target");
+        let key = if target.os == "macos" { "darwin-aarch64" } else { target.name };
         (key, format!("Sidevoice_{version}_{suffix}"))
     })
 }
@@ -126,10 +109,7 @@ pub fn latest_json(version: &str, base: &str, sigs: &[(&str, String, String)]) -
     let platforms: serde_json::Map<String, serde_json::Value> = sigs
         .iter()
         .map(|(platform, file, signature)| {
-            (
-                platform.to_string(),
-                serde_json::json!({ "signature": signature, "url": format!("{base}/{file}") }),
-            )
+            (platform.to_string(), serde_json::json!({ "signature": signature, "url": format!("{base}/{file}") }))
         })
         .collect();
     let manifest = serde_json::json!({ "version": version, "platforms": platforms });
@@ -149,10 +129,7 @@ pub fn assemble(kind: &str, tag: Option<&str>) -> Result<()> {
     let version = version()?;
     let assets = assets();
     // As `mkdir assets` did: never over an earlier one.
-    ensure(
-        !assets.exists(),
-        format!("{} is there already: remove it first", assets.display()),
-    )?;
+    ensure(!assets.exists(), format!("{} is there already: remove it first", assets.display()))?;
     crate::util::mkdir(&assets)?;
     for file in all_files(&artifacts())? {
         let built = name(&file);
@@ -163,28 +140,15 @@ pub fn assemble(kind: &str, tag: Option<&str>) -> Result<()> {
     }
     let names: Vec<String> = files(&assets)?.iter().map(|p| name(p)).collect();
     let missing = missing_kinds(&names);
-    ensure(
-        missing.is_empty(),
-        format!("no {} among the artifacts", missing.join(", ")),
-    )?;
+    ensure(missing.is_empty(), format!("no {} among the artifacts", missing.join(", ")))?;
     let mut sigs = Vec::new();
     for (platform, file) in update_files(if nightly { "nightly" } else { &version }) {
         let signature = fs::read_to_string(assets.join(format!("{file}.sig"))).unwrap_or_default();
-        ensure(
-            !signature.trim().is_empty(),
-            format!("no {file}.sig among the artifacts, or it is empty"),
-        )?;
-        ensure(
-            fs::metadata(assets.join(&file)).is_ok_and(|m| m.len() > 0),
-            format!("no {file}, or it is empty"),
-        )?;
+        ensure(!signature.trim().is_empty(), format!("no {file}.sig among the artifacts, or it is empty"))?;
+        ensure(fs::metadata(assets.join(&file)).is_ok_and(|m| m.len() > 0), format!("no {file}, or it is empty"))?;
         sigs.push((platform, file, signature));
     }
-    let version = if nightly {
-        ci_nightly_version()?
-    } else {
-        version
-    };
+    let version = if nightly { ci_nightly_version()? } else { version };
     let repo_name = std::env::var("GH_REPO").map_err(|_| "GH_REPO is not set (owner/name)")?;
     let base = format!("https://github.com/{repo_name}/releases/download/{tag}");
     let latest = latest_json(&version, &base, &sigs);
@@ -234,15 +198,8 @@ pub fn release_flags(tag: &str) -> [&'static str; 3] {
 pub fn release(tag: &str) -> Result<()> {
     ensure(is_desktop_tag(tag), not_desktop(tag))?;
     let uploads = uploads()?;
-    Cmd::new("gh")
-        .args(["release", "upload", tag])
-        .args(&uploads)
-        .arg("--clobber")
-        .run()?;
-    Cmd::new("gh")
-        .args(["release", "edit", tag])
-        .args(release_flags(tag))
-        .run()
+    Cmd::new("gh").args(["release", "upload", tag]).args(&uploads).arg("--clobber").run()?;
+    Cmd::new("gh").args(["release", "edit", tag]).args(release_flags(tag)).run()
 }
 
 /// The nightly's notes.
@@ -260,9 +217,7 @@ pub fn stale<'a>(published: &'a str, local: &[String]) -> Vec<&'a str> {
     published
         .lines()
         .filter(|name| {
-            !name.is_empty()
-                && ![APK_NIGHTLY, APK_NIGHTLY_SUM].contains(name)
-                && !local.iter().any(|l| l == name)
+            !name.is_empty() && ![APK_NIGHTLY, APK_NIGHTLY_SUM].contains(name) && !local.iter().any(|l| l == name)
         })
         .collect()
 }
@@ -272,15 +227,9 @@ pub fn stale<'a>(published: &'a str, local: &[String]) -> Vec<&'a str> {
 /// (`--clobber`); nothing else of the release is touched. The release is the desktop nightly's: it must exist.
 pub fn apk_nightly() -> Result<()> {
     let apk = repo().join("dist/Sidevoice-android.apk");
-    ensure(
-        fs::metadata(&apk).is_ok_and(|m| m.len() > 0),
-        format!("{}: no signed APK, or it is empty", apk.display()),
-    )?;
+    ensure(fs::metadata(&apk).is_ok_and(|m| m.len() > 0), format!("{}: no signed APK, or it is empty", apk.display()))?;
     let dir = repo().join("assets-apk");
-    ensure(
-        !dir.exists(),
-        format!("{} is there already: remove it first", dir.display()),
-    )?;
+    ensure(!dir.exists(), format!("{} is there already: remove it first", dir.display()))?;
     crate::util::mkdir(&dir)?;
     let published = dir.join(APK_NIGHTLY);
     fs::copy(&apk, &published).map_err(|e| format!("{}: {e}", apk.display()))?;
@@ -291,10 +240,7 @@ pub fn apk_nightly() -> Result<()> {
     // The release is the desktop's to create: a first push may get here before it does, so wait a little for it.
     let mut exists = false;
     for attempt in 0..10 {
-        exists = Cmd::new("gh")
-            .args(["release", "view", "nightly"])
-            .attempt()?
-            .0;
+        exists = Cmd::new("gh").args(["release", "view", "nightly"]).attempt()?.0;
         if exists {
             break;
         }
@@ -306,12 +252,7 @@ pub fn apk_nightly() -> Result<()> {
         exists,
         "there is no `nightly` release after 5 minutes: the desktop's publish-nightly (build.yml) creates it",
     )?;
-    Cmd::new("gh")
-        .args(["release", "upload", "nightly"])
-        .arg(&published)
-        .arg(&sum_file)
-        .arg("--clobber")
-        .run()
+    Cmd::new("gh").args(["release", "upload", "nightly"]).arg(&published).arg(&sum_file).arg("--clobber").run()
 }
 
 /// `publish nightly`: the tag `nightly` moved to this commit (`GITHUB_SHA`, or HEAD), and the one `nightly`
@@ -322,98 +263,52 @@ pub fn nightly() -> Result<()> {
     let repo_name = std::env::var("GH_REPO").map_err(|_| "GH_REPO is not set (owner/name)")?;
     let sha = match std::env::var("GITHUB_SHA") {
         Ok(sha) if !sha.is_empty() => sha,
-        _ => Cmd::new("git")
-            .args(["rev-parse", "HEAD"])
-            .stdout()?
-            .trim()
-            .to_owned(),
+        _ => Cmd::new("git").args(["rev-parse", "HEAD"]).stdout()?.trim().to_owned(),
     };
     let when = match std::env::var("WHEN") {
         Ok(when) if !when.is_empty() => when,
-        _ => Cmd::new("git")
-            .args(["show", "-s", "--format=%cI", &sha])
-            .stdout()?
-            .trim()
-            .to_owned(),
+        _ => Cmd::new("git").args(["show", "-s", "--format=%cI", &sha]).stdout()?.trim().to_owned(),
     };
     let quiet = |cmd: Cmd| cmd.stdout().map(drop);
-    let (exists, _) = Cmd::new("gh")
-        .args(["api", &format!("repos/{repo_name}/git/ref/tags/nightly")])
-        .attempt()?;
+    let (exists, _) = Cmd::new("gh").args(["api", &format!("repos/{repo_name}/git/ref/tags/nightly")]).attempt()?;
     if exists {
         quiet(
-            Cmd::new("gh")
-                .args([
-                    "api",
-                    "-X",
-                    "PATCH",
-                    &format!("repos/{repo_name}/git/refs/tags/nightly"),
-                ])
-                .args(["-f", &format!("sha={sha}"), "-F", "force=true"]),
+            Cmd::new("gh").args(["api", "-X", "PATCH", &format!("repos/{repo_name}/git/refs/tags/nightly")]).args([
+                "-f",
+                &format!("sha={sha}"),
+                "-F",
+                "force=true",
+            ]),
         )?;
     } else {
-        quiet(
-            Cmd::new("gh")
-                .args(["api", "-X", "POST", &format!("repos/{repo_name}/git/refs")])
-                .args(["-f", "ref=refs/tags/nightly", "-f", &format!("sha={sha}")]),
-        )?;
+        quiet(Cmd::new("gh").args(["api", "-X", "POST", &format!("repos/{repo_name}/git/refs")]).args([
+            "-f",
+            "ref=refs/tags/nightly",
+            "-f",
+            &format!("sha={sha}"),
+        ]))?;
     }
     let notes = nightly_notes(&sha, &when);
     let title = "Nightly (main)";
-    let (published, _) = Cmd::new("gh")
-        .args(["release", "view", "nightly"])
-        .attempt()?;
+    let (published, _) = Cmd::new("gh").args(["release", "view", "nightly"]).attempt()?;
     if published {
         Cmd::new("gh")
-            .args([
-                "release",
-                "edit",
-                "nightly",
-                "--title",
-                title,
-                "--notes",
-                &notes,
-                "--prerelease",
-                "--latest=false",
-            ])
+            .args(["release", "edit", "nightly", "--title", title, "--notes", &notes, "--prerelease", "--latest=false"])
             .run()?;
-        Cmd::new("gh")
-            .args(["release", "upload", "nightly"])
-            .args(&uploads)
-            .arg("--clobber")
-            .run()?;
+        Cmd::new("gh").args(["release", "upload", "nightly"]).args(&uploads).arg("--clobber").run()?;
         // Anything left from an older snapshot that this one did not replace.
-        let names = Cmd::new("gh")
-            .args([
-                "release",
-                "view",
-                "nightly",
-                "--json",
-                "assets",
-                "-q",
-                ".assets[].name",
-            ])
-            .stdout()?;
+        let names =
+            Cmd::new("gh").args(["release", "view", "nightly", "--json", "assets", "-q", ".assets[].name"]).stdout()?;
         let local: Vec<String> = uploads.iter().map(|p| name(p)).collect();
         for old in stale(&names, &local) {
-            Cmd::new("gh")
-                .args(["release", "delete-asset", "nightly", old, "--yes"])
-                .run()?;
+            Cmd::new("gh").args(["release", "delete-asset", "nightly", old, "--yes"]).run()?;
         }
         Ok(())
     } else {
         Cmd::new("gh")
             .args(["release", "create", "nightly"])
             .args(&uploads)
-            .args([
-                "--verify-tag",
-                "--title",
-                title,
-                "--notes",
-                &notes,
-                "--prerelease",
-                "--latest=false",
-            ])
+            .args(["--verify-tag", "--title", title, "--notes", &notes, "--prerelease", "--latest=false"])
             .run()
     }
 }
@@ -432,12 +327,7 @@ mod tests {
         ] {
             assert!(is_installer(file), "{file}");
         }
-        for file in [
-            "SHA256SUMS.txt",
-            "LEEME-primera-apertura.txt",
-            "Sidevoice_0.3.0_x64.exe",
-            "icon_16x16.png",
-        ] {
+        for file in ["SHA256SUMS.txt", "LEEME-primera-apertura.txt", "Sidevoice_0.3.0_x64.exe", "icon_16x16.png"] {
             assert!(!is_installer(file), "{file}");
         }
     }
@@ -446,24 +336,12 @@ mod tests {
     fn the_nightly_takes_fixed_names_and_a_release_keeps_its_own() {
         let dmg = "Sidevoice_0.3.0-rc.1_aarch64.dmg";
         assert_eq!(published_name(dmg, false).unwrap(), dmg);
-        assert_eq!(
-            published_name(dmg, true).unwrap(),
-            "Sidevoice_nightly_aarch64.dmg"
-        );
+        assert_eq!(published_name(dmg, true).unwrap(), "Sidevoice_nightly_aarch64.dmg");
         // As the bundler names a nightly's (built as its own version), and the updates.
         for (built, published) in [
-            (
-                "Sidevoice_0.3.1-nightly.5_amd64.AppImage",
-                "Sidevoice_nightly_amd64.AppImage",
-            ),
-            (
-                "Sidevoice_0.3.1-nightly.5_x64-setup.exe.sig",
-                "Sidevoice_nightly_x64-setup.exe.sig",
-            ),
-            (
-                "Sidevoice_0.3.0_aarch64.app.tar.gz",
-                "Sidevoice_nightly_aarch64.app.tar.gz",
-            ),
+            ("Sidevoice_0.3.1-nightly.5_amd64.AppImage", "Sidevoice_nightly_amd64.AppImage"),
+            ("Sidevoice_0.3.1-nightly.5_x64-setup.exe.sig", "Sidevoice_nightly_x64-setup.exe.sig"),
+            ("Sidevoice_0.3.0_aarch64.app.tar.gz", "Sidevoice_nightly_aarch64.app.tar.gz"),
         ] {
             assert_eq!(published_name(built, true).unwrap(), published);
         }
@@ -475,10 +353,7 @@ mod tests {
         let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let all = names(&["a.dmg", "a_x64-setup.exe", "a.deb", "a.AppImage"]);
         assert!(missing_kinds(&all).is_empty());
-        assert_eq!(
-            missing_kinds(&names(&["a.dmg", "a.deb"])),
-            ["exe", "AppImage"]
-        );
+        assert_eq!(missing_kinds(&names(&["a.dmg", "a.deb"])), ["exe", "AppImage"]);
     }
 
     #[test]
@@ -486,50 +361,24 @@ mod tests {
         for tag in ["v0.3.0", "v1.20.3", "v0.3.0-rc.1"] {
             assert!(is_desktop_tag(tag), "{tag}");
         }
-        for tag in [
-            "mobile-v0.1.0",
-            "mobile-v1.0.0-rc.1",
-            "nightly",
-            "mobile-nightly",
-            "0.3.0",
-            "v0.3",
-            "v0.3.0 ",
-        ] {
+        for tag in ["mobile-v0.1.0", "mobile-v1.0.0-rc.1", "nightly", "mobile-nightly", "0.3.0", "v0.3", "v0.3.0 "] {
             assert!(!is_desktop_tag(tag), "{tag}");
         }
     }
 
     #[test]
     fn a_release_candidate_is_never_latest() {
-        assert_eq!(
-            release_flags("v0.3.0-rc.1"),
-            ["--draft=false", "--prerelease", "--latest=false"]
-        );
-        assert_eq!(
-            release_flags("v0.3.0"),
-            ["--draft=false", "--prerelease=false", "--latest"]
-        );
+        assert_eq!(release_flags("v0.3.0-rc.1"), ["--draft=false", "--prerelease", "--latest=false"]);
+        assert_eq!(release_flags("v0.3.0"), ["--draft=false", "--prerelease=false", "--latest"]);
     }
 
     #[test]
     fn the_nightly_drops_only_what_it_does_not_replace() {
-        let local = vec![
-            "Sidevoice_nightly_aarch64.dmg".to_owned(),
-            "SHA256SUMS".to_owned(),
-        ];
-        assert_eq!(
-            stale(
-                "Sidevoice_nightly_aarch64.dmg\nSHA256SUMS\nold.zip\n\n",
-                &local
-            ),
-            ["old.zip"]
-        );
+        let local = vec!["Sidevoice_nightly_aarch64.dmg".to_owned(), "SHA256SUMS".to_owned()];
+        assert_eq!(stale("Sidevoice_nightly_aarch64.dmg\nSHA256SUMS\nold.zip\n\n", &local), ["old.zip"]);
         // The mobile app's assets belong to another job.
         assert_eq!(
-            stale(
-                "old.zip\nSidevoice_nightly_android.apk\nSidevoice_nightly_android.apk.sha256\n",
-                &local
-            ),
+            stale("old.zip\nSidevoice_nightly_android.apk\nSidevoice_nightly_android.apk.sha256\n", &local),
             ["old.zip"]
         );
         assert!(nightly_notes("abc", "2026-10-12T10:00:00Z")
@@ -568,8 +417,7 @@ mod tests {
             .collect();
         let base = "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly";
         let version = crate::util::nightly_version("0.4.2", "17").unwrap();
-        let manifest: serde_json::Value =
-            serde_json::from_str(&latest_json(&version, base, &sigs)).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&latest_json(&version, base, &sigs)).unwrap();
         assert_eq!(
             manifest,
             serde_json::json!({
@@ -588,10 +436,7 @@ mod tests {
             "Sidevoice_0.4.3-nightly.17_amd64.AppImage",
         ] {
             let published = published_name(built, true).unwrap();
-            assert!(
-                sigs.iter().any(|(_, file, _)| *file == published),
-                "{built} → {published}"
-            );
+            assert!(sigs.iter().any(|(_, file, _)| *file == published), "{built} → {published}");
         }
     }
 
@@ -601,10 +446,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let file = dir.join("a.dmg");
         fs::write(&file, b"abc").unwrap();
-        assert_eq!(
-            sums(&[file]).unwrap(),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  a.dmg\n"
-        );
+        assert_eq!(sums(&[file]).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  a.dmg\n");
         fs::remove_dir_all(&dir).unwrap();
     }
 }

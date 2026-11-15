@@ -8,9 +8,7 @@ pub struct PrivateFiles {
 
 impl PrivateCreation for PrivateFiles {
     fn start() -> PrivateFiles {
-        PrivateFiles {
-            before: rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077)),
-        }
+        PrivateFiles { before: rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077)) }
     }
 }
 

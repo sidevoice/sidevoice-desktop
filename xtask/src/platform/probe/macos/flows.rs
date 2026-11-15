@@ -8,15 +8,11 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::platform::file_mode::mode;
-use crate::platform::macos_app::{
-    app_command, binary, fake_node, release_target, AppHome, PROBE_ONLY,
-};
-use crate::platform::probe::checks::{
-    card_frame, check_engine_line, check_voice_line, paths, proxy_port,
-};
+use crate::platform::macos_app::{app_command, binary, fake_node, release_target, AppHome, PROBE_ONLY};
+use crate::platform::probe::checks::{card_frame, check_engine_line, check_voice_line, paths, proxy_port};
 use crate::util::{
-    contains, ensure, grep, has, interrupted, line_count, lines_after, re, read, read_bytes, repo,
-    sleep, wait_for, work, Background, Cmd, TauriBuild,
+    contains, ensure, grep, has, interrupted, line_count, lines_after, re, read, read_bytes, repo, sleep, wait_for,
+    work, Background, Cmd, TauriBuild,
 };
 use crate::Result;
 
@@ -32,10 +28,7 @@ pub fn probe_app() -> Result<()> {
     crate::platform::macos_app::unsigned(build.command()?).run()?;
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
-        ensure(
-            contains(&bytes, marker),
-            format!("the probe build does not carry {marker}"),
-        )?;
+        ensure(contains(&bytes, marker), format!("the probe build does not carry {marker}"))?;
     }
     Ok(())
 }
@@ -43,57 +36,17 @@ pub fn probe_app() -> Result<()> {
 /// What a page cannot send to the local host's proxy, from outside the app, and what the proxy must answer: each
 /// refused, none reaching the core (docs/LOCAL_HOST.md).
 const REFUSALS: &[(&str, &str, &[&str])] = &[
-    (
-        "hostile-origin",
-        "403",
-        &[
-            "-H",
-            "Origin: https://evil.example",
-            "-H",
-            "Authorization: Bearer x",
-        ],
-    ),
+    ("hostile-origin", "403", &["-H", "Origin: https://evil.example", "-H", "Authorization: Bearer x"]),
     ("no-origin", "403", &["-H", "Authorization: Bearer x"]),
-    (
-        "empty-origin",
-        "403",
-        &["-H", "Origin;", "-H", "Authorization: Bearer x"],
-    ),
-    (
-        "null-origin",
-        "403",
-        &["-H", "Origin: null", "-H", "Authorization: Bearer x"],
-    ),
-    (
-        "wrong-host",
-        "421",
-        &[
-            "-H",
-            "Host: localhost:{port}",
-            "-H",
-            "Origin: tauri://localhost",
-        ],
-    ),
-    (
-        "rebound-host",
-        "421",
-        &[
-            "-H",
-            "Host: evil.example:{port}",
-            "-H",
-            "Origin: tauri://localhost",
-        ],
-    ),
+    ("empty-origin", "403", &["-H", "Origin;", "-H", "Authorization: Bearer x"]),
+    ("null-origin", "403", &["-H", "Origin: null", "-H", "Authorization: Bearer x"]),
+    ("wrong-host", "421", &["-H", "Host: localhost:{port}", "-H", "Origin: tauri://localhost"]),
+    ("rebound-host", "421", &["-H", "Host: evil.example:{port}", "-H", "Origin: tauri://localhost"]),
     ("no-secret", "401", &["-H", "Origin: tauri://localhost"]),
     (
         "guessed-secret",
         "401",
-        &[
-            "-H",
-            "Origin: tauri://localhost",
-            "-H",
-            "Authorization: Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        ],
+        &["-H", "Origin: tauri://localhost", "-H", "Authorization: Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
     ),
 ];
 
@@ -119,14 +72,7 @@ const LOCAL_HOST_FACTS: &[&str] = &[
 pub fn local_host() -> Result<()> {
     let app_dir = repo().join("desktop");
     Cmd::new("cargo")
-        .args([
-            "build",
-            "--release",
-            "-p",
-            "sidevoice-desktop-test-support",
-            "--bin",
-            "local-host-ci",
-        ])
+        .args(["build", "--release", "-p", "sidevoice-desktop-test-support", "--bin", "local-host-ci"])
         .dir(&app_dir)
         .run()?;
     let tool = repo().join("target/release/local-host-ci");
@@ -135,11 +81,7 @@ pub fn local_host() -> Result<()> {
     let logs = work("local-host")?;
     let (core_log, app_log) = (logs.join("lh-core.log"), logs.join("lh.log"));
     let data = home.join("Library/Application Support/Sidevoice");
-    let mut core = Cmd::new(&tool)
-        .arg("core")
-        .arg(&data)
-        .env("HOME", home)
-        .spawn(&core_log)?;
+    let mut core = Cmd::new(&tool).arg("core").arg(&data).env("HOME", home).spawn(&core_log)?;
     for _ in 0..50 {
         if data.join("core/core.json").is_file() {
             break;
@@ -154,21 +96,11 @@ pub fn local_host() -> Result<()> {
     let port = proxy_port(&read(&app_log)).unwrap_or_default();
     let mut failed = Vec::new();
     for (name, expected, headers) in REFUSALS {
-        let mut curl = Cmd::new("curl").args([
-            "-s",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "--max-time",
-            "10",
-        ]);
+        let mut curl = Cmd::new("curl").args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10"]);
         for header in *headers {
             curl = curl.arg(header.replace("{port}", &port));
         }
-        let (_, got) = curl
-            .arg(format!("http://127.0.0.1:{port}/api/presentation/echo"))
-            .attempt()?;
+        let (_, got) = curl.arg(format!("http://127.0.0.1:{port}/api/presentation/echo")).attempt()?;
         eprintln!("{name}: {got}");
         if got != *expected {
             failed.push(format!("{name}={got}"));
@@ -178,59 +110,32 @@ pub fn local_host() -> Result<()> {
     sleep(1.0);
     core.stop();
     let (app_text, core_text) = (read(&app_log), read(&core_log));
-    eprintln!(
-        "--- app\n{}",
-        grep(&app_text, "local-host|proxy|page says").join("\n")
-    );
+    eprintln!("--- app\n{}", grep(&app_text, "local-host|proxy|page says").join("\n"));
     eprintln!("--- stand-in core\n{core_text}");
-    ensure(
-        failed.is_empty(),
-        format!("not refused as the table says: {}", failed.join(" ")),
-    )?;
+    ensure(failed.is_empty(), format!("not refused as the table says: {}", failed.join(" ")))?;
     let flow = grep(&app_text, "local-host-flow ok");
-    ensure(
-        !flow.is_empty(),
-        "the bundled page's local-host flow did not report ok",
-    )?;
+    ensure(!flow.is_empty(), "the bundled page's local-host flow did not report ok")?;
     for fact in LOCAL_HOST_FACTS {
-        ensure(
-            flow.iter().any(|line| line.contains(&format!(" {fact}"))),
-            format!("missing {fact}"),
-        )?;
+        ensure(flow.iter().any(|line| line.contains(&format!(" {fact}"))), format!("missing {fact}"))?;
     }
     ensure(
         app_text.contains("proxy answered 204 OPTIONS /api/presentation/echo (preflight)"),
         "the proxy did not answer the preflight",
     )?;
     // Only the page's authenticated requests reached the core, each with the device token.
-    let echoes = core_text
-        .lines()
-        .filter(|line| line.contains("/api/presentation/echo"))
-        .count();
-    ensure(
-        echoes == 1,
-        format!("the core saw {echoes} requests for /api/presentation/echo, not 1"),
-    )?;
+    let echoes = core_text.lines().filter(|line| line.contains("/api/presentation/echo")).count();
+    ensure(echoes == 1, format!("the core saw {echoes} requests for /api/presentation/echo, not 1"))?;
     for request in [
         "fake-core POST /api/presentation/echo origin=tauri://localhost auth=device",
         "fake-core GET /api/browser/call origin=tauri://localhost auth=device",
     ] {
-        ensure(
-            core_text.contains(request),
-            format!("the core never saw: {request}"),
-        )?;
+        ensure(core_text.contains(request), format!("the core never saw: {request}"))?;
     }
-    ensure(
-        !has(&core_text, "auth=other|/api/local/health origin=tauri"),
-        "the core saw what it should not",
-    )?;
+    ensure(!has(&core_text, "auth=other|/api/local/health origin=tauri"), "the core saw what it should not")?;
     // The token, stored by the app alone: 0600 in its config directory.
     let store = crate::platform::macos_app::app_data(home).join("local-host.json");
     let bits = mode(&store)?;
-    ensure(
-        bits == 0o600,
-        format!("{} is {bits:o}, not 600", store.display()),
-    )
+    ensure(bits == 0o600, format!("{} is {bits:o}, not 600", store.display()))
 }
 
 /// `probe probe`: the probe page in the interface's window, the same origin and permission rule as the room: a
@@ -242,48 +147,24 @@ pub fn probe() -> Result<()> {
     let logs = work("probe")?;
     let (node_log, log) = (logs.join("probe-node.log"), logs.join("probe.log"));
     let mut node = fake_node(&node_log)?;
-    let mut app = data
-        .app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")])
-        .spawn(&log)?;
+    let mut app = data.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")]).spawn(&log)?;
     wait_for(&log, "probe-voice", 0, 480);
     app.stop();
     let text = read(&log);
     eprintln!("{text}");
-    eprintln!(
-        "--- macOS {}",
-        Cmd::new("sw_vers")
-            .arg("-productVersion")
-            .stdout()
-            .unwrap_or_default()
-            .trim()
-    );
-    ensure(
-        has(&text, "page tauri://localhost/probe.html"),
-        "the probe page did not load",
-    )?;
+    eprintln!("--- macOS {}", Cmd::new("sw_vers").arg("-productVersion").stdout().unwrap_or_default().trim());
+    ensure(has(&text, "page tauri://localhost/probe.html"), "the probe page did not load")?;
     // Pairing needs a secure context and WebCrypto ECDSA P-256 on the app's own origin.
-    ensure(
-        has(
-            &text,
-            "probe origin=tauri://localhost secure=true ecdsa=true",
-        ),
-        "no secure context with ECDSA P-256",
-    )?;
+    ensure(has(&text, "probe origin=tauri://localhost secure=true ecdsa=true"), "no secure context with ECDSA P-256")?;
     // A local node (http://127.0.0.1:8768) reached from the app's origin with a device token: preflight + CORS.
     node.stop();
-    ensure(
-        text.contains("probe-loopback 200 Bearer probe-token"),
-        "the page did not reach the node on loopback",
-    )?;
+    ensure(text.contains("probe-loopback 200 Bearer probe-token"), "the page did not reach the node on loopback")?;
     ensure(
         read(&node_log).contains("request OPTIONS /api/presentation/echo origin=tauri://localhost"),
         "the node saw no preflight from the app's origin",
     )?;
     // The microphone is the app's here (host.voice): the page is never granted it.
-    ensure(
-        !has(&text, "sidevoice: media Microphone .*Allow"),
-        "the page got the microphone",
-    )?;
+    ensure(!has(&text, "sidevoice: media Microphone .*Allow"), "the page got the microphone")?;
 
     let engine = grep(&text, "probe-engine ok");
     ensure(!engine.is_empty(), "no probe-engine ok")?;
@@ -291,22 +172,14 @@ pub fn probe() -> Result<()> {
     // sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one but its resumable partial file.
     // The app's `Models` in the probe's home: `sidevoice-platform`'s `data_dir::models_dir()` on macOS. Spelled out because xtask
     // is a dependency-light package of its own (no C toolchain, no git dependency) and that crate pulls the local channel.
-    let storage = data
-        .home
-        .join("Library/Application Support/Sidevoice/Models");
-    Cmd::new("ls")
-        .arg("-laR")
-        .arg(storage.join("models"))
-        .run()?;
-    let cancelled = paths(&storage.join("models"))
-        .into_iter()
-        .any(|p| p.to_string_lossy().contains("whisper-small"));
+    let storage = data.home.join("Library/Application Support/Sidevoice/Models");
+    Cmd::new("ls").arg("-laR").arg(storage.join("models")).run()?;
+    let cancelled = paths(&storage.join("models")).into_iter().any(|p| p.to_string_lossy().contains("whisper-small"));
     ensure(!cancelled, "a cancelled download left files")?;
     // The cancelled download's `partial/<digest>.part` is kept, for the next attempt to resume (engine 0.10); anything else in
     // partial/ is a download left half written.
-    let half = paths(&storage.join("partial"))
-        .into_iter()
-        .any(|p| p.is_file() && p.extension().is_none_or(|e| e != "part"));
+    let half =
+        paths(&storage.join("partial")).into_iter().any(|p| p.is_file() && p.extension().is_none_or(|e| e != "part"));
     ensure(!half, "a download was left half written")?;
 
     let voice = grep(&text, "probe-voice ok");
@@ -318,18 +191,12 @@ pub fn probe() -> Result<()> {
     // theirs): one of the choices made names the build and the end-of-turn model.
     ensure(
         settings.iter().any(|made| {
-            made.contains(&format!(
-                r#""stt":{{"catalog":"local","model":"whisper-tiny","build":"{build}"}}"#
-            ))
+            made.contains(&format!(r#""stt":{{"catalog":"local","model":"whisper-tiny","build":"{build}"}}"#))
         }),
         format!("the voice settings do not name the build {build}"),
     )?;
     ensure(
-        settings.iter().any(|made| {
-            made.contains(&format!(
-                r#""end_of_turn":{{"catalog":"local","model":"{turn}"}}"#
-            ))
-        }),
+        settings.iter().any(|made| made.contains(&format!(r#""end_of_turn":{{"catalog":"local","model":"{turn}"}}"#))),
         format!("the voice settings do not name the end-of-turn model {turn}"),
     )?;
     eprintln!("--- voice\n{}", grep(&text, "sidevoice: voice").join("\n"));
@@ -362,9 +229,9 @@ pub fn probe() -> Result<()> {
     let applied = grep(&text, "headset apply");
     eprintln!("{}", applied.join("\n"));
     ensure(
-        applied.last().is_some_and(|line| {
-            re("active=false now_playing=false in_call=false .* handlers=false ").is_match(line)
-        }),
+        applied
+            .last()
+            .is_some_and(|line| re("active=false now_playing=false in_call=false .* handlers=false ").is_match(line)),
         "the app did not let go of the headset",
     )?;
     // The AirPods mute gesture is opted in to at launch and for the process's life (the input-mute notification observed with
@@ -373,23 +240,16 @@ pub fn probe() -> Result<()> {
     let opt_in = grep(&text, "headset: press to mute");
     eprintln!("{}", opt_in.join("\n"));
     ensure(
-        applied
-            .iter()
-            .all(|line| !line.contains("gesture_api=true") || line.ends_with("gesture_on=true")),
+        applied.iter().all(|line| !line.contains("gesture_api=true") || line.ends_with("gesture_on=true")),
         "the mute gesture was not heard before, during and after the call",
     )?;
     ensure(
         !applied.iter().any(|line| line.contains("gesture_api=true"))
-            || opt_in
-                .iter()
-                .any(|line| line.ends_with("headset: press to mute opted in")),
+            || opt_in.iter().any(|line| line.ends_with("headset: press to mute opted in")),
         "the app did not opt in to the mute gesture at launch",
     )?;
     // The app's own mute is not mistaken for an AirPods gesture.
-    ensure(
-        !text.contains("headset airpods"),
-        "echo recorded as a gesture",
-    )
+    ensure(!text.contains("headset airpods"), "echo recorded as a gesture")
 }
 
 /// `probe exit`: quitting and restarting after a call (#121). The probe app runs the probe page, which ends with
@@ -405,12 +265,8 @@ pub fn exit() -> Result<()> {
     // Where macOS writes them: the user's own home, whatever HOME the app was given.
     let reports = crate::platform::macos_app::home()?.join("Library/Logs/DiagnosticReports");
     let before: Vec<_> = crash_reports(&reports);
-    let mut app = data
-        .app(&[
-            ("SIDEVOICE_DEBUG_PAGE", "probe.html"),
-            ("SIDEVOICE_DEBUG_EXIT", "restart"),
-        ])
-        .spawn(&log)?;
+    let mut app =
+        data.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html"), ("SIDEVOICE_DEBUG_EXIT", "restart")]).spawn(&log)?;
     let first = app.ended(480);
     if first.is_none() {
         app.stop();
@@ -419,12 +275,7 @@ pub fn exit() -> Result<()> {
     let relaunched = wait_for(&log, "sidevoice: probe: quitting", 0, 480);
     let mut gone = false;
     for _ in 0..60 {
-        gone = !Cmd::new("pgrep")
-            .arg("-f")
-            .arg(binary())
-            .attempt()
-            .map(|(found, _)| found)
-            .unwrap_or(false);
+        gone = !Cmd::new("pgrep").arg("-f").arg(binary()).attempt().map(|(found, _)| found).unwrap_or(false);
         if gone {
             break;
         }
@@ -437,16 +288,9 @@ pub fn exit() -> Result<()> {
     sleep(10.0);
     let text = read(&log);
     eprintln!("{text}");
-    let new: Vec<_> = crash_reports(&reports)
-        .into_iter()
-        .filter(|report| !before.contains(report))
-        .collect();
+    let new: Vec<_> = crash_reports(&reports).into_iter().filter(|report| !before.contains(report)).collect();
     for report in &new {
-        eprintln!(
-            "--- {}\n{}",
-            report.display(),
-            read(report).chars().take(6000).collect::<String>()
-        );
+        eprintln!("--- {}\n{}", report.display(), read(report).chars().take(6000).collect::<String>());
     }
     let launches = grep(&text, "sidevoice: launch ").len();
     eprintln!("--- first process: {first:?}; launches: {launches}; relaunched one quit: {relaunched}, gone: {gone}");
@@ -454,27 +298,15 @@ pub fn exit() -> Result<()> {
         grep(&text, "probe-exit models=ok build=whisper-tiny/").len() == 2,
         "a run did not load whisper.cpp's build",
     )?;
-    ensure(
-        first.is_some_and(|status| status.success()),
-        format!("the app did not end cleanly on restart: {first:?}"),
-    )?;
+    ensure(first.is_some_and(|status| status.success()), format!("the app did not end cleanly on restart: {first:?}"))?;
     ensure(launches == 2, "the restart did not relaunch the app")?;
     ensure(relaunched && gone, "the relaunched app did not quit")?;
-    ensure(
-        !has(&text, "GGML_ASSERT|libc\\+\\+abi|panicked"),
-        "the app aborted on its way out",
-    )?;
+    ensure(!has(&text, "GGML_ASSERT|libc\\+\\+abi|panicked"), "the app aborted on its way out")?;
     // On a runner (Apple Paravirtual device) whisper.cpp's destructor does not abort with a model left loaded, unlike
     // on a Mac's GPU: what is checked is that none is left when `exit()` runs.
     let released = grep(&text, "sidevoice: voice: every model released").len();
-    eprintln!(
-        "--- the release at exit\n{}",
-        grep(&text, "sidevoice: voice: ").join("\n")
-    );
-    ensure(
-        released == 2,
-        format!("{released} of 2 processes released every model before exit()"),
-    )?;
+    eprintln!("--- the release at exit\n{}", grep(&text, "sidevoice: voice: ").join("\n"));
+    ensure(released == 2, format!("{released} of 2 processes released every model before exit()"))?;
     ensure(
         grep(&text, "sidevoice: probe: exit handlers ran").len() == 2,
         "exit() did not run the static destructors to their end in both processes",
@@ -484,15 +316,10 @@ pub fn exit() -> Result<()> {
 
 /// The crash reports of the app (`sidevoice-desktop-*.ips`) in `dir`.
 fn crash_reports(dir: &Path) -> Vec<std::path::PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
     entries
         .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| {
-            path.file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("sidevoice-desktop"))
-        })
+        .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("sidevoice-desktop")))
         .collect()
 }
 
@@ -505,27 +332,13 @@ pub fn voice_memory_log() -> Result<String> {
     let logs = work("voice-memory")?;
     let log = logs.join("voice-memory.log");
     let mut test = Cmd::new("cargo")
-        .args([
-            "test",
-            "--release",
-            "--lib",
-            "voice::memory",
-            "--",
-            "--include-ignored",
-            "--nocapture",
-        ])
+        .args(["test", "--release", "--lib", "voice::memory", "--", "--include-ignored", "--nocapture"])
         .dir(repo().join("desktop"))
         .spawn(&log)?;
     let status = test.ended(2400);
     let text = read(&log);
-    eprintln!(
-        "{}",
-        grep(&text, "memory phase=|test result|panicked").join("\n")
-    );
-    ensure(
-        status.is_some_and(|status| status.success()),
-        format!("the memory test did not pass: {status:?}"),
-    )?;
+    eprintln!("{}", grep(&text, "memory phase=|test result|panicked").join("\n"));
+    ensure(status.is_some_and(|status| status.success()), format!("the memory test did not pass: {status:?}"))?;
     Ok(text)
 }
 
@@ -538,32 +351,18 @@ pub fn memory_log() -> Result<String> {
     let data = AppHome::new("memory")?;
     let logs = work("memory")?;
     let log = logs.join("memory.log");
-    let mut app = data
-        .app(&[
-            ("SIDEVOICE_DEBUG_PAGE", "memory.html"),
-            ("SIDEVOICE_DEBUG_IDLE_MINUTE_MS", "2000"),
-        ])
-        .spawn(&log)?;
+    let mut app =
+        data.app(&[("SIDEVOICE_DEBUG_PAGE", "memory.html"), ("SIDEVOICE_DEBUG_IDLE_MINUTE_MS", "2000")]).spawn(&log)?;
     // The models install first (a download), then the walk; a step takes ten seconds or so.
     let done = memory_walk(&mut app, &log, &logs);
     app.stop();
     let text = read(&log);
-    eprintln!(
-        "{}",
-        grep(&text, "probe-memory|memory phase=|memory-holds").join("\n")
-    );
+    eprintln!("{}", grep(&text, "probe-memory|memory phase=|memory-holds").join("\n"));
     if !done {
         // Where the walk stopped: the app's last lines.
         eprintln!(
             "--- the app's last lines\n{}",
-            text.lines()
-                .rev()
-                .take(80)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join("\n")
+            text.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
         );
     }
     ensure(!has(&text, "probe-memory-failed"), "the memory walk failed")?;
@@ -602,15 +401,8 @@ fn memory_walk(app: &mut Background, log: &Path, logs: &Path) -> bool {
         let stalled = seen > 0 && last.elapsed().as_secs() >= MEMORY_STALL_SECONDS;
         let late = started.elapsed().as_secs() >= MEMORY_WALK_SECONDS;
         if stalled || late || interrupted().is_err() {
-            let why = if stalled {
-                "no new step for 120 s"
-            } else {
-                "the walk is past 360 s"
-            };
-            eprintln!(
-                "--- {why} (after {} s, {seen} steps): the app's state",
-                started.elapsed().as_secs()
-            );
+            let why = if stalled { "no new step for 120 s" } else { "the walk is past 360 s" };
+            eprintln!("--- {why} (after {} s, {seen} steps): the app's state", started.elapsed().as_secs());
             describe_hung(app.pid(), logs);
             return false;
         }
@@ -622,14 +414,7 @@ fn memory_walk(app: &mut Background, log: &Path, logs: &Path) -> bool {
 /// seconds (the call stacks say which lock or main-thread call each waits on). Each is itself bounded.
 fn describe_hung(pid: u32, logs: &Path) {
     let pid = pid.to_string();
-    let state = Cmd::new("ps")
-        .args([
-            "-o",
-            "pid,stat,etime,time,%cpu,%mem,rss,command",
-            "-p",
-            &pid,
-        ])
-        .attempt();
+    let state = Cmd::new("ps").args(["-o", "pid,stat,etime,time,%cpu,%mem,rss,command", "-p", &pid]).attempt();
     if let Ok((_, text)) = state {
         eprintln!("{text}");
     }
@@ -638,9 +423,8 @@ fn describe_hung(pid: u32, logs: &Path) {
     }
     let file = logs.join("hung-sample.txt");
     let file_arg = file.to_string_lossy().into_owned();
-    if let Ok(mut sample) = Cmd::new("sample")
-        .args([pid.as_str(), "10", "-file", file_arg.as_str()])
-        .spawn(&logs.join("sample.log"))
+    if let Ok(mut sample) =
+        Cmd::new("sample").args([pid.as_str(), "10", "-file", file_arg.as_str()]).spawn(&logs.join("sample.log"))
     {
         if sample.ended(45).is_none() {
             eprintln!("--- sample did not end in 45 s");
@@ -701,10 +485,7 @@ impl Card {
     }
 
     fn shot(&self, name: &str) -> Result<()> {
-        Cmd::new("screencapture")
-            .arg("-x")
-            .arg(self.shots.join(name))
-            .run()
+        Cmd::new("screencapture").arg("-x").arg(self.shots.join(name)).run()
     }
 
     /// The card's window as the window server has it on screen: it must be in front of the editor.
@@ -728,9 +509,7 @@ impl Card {
 
     fn editor_active(&mut self, when: &str) {
         let text = read(&self.editor_log);
-        let last = grep(&text, "editor active=")
-            .last()
-            .map(|line| line.contains("active=true"));
+        let last = grep(&text, "editor active=").last().map(|line| line.contains("active=true"));
         if last != Some(true) {
             self.fail(format!("the editor is not the active app ({when})"));
         }
@@ -747,11 +526,7 @@ pub fn card() -> Result<()> {
     let shots = repo().join("card-shots");
     crate::util::mkdir(&shots)?;
     let tool = dir.join("card-ci");
-    Cmd::new("swiftc")
-        .args(["-O", "-o"])
-        .arg(&tool)
-        .arg("test/fixtures/card-ci.swift")
-        .run()?;
+    Cmd::new("swiftc").args(["-O", "-o"]).arg(&tool).arg("test/fixtures/card-ci.swift").run()?;
     // The editor as an app of its own, so LaunchServices opens and activates it as it would the person's.
     let editor_app = dir.join("Editor.app");
     crate::util::mkdir(&editor_app.join("Contents/MacOS"))?;
@@ -778,31 +553,19 @@ pub fn card() -> Result<()> {
     };
     // A call walked through the card's states (test/fixtures/card-probe.html); this page answers its buttons. Each
     // line with the time, to order it against the editor's and the input's.
-    let mut app = home
-        .app(&[("SIDEVOICE_DEBUG_PAGE", "card-probe.html")])
-        .spawn_timed(&card.log)?;
+    let mut app = home.app(&[("SIDEVOICE_DEBUG_PAGE", "card-probe.html")]).spawn_timed(&card.log)?;
     card.pid = app.pid().to_string();
     let walked = walk(&mut card);
     app.stop();
     // By its binary, so it goes even when it never said its pid.
-    let _ = Cmd::new("pkill")
-        .arg("-f")
-        .arg(card.editor_app.join("Contents/MacOS/Editor"))
-        .attempt();
+    let _ = Cmd::new("pkill").arg("-f").arg(card.editor_app.join("Contents/MacOS/Editor")).attempt();
     eprintln!(
         "--- app\n{}",
-        grep(
-            &read(&card.log),
-            "call-controls|probe-card|(launch|ready|settled) app_active"
-        )
-        .join("\n")
+        grep(&read(&card.log), "call-controls|probe-card|(launch|ready|settled) app_active").join("\n")
     );
     eprintln!("--- editor\n{}", read(&card.editor_log));
     walked?;
-    ensure(
-        card.failed.is_empty(),
-        format!("failed:\n{}", card.failed.join("\n")),
-    )
+    ensure(card.failed.is_empty(), format!("failed:\n{}", card.failed.join("\n")))
 }
 
 /// The card's walk; an error where the YAML stopped short (`exit 1`), with the failed checks so far.
@@ -818,20 +581,12 @@ fn walk(card: &mut Card) -> Result<()> {
     // The person's editor, full screen in its own Space: the room's window loses focus and the card shows over it, a
     // non-activating panel at the status level, on every Space and over full-screen apps, never the key window.
     crate::util::write(&editor_log, "")?;
-    Cmd::new("open")
-        .arg("--stdout")
-        .arg(&editor_log)
-        .arg("--stderr")
-        .arg(&editor_log)
-        .arg(&card.editor_app)
-        .run()?;
+    Cmd::new("open").arg("--stdout").arg(&editor_log).arg("--stderr").arg(&editor_log).arg(&card.editor_app).run()?;
     if !wait_for(&editor_log, "editor ready pid=", 0, 60) {
         return stop(card, "the editor never started");
     }
-    card.editor = re(r"editor ready pid=([0-9]+)")
-        .captures(&read(&editor_log))
-        .map(|c| c[1].to_owned())
-        .unwrap_or_default();
+    card.editor =
+        re(r"editor ready pid=([0-9]+)").captures(&read(&editor_log)).map(|c| c[1].to_owned()).unwrap_or_default();
     card.expect(&editor_log, "editor fullscreen=true key=true", 0);
     if !wait_for(&log, "call-controls shown", 0, 60) {
         return stop(card, "the card never showed");
@@ -839,11 +594,7 @@ fn walk(card: &mut Card) -> Result<()> {
     // The policy at launch, before any window: the Dock tile is the Regular one's (#117).
     card.expect(&log, "launch app_active=(true|false) regular=true", 0);
     // With the card created, Launch Services (what the Dock and Cmd+Tab go by) must also have it as a regular app.
-    card.expect(
-        &log,
-        "ready app_active=(true|false) regular=true policy=0 running_policy=0 .* call_card=on",
-        0,
-    );
+    card.expect(&log, "ready app_active=(true|false) regular=true policy=0 running_policy=0 .* call_card=on", 0);
     // What the system itself says, for the log: Launch Services' record of the process, and the Dock's tiles.
     for cmd in [
         Cmd::new("lsappinfo").arg("info").arg(format!("pid={}", card.pid)),
@@ -857,10 +608,7 @@ fn walk(card: &mut Card) -> Result<()> {
         }
     }
     card.expect(&log, "call-controls panel ", 0);
-    let panel = grep(&read(&log), "call-controls panel ")
-        .last()
-        .map(|l| l.to_string())
-        .unwrap_or_default();
+    let panel = grep(&read(&log), "call-controls panel ").last().map(|l| l.to_string()).unwrap_or_default();
     if !re("nonactivating=true level=25 all_spaces=true fullscreen_auxiliary=true key=false visible=true .* app_active=false regular=true").is_match(&panel) {
         card.fail(format!("the panel is not what #4 asks, or the app is no longer a regular one (#117): {panel}"));
     }
@@ -873,11 +621,7 @@ fn walk(card: &mut Card) -> Result<()> {
     }
     card.shot("1-over-fullscreen-you-talking.png")?;
     // The card's page may not capture: it asked for the microphone (probe build) and was refused.
-    card.expect(
-        &log,
-        r#"call-controls refused \{"capture":"[A-Za-z-]*","command":"probe-capture"\}"#,
-        0,
-    );
+    card.expect(&log, r#"call-controls refused \{"capture":"[A-Za-z-]*","command":"probe-capture"\}"#, 0);
     let refused = grep(&read(&log), r#"call-controls refused \{"capture""#)
         .last()
         .map(|l| l.contains(r#""capture":"NotAllowedError""#));
@@ -894,11 +638,7 @@ fn walk(card: &mut Card) -> Result<()> {
     // The pointer over the card (the app polls it: a panel that is never key gets no hover): its controls appear
     // below it, and the window grows to hold them.
     card.hover(160, 30)?;
-    card.expect(
-        &log,
-        r"call-controls pointer inside=Some\(true\) app_active=false",
-        0,
-    );
+    card.expect(&log, r"call-controls pointer inside=Some\(true\) app_active=false", 0);
     sleep(1.5);
     card.card();
     let h = card.at.unwrap_or_default().3;
@@ -930,13 +670,7 @@ fn walk(card: &mut Card) -> Result<()> {
     let before = card.at.map(|(x, y, _, _)| (x, y));
     let from = line_count(&log);
     let (x, y, _, _) = card.at.unwrap_or_default();
-    card.tool(&[
-        "drag",
-        &(x + 40).to_string(),
-        &(y + 39).to_string(),
-        "-300",
-        "200",
-    ])?;
+    card.tool(&["drag", &(x + 40).to_string(), &(y + 39).to_string(), "-300", "200"])?;
     card.expect(&log, "call-controls dropped at .* app_active=false", from);
     sleep(1.0);
     card.card();
@@ -977,11 +711,7 @@ fn walk(card: &mut Card) -> Result<()> {
     card.shot("7-near-agent-speaking.png")?;
     let from = line_count(&log);
     card.move_to(200, 700)?;
-    card.expect(
-        &log,
-        r"call-controls pointer inside=Some\(false\) app_active=false",
-        from,
-    );
+    card.expect(&log, r"call-controls pointer inside=Some\(false\) app_active=false", from);
     card.expect(&log, "probe-card phase=muted", 0);
     sleep(2.0);
     card.shot("8-rest-muted-agent-speaking.png")?;
@@ -1014,17 +744,9 @@ fn walk(card: &mut Card) -> Result<()> {
         card.fail("the editor stopped being the active app");
     }
     // Nor the keyboard: its window stays key from full screen on (a loss put right later still counts).
-    let full_screen = editor_text
-        .lines()
-        .skip_while(|line| !line.contains("editor fullscreen=true key=true"));
-    if full_screen
-        .into_iter()
-        .any(|line| line.contains("editor key=false"))
-    {
-        let lost = editor_text
-            .lines()
-            .find(|line| line.contains("editor key=false"))
-            .unwrap_or("");
+    let full_screen = editor_text.lines().skip_while(|line| !line.contains("editor fullscreen=true key=true"));
+    if full_screen.into_iter().any(|line| line.contains("editor key=false")) {
+        let lost = editor_text.lines().find(|line| line.contains("editor key=false")).unwrap_or("");
         card.fail(format!("the editor's window lost the keyboard: {lost}"));
     }
     Ok(())
@@ -1044,17 +766,10 @@ impl Card {
             r#"call-controls refused \{"button":"[^"]+","command":"probe-hover","cursor":"pointer"\}"#,
             from,
         );
-        let cursor = Cmd::new(&self.tool)
-            .arg("cursor")
-            .attempt()
-            .map(|(_, out)| out)
-            .unwrap_or_default();
+        let cursor = Cmd::new(&self.tool).arg("cursor").attempt().map(|(_, out)| out).unwrap_or_default();
         eprint!("{cursor}");
         if !cursor.contains("cursor hand=true") {
-            self.fail(format!(
-                "the hand cursor did not show over {button}: {}",
-                cursor.trim()
-            ));
+            self.fail(format!("the hand cursor did not show over {button}: {}", cursor.trim()));
         }
         self.editor_active(&format!("after hovering {button}"));
         Ok(())

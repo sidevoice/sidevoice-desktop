@@ -25,14 +25,29 @@ adapters in `desktop/tauri/src/crash_reports.rs` and `mobile/tauri/src/crash_rep
 (`before_send`), so nothing an SDK default, integration or scope adds survives: `event_id`, `timestamp`, `level`
 (`fatal`), `platform`, `release`, tags (`service.name`, `os.type`, `os.name`, `host.arch`, `thread.name`,
 `installation.id`), the exception (`type`, `value`, frames with `function`, a bare `filename`, `lineno`,
-`instruction_addr`), `debug_meta.images` (the app's own modules: bare name, arch, address, size, debug id; for
-symbolication) and, for a machine record only, `extra` (`count`, `first_at`, `log_tail`: the record's own masked warnings
+`instruction_addr`), `debug_meta.images` (only the modules a frame of the stack is in: bare name, arch, address, size,
+debug id; for symbolication. The list of what else is loaded would say which assistive technology or security software is
+installed, so it is never sent) and, for a machine record only, `extra` (`count`, `first_at`, `log_tail`: the record's own masked warnings
 and errors). No user, IP, request, breadcrumb, context, server name, module list or environment. `send_default_pii` is
 off, there are no default integrations and no breadcrumbs, and the SDK has no transport of its own here.
 
 The **installation id** is 128 random bits from the OS, kept in `crash-reports.json` in the app's data folder, replaced
 after a year, and forgotten when the person chooses "No enviar". It is a tag on the app's own events only. No other user
 identifier exists.
+
+The page can show the id (`host.crashReports.installId()`, "ID de instalación" under "Ver qué se envía"): the id the next
+report carries, made on first ask, `null` under "No enviar".
+
+## When a send happens, and how long it may take
+
+- A machine's record is posted on the pass's own thread (up to 10 s) and its outcome is the event's own (by event id): an
+  app panic posted at the same time cannot make a failed record look delivered, so it is not acknowledged.
+- The app's own panic is posted from the panic hook: best-effort, at most 2 s, so a slow network cannot hold a dying app up.
+- The setting file: no file is "auto"; a file that is there but cannot be read or understood means "never" for that run (a
+  warning with `error.type` `shared.crash-settings-unreadable`), and is left as it is until the person chooses.
+- A machine's record is checked again here: the message is printable ASCII or the marker, every tail line is a warning or an
+  error of the piece's own log with its time as an offset from the crash (`-12.345s`) and its ids as tokens of that record
+  (`d1`, `c2`; both made by the machine, sidevoice-core's `crash` module); anything else and the record is skipped.
 
 ## "No enviar"
 

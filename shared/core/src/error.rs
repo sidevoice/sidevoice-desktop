@@ -15,17 +15,20 @@ pub enum SharedError {
     CrashRecordNotAcknowledged,
     #[error("the crash report settings could not be kept")]
     CrashSettingsNotKept,
+    #[error("the crash report settings could not be read")]
+    CrashSettingsUnreadable,
 }
 
 impl SharedError {
     /// Every variant, for the test that holds the codes unique and well formed.
-    pub const ALL: [SharedError; 6] = [
+    pub const ALL: [SharedError; 7] = [
         SharedError::InvalidLogFilter,
         SharedError::NativeEngineFailed,
         SharedError::VoiceModelsHeld,
         SharedError::CrashReportNotSent,
         SharedError::CrashRecordNotAcknowledged,
         SharedError::CrashSettingsNotKept,
+        SharedError::CrashSettingsUnreadable,
     ];
 
     /// The stable code, `error.type` in the log.
@@ -37,6 +40,7 @@ impl SharedError {
             SharedError::CrashReportNotSent => "shared.crash-report-not-sent",
             SharedError::CrashRecordNotAcknowledged => "shared.crash-record-not-acknowledged",
             SharedError::CrashSettingsNotKept => "shared.crash-settings-not-kept",
+            SharedError::CrashSettingsUnreadable => "shared.crash-settings-unreadable",
         }
     }
 }

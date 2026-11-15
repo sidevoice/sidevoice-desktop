@@ -10,7 +10,7 @@
 //! | `release` | `<service.name>@<version>`: `sidevoice-desktop@x`, `sidevoice-core@x`, `sidevoice-connector@x` |
 //! | `tags` | `service.name`, `os.type`, `os.name`, `host.arch`, `thread.name`, `installation.id` (the app's own events only) |
 //! | `exception` | `type`, `value` (a literal or the marker), frames: `function`, `filename` (a bare name), `lineno`, `instruction_addr` |
-//! | `debug_meta.images` | Loaded modules for symbolication: bare name, `arch`, address, size, debug id, code id (the app's own events only) |
+//! | `debug_meta.images` | The loaded modules that hold a frame of the stack, for symbolication: bare name, `arch`, address, size, debug id, code id (the app's own events only). A module no frame is in is never sent: the list of what else is loaded (assistive technology, security software) says what is installed |
 //! | `extra` | `count`, `first_at`, `log_tail` (a machine's record only: its own masked warnings and errors) |
 //! | `sdk` | The SDK's name and version |
 //!
@@ -42,7 +42,7 @@ pub struct OwnPanic<'a> {
     pub thread: &'a str,
     /// The frames, with addresses, from `sentry`'s backtrace integration.
     pub stacktrace: Option<Stacktrace>,
-    /// The loaded modules.
+    /// The loaded modules (only those a frame is in are sent).
     pub images: Vec<DebugImage>,
 }
 
@@ -169,9 +169,18 @@ fn frame(frame: &Frame) -> Frame {
     }
 }
 
-fn image(image: &DebugImage) -> Option<DebugImage> {
+/// Whether a frame of the stack is at an address inside the image.
+fn holds_a_frame(image: &SymbolicDebugImage, addresses: &[u64]) -> bool {
+    addresses.iter().any(|at| at.checked_sub(image.image_addr.0).is_some_and(|offset| offset < image.image_size))
+}
+
+fn image(image: &DebugImage, addresses: &[u64]) -> Option<DebugImage> {
     // `debug_images()` makes symbolic images; anything else is not ours to send.
     let DebugImage::Symbolic(image) = image else { return None };
+    // Only the modules the stack runs through: the symbolicator needs no other.
+    if !holds_a_frame(image, addresses) {
+        return None;
+    }
     Some(DebugImage::Symbolic(SymbolicDebugImage {
         name: bare(&image.name)?,
         arch: image.arch.clone(),
@@ -203,7 +212,15 @@ pub fn sanitize(event: Event<'static>) -> Event<'static> {
         .collect::<Vec<_>>();
     let tags = event.tags.into_iter().filter(|(name, _)| TAGS.contains(&name.as_str())).collect();
     let extra = event.extra.into_iter().filter(|(name, _)| EXTRAS.contains(&name.as_str())).collect();
-    let images: Vec<DebugImage> = event.debug_meta.images.iter().filter_map(image).collect();
+    let addresses: Vec<u64> = event
+        .exception
+        .values
+        .iter()
+        .filter_map(|exception| exception.stacktrace.as_ref())
+        .flat_map(|trace| trace.frames.iter().filter_map(|frame| frame.instruction_addr.map(|addr| addr.0)))
+        .collect();
+    let images: Vec<DebugImage> =
+        event.debug_meta.images.iter().filter_map(|loaded| image(loaded, &addresses)).collect();
     Event {
         event_id: event.event_id,
         level: event.level,

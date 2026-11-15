@@ -4,23 +4,26 @@
 
 use super::event::{self, EXTRAS, FORMATTED_MARKER, TAGS};
 use super::reporter::{Config, Reporter, SendError};
-use super::transport::{Gate, Post, PostError};
+use super::transport::{Gate, Post, PostError, PANIC_BUDGET, RECORD_BUDGET};
 use super::{machine, Machine, MachineError, MachineRecord, Mode};
 use crate::logging::Resource;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 /// A test transport: keeps every envelope it is given, and answers as told.
 #[derive(Default)]
 struct Recorder {
     sent: Mutex<Vec<Vec<u8>>>,
+    budgets: Mutex<Vec<Duration>>,
     fail: std::sync::atomic::AtomicBool,
 }
 
 impl Post for Recorder {
-    fn post(&self, envelope: Vec<u8>) -> Result<(), PostError> {
+    fn post(&self, envelope: Vec<u8>, budget: Duration) -> Result<(), PostError> {
+        self.budgets.lock().unwrap().push(budget);
         if self.fail.load(Ordering::SeqCst) {
             return Err(PostError);
         }
@@ -69,7 +72,7 @@ fn record_json(id: &str) -> Value {
         "signature": "abc", "exception": {"type": "panic", "message": "a literal"},
         "location": {"file": "rust/x.rs", "line": 7},
         "backtrace": ["core::foo at rust/x.rs:7", "core::bar"],
-        "log_tail": ["2026-11-14T10:04:59Z WARN something happened"],
+        "log_tail": ["-0.500s  WARN sidevoice_core::x: something happened device=d1"],
         "unknown": "never copied"
     })
 }
@@ -145,29 +148,32 @@ fn switching_to_never_stops_everything_at_once_and_forgets_the_install_id() {
     reporter.capture_panic(Some("first"), "main");
     assert_eq!(post.count(), 1);
     let id = post.event(0)["tags"]["installation.id"].as_str().unwrap().to_owned();
-    // What is already handed to the transport when the person switches: the gate drops it.
-    let gate_post = Arc::new(Recorder::default());
-    let gate = Gate::new(gate_post.clone());
-    gate.close();
-    let envelope: sentry::Envelope = event::own_panic(
-        &RESOURCE,
-        "x",
-        event::OwnPanic { literal: None, thread: "t", stacktrace: None, images: vec![] },
-    )
-    .into();
-    sentry::Transport::send_envelope(&gate, envelope);
-    assert_eq!(gate_post.count(), 0, "a closed gate sends nothing");
+    // What is already handed to the reporter's own transport when the person switches: its gate drops it.
+    let gate = reporter.gate().unwrap();
+    let envelope = || -> sentry::Envelope {
+        event::own_panic(
+            &RESOURCE,
+            "x",
+            event::OwnPanic { literal: None, thread: "t", stacktrace: None, images: vec![] },
+        )
+        .into()
+    };
+    sentry::Transport::send_envelope(&*gate, envelope());
+    assert_eq!(post.count(), 2, "an open gate sends");
     reporter.set_mode(Mode::Never).unwrap();
+    assert!(!gate.is_open(), "switching closes the gate the client holds");
+    sentry::Transport::send_envelope(&*gate, envelope());
+    assert_eq!(post.count(), 2, "a closed gate sends nothing");
     assert!(!reporter.is_active());
     reporter.capture_panic(Some("second"), "main");
-    assert_eq!(post.count(), 1, "nothing after the switch");
+    assert_eq!(post.count(), 2, "nothing after the switch");
     let file = std::fs::read_to_string(dir.path().join(super::settings::FILE)).unwrap();
     assert!(!file.contains(&id), "the install id is gone: {file}");
     // Back to auto: a fresh client and a new id.
     reporter.set_mode(Mode::Auto).unwrap();
     reporter.capture_panic(Some("third"), "main");
-    assert_eq!(post.count(), 2);
-    assert_ne!(post.event(1)["tags"]["installation.id"].as_str().unwrap(), id);
+    assert_eq!(post.count(), 3);
+    assert_ne!(post.event(2)["tags"]["installation.id"].as_str().unwrap(), id);
 }
 
 #[test]
@@ -264,7 +270,7 @@ fn a_machine_record_is_its_own_event_with_the_records_id() {
     assert!(event["tags"].get("os.name").is_none());
     assert!(event["debug_meta"].get("images").is_none(), "no module of this app");
     assert_eq!(event["extra"]["count"], 3);
-    assert_eq!(event["extra"]["log_tail"][0], "2026-11-14T10:04:59Z WARN something happened");
+    assert_eq!(event["extra"]["log_tail"][0], "-0.500s  WARN sidevoice_core::x: something happened device=d1");
     let frames = event["exception"]["values"][0]["stacktrace"]["frames"].as_array().unwrap();
     assert_eq!(frames.len(), 2);
     assert_eq!(frames[1]["function"], "core::foo");
@@ -274,6 +280,7 @@ fn a_machine_record_is_its_own_event_with_the_records_id() {
     let connector = MachineRecord::parse(&{
         let mut value = record_json(ID);
         value["piece"] = json!("connector");
+        value["log_tail"] = json!(["-0.500s  WARN sidevoice_connector::x: something happened"]);
         value
     })
     .unwrap();
@@ -329,4 +336,138 @@ fn a_record_is_acknowledged_only_after_a_successful_send() {
 #[test]
 fn error_codes_for_the_log_exist() {
     assert!(crate::error::SharedError::CrashReportNotSent.code().starts_with("shared."));
+}
+
+#[test]
+fn an_own_panic_sends_only_the_modules_a_frame_is_in() {
+    use sentry::protocol::{Addr, DebugImage, Frame, Stacktrace, SymbolicDebugImage};
+    let image = |name: &str, at: u64, size: u64| {
+        DebugImage::Symbolic(SymbolicDebugImage {
+            name: name.to_owned(),
+            arch: None,
+            image_addr: Addr(at),
+            image_size: size,
+            image_vmaddr: Addr(0),
+            id: Default::default(),
+            code_id: None,
+            debug_file: None,
+        })
+    };
+    let frame = |at: u64| Frame { instruction_addr: Some(Addr(at)), ..Default::default() };
+    let event = event::own_panic(
+        &RESOURCE,
+        "x",
+        event::OwnPanic {
+            literal: None,
+            thread: "t",
+            stacktrace: Some(Stacktrace {
+                frames: vec![frame(0x1_0000_0500), frame(0x7f00_0010), frame(0x6000_1000)],
+                ..Default::default()
+            }),
+            images: vec![
+                image("sidevoice.exe", 0x1_0000_0000, 0x1000),
+                image("libc.so", 0x7f00_0000, 0x100),
+                image("assistive-reader.dll", 0x5000_0000, 0x1000),
+                image("antivirus-hook.dll", 0x7f00_0100, 0x100),
+                image("ends-at-a-frame.dll", 0x6000_0000, 0x1000),
+            ],
+        },
+    );
+    let names: Vec<_> = event
+        .debug_meta
+        .images
+        .iter()
+        .map(|image| match image {
+            DebugImage::Symbolic(image) => image.name.clone(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(names, ["sidevoice.exe", "libc.so"], "an unrelated module says what else is installed: {names:?}");
+}
+
+/// Posts a first envelope after sending another one through the gate from inside its own POST.
+struct Interleaving {
+    gate: OnceLock<Arc<Gate>>,
+    other: Mutex<Option<sentry::Envelope>>,
+}
+
+impl Post for Interleaving {
+    fn post(&self, _envelope: Vec<u8>, _budget: Duration) -> Result<(), PostError> {
+        let other = self.other.lock().unwrap().take();
+        if let Some(other) = other {
+            // A panic is posted, and succeeds, while the record's POST is under way.
+            sentry::Transport::send_envelope(&**self.gate.get().unwrap(), other);
+            return Err(PostError);
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn the_outcome_is_the_events_own_and_a_panic_cannot_acknowledge_a_failed_record() {
+    let panic: sentry::Envelope = event::own_panic(
+        &RESOURCE,
+        "x",
+        event::OwnPanic { literal: Some("p"), thread: "t", stacktrace: None, images: vec![] },
+    )
+    .into();
+    let post = Arc::new(Interleaving { gate: OnceLock::new(), other: Mutex::new(Some(panic)) });
+    let gate = Arc::new(Gate::new(post.clone()));
+    post.gate.set(gate.clone()).ok().unwrap();
+    let record = MachineRecord::parse(&record_json(ID)).unwrap();
+    gate.watch(record.id);
+    sentry::Transport::send_envelope(&*gate, event::machine_record(&record).into());
+    assert_eq!(gate.take_outcome(record.id), Some(false), "the record failed whatever the panic did");
+    assert_eq!(gate.take_outcome(record.id), None, "read once");
+}
+
+#[test]
+fn a_panic_is_posted_with_a_short_budget_and_a_record_with_the_long_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let post = Arc::new(Recorder::default());
+    let reporter = reporter(dir.path(), &post);
+    reporter.capture_panic(Some("p"), "main");
+    reporter.send_machine(&MachineRecord::parse(&record_json(ID)).unwrap()).unwrap();
+    assert_eq!(*post.budgets.lock().unwrap(), [PANIC_BUDGET, RECORD_BUDGET]);
+    assert!(PANIC_BUDGET <= Duration::from_secs(2), "the panic hook waits at most this");
+}
+
+#[test]
+fn a_record_whose_message_or_tail_is_not_the_grammar_does_not_parse() {
+    let with = |change: &dyn Fn(&mut Value)| {
+        let mut value = record_json(ID);
+        change(&mut value);
+        MachineRecord::parse(&value)
+    };
+    assert!(with(&|_| {}).is_some());
+    assert!(with(&|v| v["exception"]["message"] = json!(super::event::FORMATTED_MARKER)).is_some());
+    assert!(with(&|v| v["exception"]["message"] = json!("caf\u{e9} not ascii")).is_none());
+    for line in [
+        "2026-11-14T10:04:59Z WARN sidevoice_core::x: a date",
+        "-0.5s WARN sidevoice_core::x: bad offset",
+        "-0.500s INFO sidevoice_core::x: info",
+        "-0.500s WARN hyper_util::client: a dependency",
+        "-0.500s WARN sidevoice_corevoice: lookalike",
+        "-0.500s WARN sidevoice_connector::x: another piece",
+        "raw stderr",
+    ] {
+        assert!(with(&|v| v["log_tail"] = json!([line])).is_none(), "{line}");
+    }
+    assert!(
+        with(&|v| v["log_tail"] = json!(["+1.250s ERROR span{a=\"b: c\"}: inner: sidevoice_core::room: ok"])).is_some()
+    );
+}
+
+#[test]
+fn the_install_id_is_shown_unless_never() {
+    let dir = tempfile::tempdir().unwrap();
+    let post = Arc::new(Recorder::default());
+    let reporter = reporter(dir.path(), &post);
+    let id = reporter.installation_id().unwrap();
+    assert_eq!(id.len(), 32);
+    assert_eq!(reporter.installation_id().as_deref(), Some(id.as_str()), "stable");
+    reporter.capture_panic(Some("p"), "main");
+    assert_eq!(post.event(0)["tags"]["installation.id"], id.as_str(), "the id shown is the id sent");
+    reporter.set_mode(Mode::Never).unwrap();
+    assert_eq!(reporter.installation_id(), None, "forgotten under never");
 }

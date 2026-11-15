@@ -1,10 +1,13 @@
-//! The setting and the installation id, in `crash-reports.json` in the app's own directory. A file that is missing or
-//! unreadable is the default (`auto`, no id yet): the app never asks, and never fails because of it.
+//! The setting and the installation id, in `crash-reports.json` in the app's own directory. A file that is missing is the
+//! default (`auto`, no id yet): the app never asks, and never fails because of it. A file that is there but cannot be read
+//! or understood is not "no choice": the person may have chosen `never`, so that run sends nothing (and says so in the log),
+//! and the file is left as it is until the person chooses.
 //!
 //! The installation id is random (never derived from hardware or an account), pseudonymous, replaced after a year, and
 //! removed when the person chooses `never`: nothing keeps identifying the installation once it stops reporting.
 
 use super::Mode;
+use crate::error::SharedError;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -46,25 +49,42 @@ fn plain_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// The file: `Ok(None)` only when it does not exist.
+fn read(path: &Path) -> Result<Option<Stored>, std::io::ErrorKind> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.kind()),
+    };
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, LIMIT + 1), &mut bytes).map_err(|error| error.kind())?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(std::io::ErrorKind::InvalidData);
+    }
+    let mut stored = serde_json::from_slice::<Stored>(&bytes).map_err(|_| std::io::ErrorKind::InvalidData)?;
+    if stored.install.as_ref().is_some_and(|install| !plain_id(&install.id)) {
+        stored.install = None;
+    }
+    Ok(Some(stored))
+}
+
 impl Settings {
-    /// What `dir` holds, or the default.
+    /// What `dir` holds. No file is the default; a file that is there but unreadable, too big or not ours is `never` for
+    /// this run (never written back: the person's next choice replaces it).
     pub fn load(dir: &Path) -> Settings {
         let path = dir.join(FILE);
-        let stored = std::fs::File::open(&path)
-            .ok()
-            .and_then(|file| {
-                let mut bytes = Vec::new();
-                std::io::Read::read_to_end(&mut std::io::Read::take(file, LIMIT + 1), &mut bytes).ok()?;
-                (bytes.len() as u64 <= LIMIT).then_some(bytes)
-            })
-            .and_then(|bytes| serde_json::from_slice::<Stored>(&bytes).ok())
-            .map(|mut stored| {
-                if stored.install.as_ref().is_some_and(|install| !plain_id(&install.id)) {
-                    stored.install = None;
-                }
-                stored
-            })
-            .unwrap_or_default();
+        let stored = match read(&path) {
+            Ok(Some(stored)) => stored,
+            Ok(None) => Stored::default(),
+            Err(kind) => {
+                tracing::warn!(
+                    error.type = SharedError::CrashSettingsUnreadable.code(),
+                    error.kind = ?kind,
+                    "the crash report setting could not be read; nothing is sent in this run"
+                );
+                Stored { mode: Mode::Never, install: None }
+            }
+        };
         Settings { path, stored }
     }
 
@@ -116,12 +136,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_is_auto_and_survives_a_broken_file() {
+    fn no_file_is_auto_and_a_file_that_cannot_be_understood_is_never_for_that_run() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(Settings::load(dir.path()).mode(), Mode::Auto);
-        std::fs::write(dir.path().join(FILE), b"not json").unwrap();
-        assert_eq!(Settings::load(dir.path()).mode(), Mode::Auto);
-        std::fs::write(dir.path().join(FILE), vec![b' '; 5000]).unwrap();
+        assert_eq!(Settings::load(dir.path()).mode(), Mode::Auto, "no file: the default");
+        let file = dir.path().join(FILE);
+        for broken in [b"not json".to_vec(), vec![b' '; 5000], br#"{"mode":"sometimes"}"#.to_vec()] {
+            std::fs::write(&file, &broken).unwrap();
+            assert_eq!(Settings::load(dir.path()).mode(), Mode::Never, "never silently re-enabled");
+            assert_eq!(std::fs::read(&file).unwrap(), broken, "the file is left as it is");
+        }
+        // A directory where the file should be cannot be read either (not "not found").
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert_eq!(Settings::load(dir.path()).mode(), Mode::Never);
+        // The person's next choice replaces whatever was there.
+        std::fs::remove_dir(&file).unwrap();
+        std::fs::write(&file, b"not json").unwrap();
+        let mut settings = Settings::load(dir.path());
+        settings.set_mode(Mode::Auto).unwrap();
         assert_eq!(Settings::load(dir.path()).mode(), Mode::Auto);
     }
 
@@ -163,9 +195,9 @@ mod tests {
     #[test]
     fn a_failed_write_changes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let blocker = dir.path().join("file");
-        std::fs::write(&blocker, b"x").unwrap();
-        let mut settings = Settings::load(&blocker);
+        // A directory where the temporary file goes: the write cannot happen.
+        std::fs::create_dir(dir.path().join("crash-reports.json.tmp")).unwrap();
+        let mut settings = Settings::load(dir.path());
         assert!(settings.set_mode(Mode::Never).is_err());
         assert_eq!(settings.mode(), Mode::Auto);
     }

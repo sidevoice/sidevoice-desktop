@@ -146,9 +146,7 @@
 use std::process::ExitCode;
 
 use xtask::util::Channel;
-use xtask::{
-    checks, host_graph, mobile, packaging, platform, platform_guard, publish, sentry, util,
-};
+use xtask::{checks, host_graph, mobile, packaging, platform, platform_guard, publish, sentry, util};
 
 const USAGE: &str =
     "usage: cargo xtask web | lint | platform-guard | host-graph | platform-clippy | test | voice-contract | icons | permissions | two-users | bundle [--channel C] | engine-rev
@@ -191,12 +189,8 @@ fn main() -> ExitCode {
         ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
         ["mobile", "check-ios", app] => mobile::ios::check_app(std::path::Path::new(app)),
         ["mobile", "screenshots", project] => mobile::screenshots(project),
-        ["mobile", "testflight", "--build-number", number] => {
-            mobile::testflight::testflight(number)
-        }
-        ["mobile", "symbols", "--build-number", number] => {
-            mobile::testflight::symbols(number, None)
-        }
+        ["mobile", "testflight", "--build-number", number] => mobile::testflight::testflight(number),
+        ["mobile", "symbols", "--build-number", number] => mobile::testflight::symbols(number, None),
         ["mobile", "symbols", "--build-number", number, "--ips", ips] => {
             mobile::testflight::symbols(number, Some(std::path::Path::new(ips)))
         }
@@ -215,9 +209,7 @@ fn main() -> ExitCode {
         ["sherpa-libs"] => checks::sherpa_libs(),
         ["release", "app"] => platform::release::build_app(false, Channel::Dev),
         ["release", "app", "--signed"] => platform::release::build_app(true, Channel::Dev),
-        ["release", "app", "--channel", c] => {
-            Channel::parse(c).and_then(|c| platform::release::build_app(false, c))
-        }
+        ["release", "app", "--channel", c] => Channel::parse(c).and_then(|c| platform::release::build_app(false, c)),
         ["release", "app", "--signed", "--channel", c] => {
             Channel::parse(c).and_then(|c| platform::release::build_app(true, c))
         }

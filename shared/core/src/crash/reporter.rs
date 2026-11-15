@@ -53,8 +53,6 @@ pub struct Reporter {
     post: Option<Arc<dyn Post>>,
     settings: Mutex<Settings>,
     live: Mutex<Option<Live>>,
-    /// One machine record at a time: its outcome is read from the gate.
-    sending: Mutex<()>,
 }
 
 fn now() -> u64 {
@@ -72,7 +70,6 @@ impl Reporter {
             post: config.post,
             settings: Mutex::new(settings),
             live: Mutex::new(None),
-            sending: Mutex::new(()),
         });
         if reporter.mode() == Mode::Auto {
             reporter.go_live();
@@ -99,8 +96,8 @@ impl Reporter {
         };
         let gate = Arc::new(Gate::new(post));
         let dsn = self.dsn.clone().or_else(|| TEST_DSN.parse().ok());
-        // `ClientOptions::default()` reads SENTRY_* variables: every field that matters is set here, and `sanitize` is the
-        // last word on the event whatever the options say.
+        // `ClientOptions::default()` reads no environment variable (the SENTRY_* ones are `sentry::apply_defaults`'s, which is
+        // not called here); every field that matters is set here anyway, and `sanitize` is the last word on the event whatever the options say.
         let mut options = ClientOptions::default();
         options.dsn = dsn;
         options.release = None;
@@ -118,6 +115,22 @@ impl Reporter {
         options.before_breadcrumb = Some(Arc::new(|_| None));
         *self.live.lock().unwrap_or_else(PoisonError::into_inner) =
             Some(Live { client: Arc::new(Client::from(options)), gate });
+    }
+
+    /// The installation id the app's own reports carry, made if there is none yet (what the page shows is what is sent).
+    /// `None` under `never`: the id is forgotten then.
+    pub fn installation_id(&self) -> Option<String> {
+        let mut settings = self.settings.lock().unwrap_or_else(PoisonError::into_inner);
+        if settings.mode() == Mode::Never {
+            return None;
+        }
+        settings.install_id(now()).ok()
+    }
+
+    /// The gate of the client now held, for the tests that look at what a switch does to it.
+    #[cfg(test)]
+    pub(super) fn gate(&self) -> Option<Arc<Gate>> {
+        self.live.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|live| live.gate.clone())
     }
 
     fn stop(&self) {
@@ -170,15 +183,15 @@ impl Reporter {
 
     /// A machine's record as an event of its own. `Ok` only when it was delivered.
     pub fn send_machine(&self, record: &MachineRecord) -> Result<(), SendError> {
-        let _one = self.sending.lock().unwrap_or_else(PoisonError::into_inner);
         let (client, gate) = {
             let live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
             let live = live.as_ref().ok_or(SendError::Disabled)?;
             (live.client.clone(), live.gate.clone())
         };
-        gate.take_outcome();
+        // The outcome is the event's own (by its id): an app panic posted meanwhile cannot answer for it.
+        gate.watch(record.id);
         client.capture_event(event::machine_record(record), None);
-        match gate.take_outcome() {
+        match gate.take_outcome(record.id) {
             Some(true) => Ok(()),
             Some(false) => Err(SendError::Failed),
             None => Err(SendError::Dropped),

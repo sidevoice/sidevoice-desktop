@@ -79,10 +79,7 @@ use imp::Native;
 
 /// The refusal of a step this host does not have.
 fn unsupported(step: &str) -> String {
-    format!(
-        "`cargo xtask release {step}` is not available on {}",
-        host::name()
-    )
+    format!("`cargo xtask release {step}` is not available on {}", host::name())
 }
 
 /// `release app [--signed] [--channel C]`.
@@ -105,9 +102,7 @@ const SURVIVAL_SECONDS: f64 = 5.0;
 /// seconds later. Asking for the probe page changes nothing in a release. Off a runner it runs with a scratch home on a
 /// host that can have one, and refuses on one that cannot (it would write the person's settings and data).
 pub fn first_open() -> Result<()> {
-    let Some(binary) = Native::app_binary() else {
-        return Err(unsupported("first-open"));
-    };
+    let Some(binary) = Native::app_binary() else { return Err(unsupported("first-open")) };
     let home = if Native::SCRATCH_HOME {
         scratch_home("first-open", &Native::scratch_root())?
     } else {
@@ -127,10 +122,7 @@ pub fn first_open() -> Result<()> {
     let mut app = app.spawn(&log)?;
     ensure(
         wait_for(&log, "ready: true", 0, READY_SECONDS),
-        format!(
-            "The interface's controller was not ready within {READY_SECONDS} seconds:\n{}",
-            read(&log)
-        ),
+        format!("The interface's controller was not ready within {READY_SECONDS} seconds:\n{}", read(&log)),
     )?;
     sleep(SURVIVAL_SECONDS);
     if !app.running() {
@@ -140,15 +132,9 @@ pub fn first_open() -> Result<()> {
     let text = read(&log);
     eprintln!("{text}");
     let has = |pattern| crate::util::has(&text, pattern);
-    ensure(
-        has(Native::INTERFACE_PAGE),
-        "the bundled interface did not load",
-    )?;
+    ensure(has(Native::INTERFACE_PAGE), "the bundled interface did not load")?;
     ensure(!has("probe.html"), "a release ran a CI probe")?;
-    ensure(
-        has("ready: true"),
-        "the interface's controller never came up",
-    )
+    ensure(has("ready: true"), "the interface's controller never came up")
 }
 
 /// `release package [--signed]`.

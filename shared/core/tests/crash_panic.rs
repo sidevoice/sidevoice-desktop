@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 struct Recorder(Mutex<Vec<String>>);
 
 impl Post for Recorder {
-    fn post(&self, envelope: Vec<u8>) -> Result<(), PostError> {
+    fn post(&self, envelope: Vec<u8>, _budget: std::time::Duration) -> Result<(), PostError> {
         self.0.lock().unwrap().push(String::from_utf8_lossy(&envelope).into_owned());
         Ok(())
     }

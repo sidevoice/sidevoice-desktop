@@ -155,6 +155,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.release-tag }}
       # The Rust build cache it shares with `macos-native`, which builds the same dependencies and more (the local
       # host's CI tool) and so is the one that writes it.
@@ -200,6 +201,12 @@ jobs:
           # Crash reports (docs/CRASH_REPORTS.md): a release or nightly build sends them; a dev build has no DSN and sends nothing.
           SIDEVOICE_SENTRY_DSN: ${{ needs.changes.outputs.channel != 'dev' && vars.SENTRY_DSN || '' }}
         run: cargo xtask release app --signed --channel ${{ needs.changes.outputs.channel }}
+      # sentry-cli on its own: no secret in this step's environment and no install script (the pinned platform package carries the binary).
+      - name: Install sentry-cli
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          GH_TOKEN: ''
+        run: npm install --global --ignore-scripts @sentry/cli@3.8.2
       # The debug files of this build (dSYM, PDB, ELF, .dwp) and its release, to Sentry: so a crash's addresses become names and lines.
       # A release or nightly build only; the token is this step's alone.
       - name: Upload the debug files and the release to Sentry
@@ -207,7 +214,6 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          npm install --global @sentry/cli@3.8.2
           cargo xtask sentry upload sidevoice-desktop target/aarch64-apple-darwin/release
       - name: Check what a first open depends on
         env:
@@ -363,6 +369,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.release-tag }}
       - run: |
           sudo apt-get update
@@ -386,6 +393,12 @@ jobs:
           # Crash reports (docs/CRASH_REPORTS.md): a release or nightly build sends them; a dev build has no DSN and sends nothing.
           SIDEVOICE_SENTRY_DSN: ${{ needs.changes.outputs.channel != 'dev' && vars.SENTRY_DSN || '' }}
         run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
+      # sentry-cli on its own: no secret in this step's environment and no install script (the pinned platform package carries the binary).
+      - name: Install sentry-cli
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          GH_TOKEN: ''
+        run: npm install --global --ignore-scripts @sentry/cli@3.8.2
       # The debug files of this build (dSYM, PDB, ELF, .dwp) and its release, to Sentry: so a crash's addresses become names and lines.
       # A release or nightly build only; the token is this step's alone.
       - name: Upload the debug files and the release to Sentry
@@ -393,7 +406,6 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          npm install --global @sentry/cli@3.8.2
           cargo xtask sentry upload sidevoice-desktop target/release
       - name: Record produced bundle file lists
         run: cargo xtask packaging files target/release/bundle packaging-linux.txt
@@ -418,6 +430,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.release-tag }}
       - uses: ./.github/actions/setup-rust
         id: rust
@@ -441,6 +454,12 @@ jobs:
           # Crash reports (docs/CRASH_REPORTS.md): a release or nightly build sends them; a dev build has no DSN and sends nothing.
           SIDEVOICE_SENTRY_DSN: ${{ needs.changes.outputs.channel != 'dev' && vars.SENTRY_DSN || '' }}
         run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
+      # sentry-cli on its own: no secret in this step's environment and no install script (the pinned platform package carries the binary).
+      - name: Install sentry-cli
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          GH_TOKEN: ''
+        run: npm install --global --ignore-scripts @sentry/cli@3.8.2
       # The debug files of this build (dSYM, PDB, ELF, .dwp) and its release, to Sentry: so a crash's addresses become names and lines.
       # A release or nightly build only; the token is this step's alone.
       - name: Upload the debug files and the release to Sentry
@@ -448,7 +467,6 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          npm install --global @sentry/cli@3.8.2
           cargo xtask sentry upload sidevoice-desktop target/release
       # The Windows app starts: the bundled interface comes up in WebView2 (no settings; a throwaway runner only).
       - name: First open (no settings), the bundled interface comes up

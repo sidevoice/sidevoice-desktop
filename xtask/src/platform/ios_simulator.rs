@@ -12,19 +12,13 @@ trait Os {
     /// `screen-dark.png`), the device used, the app's own log (`logs/`) and the system log of its process. Fails if the
     /// app does not launch or is not running when the screenshot is taken.
     fn screenshots(_zip: &Path, _bundle: &str, _out: &Path) -> Result<()> {
-        Err(format!(
-            "the iOS simulator is run from a Mac with Xcode, not from {}",
-            host::name()
-        ))
+        Err(format!("the iOS simulator is run from a Mac with Xcode, not from {}", host::name()))
     }
 
     /// The Swift package `package`'s tests run on the newest iPhone Pro Max simulator, with `CALL_ACTIVITY_RENDERS` set to
     /// `out`, where the render tests leave their PNGs. Fails if a test fails.
     fn renders(_package: &Path, _out: &Path) -> Result<()> {
-        Err(format!(
-            "the iOS simulator is run from a Mac with Xcode, not from {}",
-            host::name()
-        ))
+        Err(format!("the iOS simulator is run from a Mac with Xcode, not from {}", host::name()))
     }
 
     /// The Live Activity harness `harness` (an XcodeGen spec, `project.yml`, whose scheme `LiveActivityHarness` holds
@@ -33,10 +27,7 @@ trait Os {
     /// on). In `out`: what the tests leave, `device.txt` and the harness's system log (`system-log.txt`). Both
     /// appearances run whatever the first did; fails if either failed.
     fn live_activity(_harness: &Path, _out: &Path, _only: Option<&str>) -> Result<()> {
-        Err(format!(
-            "the iOS simulator is run from a Mac with Xcode, not from {}",
-            host::name()
-        ))
+        Err(format!("the iOS simulator is run from a Mac with Xcode, not from {}", host::name()))
     }
 }
 

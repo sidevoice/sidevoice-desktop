@@ -22,6 +22,7 @@ pub mod event;
 pub mod machine;
 pub mod reporter;
 pub mod settings;
+mod tail;
 #[cfg(test)]
 mod tests;
 pub mod transport;
