@@ -5066,6 +5066,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "url",
@@ -5181,8 +5182,10 @@ dependencies = [
  "subtle",
  "tar",
  "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -5280,6 +5283,7 @@ dependencies = [
  "sha2 0.11.0",
  "sidevoice-engine",
  "sidevoice-voice",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "tracing-log",

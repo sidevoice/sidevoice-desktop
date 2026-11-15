@@ -41,7 +41,10 @@ pub fn setup(app: &AppHandle) {
         return;
     }
     if app.plugin(tauri_plugin_updater::Builder::new().build()).is_err() {
-        return tracing::error!(code = "updater_start", "the updater did not start");
+        return tracing::error!(
+            error.type = crate::error::DesktopError::UpdaterStart.code(),
+            "the updater did not start, so updates are unavailable"
+        );
     }
     app.manage(Mutex::new(Updates::default()));
     // What a relaunch after an update came up as: the version and the bundle it runs from.
@@ -151,7 +154,7 @@ fn download(app: &AppHandle, asked: bool) {
 /// The download itself, in memory (the plugin hands back the bytes; there is no partial file). Aborting only stops it
 /// at its next await, so what it writes (progress, bytes, result) is accepted only while its `token` is the current
 /// one: a cancel, and any download after it, make a late write a no-op.
-#[tracing::instrument(skip_all, name = "update_download", fields(version = %update.version))]
+#[tracing::instrument(skip_all, name = "update_download")]
 async fn download_task(app: AppHandle, update: Update, token: core::Token, _permit: crate::data::Permit) {
     let mut received = 0;
     let progress = |chunk: usize, total: Option<u64>| {
@@ -175,7 +178,10 @@ async fn download_task(app: AppHandle, update: Update, token: core::Token, _perm
             }
             Err(e) => {
                 let _ = &e;
-                tracing::error!(code = "download_failed", "updater download failed");
+                tracing::error!(
+                    error.type = crate::error::DesktopError::UpdateDownloadFailed.code(),
+                    "the update could not be downloaded, so it stays available to try again"
+                );
                 u.status = Status::new(State::Available, &update.version).failed(ErrorCode::DownloadFailed);
             }
         }
@@ -226,7 +232,10 @@ fn install(app: &AppHandle, restart: bool) {
     with(app, |u| {
         u.installing = false;
         if installed.is_err() {
-            tracing::error!(code = "install_failed", "updater install failed");
+            tracing::error!(
+                error.type = crate::error::DesktopError::UpdateInstallFailed.code(),
+                "the update could not be installed, so the app stays on its current version"
+            );
             (u.bytes, u.status) = (Some(bytes), u.status.clone().failed(ErrorCode::InstallFailed));
         }
     });

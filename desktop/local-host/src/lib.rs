@@ -34,6 +34,7 @@ pub mod cli;
 pub mod connector;
 pub mod core_socket;
 pub mod endpoints;
+pub mod error;
 pub mod host;
 pub mod http;
 pub mod identity;

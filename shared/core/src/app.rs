@@ -198,7 +198,11 @@ impl<A: LaneAudio> AppHost<A> {
         let engines = match NativeEngines::new(config.model_root, keys, runtime.clone()) {
             Ok(engines) => Some(Arc::new(engines)),
             Err(e) => {
-                tracing::error!(code = e.key, "native engine did not start");
+                tracing::error!(
+                    error.type = crate::error::SharedError::NativeEngineFailed.code(),
+                    engine_key = crate::logging::client_id(e.key),
+                    "the native engine did not start; local models are unavailable"
+                );
                 None
             }
         };
@@ -300,9 +304,10 @@ impl<A: LaneAudio> AppHost<A> {
             crate::debug::debug("voice: every model released");
         } else {
             tracing::error!(
+                error.type = crate::error::SharedError::VoiceModelsHeld.code(),
                 count = held.len(),
                 duration_ms = limit.as_millis() as u64,
-                "voice models still held at exit"
+                "some voice models were still in use when the app exited, so they were not released"
             );
             crate::debug::debug(&format!("voice: models still held at exit: {}", held.join(", ")));
         }

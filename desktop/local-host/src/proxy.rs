@@ -25,6 +25,7 @@
 //! revoked, and when a new pairing replaces it ([`Proxy::set_token`]).
 
 use crate::core_socket::CoreSocket;
+use crate::error::LocalHostError;
 use crate::http::{self, Headers, RequestHead};
 use crate::identity;
 use secrecy::{ExposeSecret, SecretString};
@@ -598,8 +599,16 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
     let upstream = match shared.core.connect(Some(CORE_TIMEOUT)) {
         Ok(upstream) => upstream,
         Err(e) => {
-            (shared.log)(&format!("proxy 502 {} {path} (core not reachable: {})", head.method, e.code()));
-            tracing::warn!(http_status = 502u16, code = e.code(), "proxy core not reachable");
+            (shared.log)(&format!(
+                "proxy 502 {} {path} (core not reachable: {})",
+                head.method,
+                LocalHostError::from(&e).code()
+            ));
+            tracing::warn!(
+                http.response.status_code = 502u16,
+                error.type = LocalHostError::from(&e).code(),
+                "the core is not reachable, so the page's request is answered with a 502"
+            );
             return answer(client, 502, cors(&origin));
         }
     };
@@ -616,7 +625,11 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
     };
     let Some(token) = token else {
         (shared.log)(&format!("proxy 503 {} {path} (not paired)", head.method));
-        tracing::warn!(http_status = 503u16, reason = "not_paired", "proxy refused");
+        tracing::warn!(
+            http.response.status_code = 503u16,
+            error.type = LocalHostError::NotPaired.code(),
+            "the page's request was refused with a 503 because this app is not paired with the core"
+        );
         return answer(client, 503, cors(&origin));
     };
 
@@ -641,7 +654,11 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         Ok(end) => end,
         Err(_) => {
             (shared.log)(&format!("proxy 502 {} {path} (no answer from the core)", head.method));
-            tracing::warn!(http_status = 502u16, reason = "no_answer", "proxy core did not answer");
+            tracing::warn!(
+                http.response.status_code = 502u16,
+                error.type = LocalHostError::CoreNoAnswer.code(),
+                "the core did not answer, so the page's request is answered with a 502"
+            );
             return answer(client, 502, cors(&origin));
         }
     };
@@ -649,7 +666,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         return answer(client, 502, cors(&origin));
     };
     (shared.log)(&format!("proxy forwarded {} {path} -> {}", head.method, response.status));
-    tracing::debug!(http_status = response.status, "proxy forwarded");
+    tracing::debug!(http.response.status_code = response.status, "the core's answer was forwarded to the page");
 
     if upgrade && response.status == 101 {
         // The core accepted the socket: its answer as it is, then bytes both ways until either side ends.

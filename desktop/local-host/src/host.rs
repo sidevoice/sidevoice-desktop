@@ -38,6 +38,7 @@ use crate::cli::Cli;
 use crate::connector;
 use crate::core_socket::{CoreError, CoreSocket, Health, Paired};
 use crate::endpoints;
+use crate::error::LocalHostError;
 use crate::identity;
 use crate::install::{self, Failure, Gate, Job, Options, Step};
 use crate::npm::{self, Fetch, Minor};
@@ -201,7 +202,7 @@ impl LocalHost {
         let proxy_log = log.clone();
         let proxy = Proxy::start(core.clone(), move |line| proxy_log(line))?;
         log(&format!("local-host proxy on {}", proxy.url()));
-        tracing::info!(port = proxy.port(), "local-host proxy listening");
+        tracing::info!(port = proxy.port(), "the local-host proxy is listening for the page");
         Ok(Arc::new(LocalHost {
             config,
             core,
@@ -321,7 +322,7 @@ impl LocalHost {
         }
         if report.state != inner.report.state {
             (self.log)(&format!("local-host state {}", json!(report.state).as_str().unwrap_or("?")));
-            tracing::info!(state = json!(report.state).as_str().unwrap_or("?"), "local-host state");
+            tracing::info!(state = json!(report.state).as_str().unwrap_or("?"), "the local host changed state");
         }
         inner.report = report.clone();
         inner.core_up = health.is_ok();
@@ -427,12 +428,15 @@ impl LocalHost {
         match accepted {
             Ok(true) => {
                 (self.log)(&format!("local-host paired (stored) {}", stored.redacted()));
-                tracing::info!(device_id = %stored.device_id, fp = %stored.fp, "local-host paired (stored)");
+                tracing::info!(device_id = %stored.device_id, fp = %stored.fp, "the stored pairing with the core is still valid");
                 Some((Link::Paired, Some(stored)))
             }
             Ok(false) => {
                 (self.log)("local-host token refused by the core");
-                tracing::warn!(reason = "token_refused", "local-host token refused");
+                tracing::warn!(
+                    error.type = LocalHostError::TokenRefused.code(),
+                    "the core refused the stored token, so the app must pair again"
+                );
                 Some((Link::Refused, None))
             }
             Err(_) => None,
@@ -446,7 +450,10 @@ impl LocalHost {
         match self.core.accepts(&token) {
             Ok(false) => {
                 (self.log)("local-host token refused by the core");
-                tracing::warn!(reason = "token_refused", "local-host token refused");
+                tracing::warn!(
+                    error.type = LocalHostError::TokenRefused.code(),
+                    "the core no longer accepts the app's token, so the app must pair again"
+                );
                 Some((Link::Refused, None))
             }
             _ => None,
@@ -480,12 +487,17 @@ impl LocalHost {
             // Never a device the app cannot remember: revoke it at once.
             let _ = self.core.unpair();
             (self.log)(&format!("local-host could not store its pairing: {:?}", e.kind()));
-            tracing::warn!(kind = ?e.kind(), os_error = e.raw_os_error(), "local-host pairing not stored");
+            tracing::warn!(
+                error.type = LocalHostError::PairingNotStored.code(),
+                kind = ?e.kind(),
+                os_error = e.raw_os_error(),
+                "the pairing could not be stored, so the device was unpaired again"
+            );
             let refusal = Refusal::new("app.storage", format!("The app could not store its pairing: {e}"));
             return Some((Link::Failed(refusal), None));
         }
         (self.log)(&format!("local-host paired {}", pairing.redacted()));
-        tracing::info!(device_id = %pairing.device_id, fp = %pairing.fp, "local-host paired");
+        tracing::info!(device_id = %pairing.device_id, fp = %pairing.fp, "the app paired with the core on this computer");
         Some((Link::Paired, Some(pairing)))
     }
 
@@ -558,7 +570,7 @@ impl LocalHost {
             inner.report.failure = None;
         }
         (self.log)(&format!("local-host install {} started", install::loggable_job(job.id())));
-        tracing::info!(job = install::loggable_job(job.id()), "local-host install started");
+        tracing::info!(job = install::loggable_job(job.id()), "a service install started");
         Ok(Installing { host: self.clone(), job })
     }
 
@@ -631,7 +643,7 @@ impl LocalHost {
         let answer = npm::latest_in_minor(fetch, pinned);
         if let Err(failure) = &answer {
             (self.log)(&format!("local-host service check failed: {}", failure.log_report()));
-            tracing::error!(report = %failure.log_report(), "local-host service check failed");
+            failure.log(LocalHostError::ServiceCheckFailed.code(), "the service's newest version could not be checked");
         }
         self.inner.lock().unwrap().updates.checked(Instant::now(), answer.ok());
     }
@@ -691,7 +703,10 @@ impl LocalHost {
                     if let Err(failed) = self.run_update(fetch, base) {
                         if failed.is_failure() {
                             (self.log)(&format!("local-host service update failed: {}", failed.failure.log_report()));
-                            tracing::error!(report = %failed.failure.log_report(), "local-host service update failed");
+                            failed.failure.log(
+                                LocalHostError::ServiceUpdateFailed.code(),
+                                "the service could not be updated and stays at its version",
+                            );
                         }
                     }
                 }
@@ -845,8 +860,8 @@ impl LocalHost {
             tracing::info!(
                 job = install::loggable_job(job.id()),
                 action = plain(answer["action"].as_str()),
-                version = plain(answer["version"].as_str()),
-                "local-host install finished"
+                peer_version = plain(answer["version"].as_str()),
+                "the service install finished"
             );
             (self.log)(&format!(
                 "local-host install {}: {} {}",

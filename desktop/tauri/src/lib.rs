@@ -17,6 +17,7 @@ mod app_hooks;
 mod call_controls;
 mod data;
 mod debug_options;
+mod error;
 mod legacy_identifier;
 mod local_host;
 pub(crate) mod media_duck;
@@ -168,18 +169,24 @@ fn bridge_state(
     let current_label = state.room_label.lock().unwrap().clone();
     if current_label.as_deref() != Some(webview.label()) {
         debug(&format!("bridge_state refused: window {}", webview.label()));
-        tracing::warn!(reason = "not_room_window", "bridge_state refused");
+        tracing::warn!(
+            reason = "not_room_window",
+            "a call state update was refused because it did not come from the room window"
+        );
         return Err("not the room window".into());
     }
     let actual = webview.url().map(|u| settings::url_origin(&u)).ok();
     if actual.as_deref() != Some(APP_ORIGIN) {
         debug(&format!("bridge_state refused: origin {actual:?}"));
-        tracing::warn!(reason = "not_app_page", "bridge_state refused");
+        tracing::warn!(
+            reason = "not_app_page",
+            "a call state update was refused because the page is not the app's own"
+        );
         return Err("not the app's own page".into());
     }
     let previous = std::mem::replace(&mut *state.call.lock().unwrap(), snapshot.clone());
     if let Some(changes) = snapshot.changes_since(&previous) {
-        tracing::info!(changes, "bridge_state");
+        tracing::info!(changes, "the call state changed");
     }
     // The whole snapshot only on stderr with SIDEVOICE_DEBUG=1 (never the log), without the rest of the room's projection:
     // its facts carry the conversation's words.
@@ -279,7 +286,8 @@ const OWN_TARGETS: &[&str] = &[
     "sidevoice_voice",
     "sidevoice_engine",
     "sidevoice_platform",
-    "panic",
+    sidevoice_shared::logging::PANIC_TARGET,
+    sidevoice_shared::logging::BACKTRACE_TARGET,
     "webview",
 ];
 
@@ -438,14 +446,22 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         // wry grants every request when the app sets no handler; this one denies the microphone, the camera and the rest.
         .on_permission_request(|_webview, kind| {
             debug(&format!("media {kind:?}: denied"));
-            tracing::warn!(kind = ?kind, "media permission denied");
+            tracing::warn!(kind = ?kind, "a page asked for a media permission and was denied");
             PermissionResponse::Deny
         })
         .on_page_load(move |_webview, payload| {
             // `Started` is WebKit's didCommitNavigation: after redirects, main frame only.
             if payload.event() == PageLoadEvent::Started {
                 debug(&format!("page {}", url_path(payload.url())));
-                tracing::info!(url = %url_path(payload.url()), "page");
+                let url = payload.url();
+                let fields = url_fields(url);
+                tracing::info!(
+                    url.scheme = fields.scheme,
+                    server.address = fields.host,
+                    server.port = fields.port,
+                    url.path = fields.path,
+                    "a page started loading"
+                );
                 reset_call_state(&page_app);
             }
         })
@@ -559,12 +575,12 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             open_log_file(&handle);
-            tracing::info!(version = env!("CARGO_PKG_VERSION"), "app started");
+            sidevoice_shared::logging::announce(platform::resource::current());
             carried.log();
             application::prepare(&handle)?;
             shortcuts::setup(&handle);
             debug(&format!("launch {}", app_report(&handle)));
-            tracing::info!(call_card = !call_card_disabled(), "app launch");
+            tracing::info!(call_card = !call_card_disabled(), "the app finished launching");
             tray::create(&handle)?;
             let media_app = handle.clone();
             media_controls::attach(
@@ -631,14 +647,14 @@ pub fn run() {
             application::activate(&handle);
             // How macOS sees the app once everything exists, and again once activation has settled (#117).
             debug(&format!("ready {}", app_report(&handle)));
-            tracing::info!("app ready");
+            tracing::info!("the app is ready");
             let later = handle.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 let report = later.clone();
                 let _ = later.run_on_main_thread(move || {
                     debug(&format!("settled {}", app_report(&report)));
-                    tracing::info!("app settled");
+                    tracing::info!("the app has settled after launch");
                 });
             });
             data::finalize_relaunched_reset();
@@ -703,15 +719,35 @@ fn tell_the_person(text: impl std::fmt::Display) {
     eprintln!("{text}");
 }
 
-/// A url as the log may show one of ours: scheme, host, port and path; never userinfo, query or fragment.
+/// A url as the log may show one of ours (guideline sections 7.1 and 7.2): scheme, host, port and path for a url with a
+/// base, never userinfo, query or fragment; the scheme only for `data:`, `blob:`, `about:` and the like, whose rest is
+/// content (or what the page chose), not our code's address.
+struct UrlFields<'a> {
+    scheme: &'a str,
+    host: Option<&'a str>,
+    port: Option<u16>,
+    path: Option<&'a str>,
+}
+
+fn url_fields(url: &tauri::Url) -> UrlFields<'_> {
+    if url.cannot_be_a_base() {
+        return UrlFields { scheme: url.scheme(), host: None, port: None, path: None };
+    }
+    UrlFields { scheme: url.scheme(), host: url.host_str(), port: url.port(), path: Some(url.path()) }
+}
+
 fn url_path(url: &tauri::Url) -> String {
-    let port = url.port().map(|port| format!(":{port}")).unwrap_or_default();
-    format!("{}://{}{port}{}", url.scheme(), url.host_str().unwrap_or(""), url.path())
+    let f = url_fields(url);
+    let port = f.port.map(|port| format!(":{port}")).unwrap_or_default();
+    match f.path {
+        Some(path) => format!("{}://{}{port}{path}", f.scheme, f.host.unwrap_or("")),
+        None => format!("{}:", f.scheme),
+    }
 }
 
 #[cfg(test)]
 mod url_path_tests {
-    use super::url_path;
+    use super::{url_fields, url_path};
 
     #[test]
     fn a_url_loses_userinfo_query_and_fragment() {
@@ -721,5 +757,16 @@ mod url_path_tests {
             url_path(&tauri::Url::parse("tauri://localhost/probe.html").unwrap()),
             "tauri://localhost/probe.html"
         );
+    }
+
+    #[test]
+    fn an_opaque_url_logs_its_scheme_only() {
+        for raw in ["data:text/html,canary-payload", "blob:https://x.example/canary-id", "about:canary"] {
+            let url = tauri::Url::parse(raw).unwrap();
+            let f = url_fields(&url);
+            assert!(f.host.is_none() && f.port.is_none() && f.path.is_none(), "{raw}");
+            assert!(!url_path(&url).contains("canary"), "{raw}");
+        }
+        assert_eq!(url_path(&tauri::Url::parse("data:text/html,x").unwrap()), "data:");
     }
 }

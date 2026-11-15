@@ -843,7 +843,7 @@ pub fn reconcile<R: Registrar>(
         if !keep {
             if let Some(keys) = slot.take() {
                 if !registrar.unregister(&keys) {
-                    tracing::debug!("shortcut not held when it was let go");
+                    tracing::debug!("a shortcut was already released when the app let it go");
                 }
             }
         }
@@ -864,7 +864,7 @@ pub fn reconcile<R: Registrar>(
             held.0[i] = Some(keys.clone());
             taken[i] = Some(Taken { state: Registration::On, alternatives: vec![], holder: None });
         } else {
-            tracing::debug!("shortcut refused");
+            tracing::debug!("the system refused a shortcut");
             taken[i] = Some(Taken { state: Registration::Refused, alternatives: vec![], holder: None });
         }
     }

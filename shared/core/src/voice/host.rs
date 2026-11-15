@@ -923,7 +923,11 @@ fn forward(
                         take.samples.len(),
                         take.turns.len()
                     ));
-                    tracing::debug!(samples = take.samples.len(), turns = take.turns.len(), "voice take");
+                    tracing::debug!(
+                        samples = take.samples.len(),
+                        turns = take.turns.len(),
+                        "a voice take was delivered to the page"
+                    );
                     page_take(take)
                 }
                 _ => {
@@ -988,7 +992,7 @@ fn log_event(value: &Value) {
             .unwrap_or("other")
     };
     let turn = value.get("turn_id").and_then(Value::as_str).map_or("none", crate::logging::client_id);
-    tracing::debug!(kind = word("type"), phase = word("phase"), turn, "voice event");
+    tracing::debug!(kind = word("type"), phase = word("phase"), turn, "a voice event was delivered to the page");
 }
 
 /// `tokio::spawn` that keeps the span of the call it belongs to: a spawned future starts with none, and its lines would lose the call's id.

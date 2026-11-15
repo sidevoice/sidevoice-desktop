@@ -78,7 +78,11 @@ fn parse_kept(action: Action, text: &str) -> Option<Parsed> {
         Some(Some(parsed)) if shortcuts::suits(action, &parsed) && shortcut_access::accepts(&parsed) => Some(parsed),
         Some(None) => None,
         _ => {
-            tracing::warn!(action = action.name(), "shortcut not one the app can register");
+            tracing::warn!(
+                error.type = crate::error::DesktopError::ShortcutUnregistrable.code(),
+                action = action.name(),
+                "a kept shortcut cannot be registered, so the action has no shortcut"
+            );
             None
         }
     }
@@ -723,7 +727,7 @@ fn release(app: &AppHandle, why: Release) {
         current.hold.end()
     };
     if was_on {
-        tracing::info!(reason = ?why, "hold to talk let go");
+        tracing::info!(reason = ?why, "the app let go of a hold-to-talk the person's hand had not released");
         crate::send(app, Command::HoldEnd);
     }
 }
