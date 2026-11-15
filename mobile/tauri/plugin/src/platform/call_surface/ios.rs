@@ -73,18 +73,6 @@ impl Os for Native {
         }
     }
 
-    fn os_log(category: &str, message: &str) {
-        // Not `bridge()`: a build without the Swift side has no log to write to, and says nothing.
-        let Some(log) = AnyClass::get(c"SidevoiceLog") else {
-            return;
-        };
-        let (category, message) = (NSString::from_str(category), NSString::from_str(message));
-        // SAFETY: `+[SidevoiceLog log:message:]` takes two strings and returns nothing (SidevoiceLog.swift), from any thread.
-        unsafe {
-            let _: () = msg_send![log, log: &*category, message: &*message];
-        }
-    }
-
     fn running() -> bool {
         // Not `bridge()`: this is asked on every report, and a build without the bridge has said so once.
         let Some(bridge) = AnyClass::get(c"SidevoiceCallActivity") else {
@@ -99,7 +87,7 @@ impl Os for Native {
 fn bridge() -> Option<&'static AnyClass> {
     let bridge = AnyClass::get(c"SidevoiceCallActivity");
     if bridge.is_none() {
-        log::warn!("call surface: the app has no SidevoiceCallActivity: no Live Activity");
+        tracing::warn!("call surface: the app has no SidevoiceCallActivity: no Live Activity");
     }
     bridge
 }
@@ -117,16 +105,16 @@ define_class!(
         /// thread).
         #[unsafe(method(act:))]
         fn act(action: &NSString) {
-            // Only an action the app knows is named in the public log: the string is the intent's, not checked yet.
+            // Only an action the app knows is named in the log: the string is the intent's, not checked yet.
             let known = crate::call_surface::SurfaceAction::named(&action.to_string())
                 .map_or_else(|| "invalid".to_owned(), |named| format!("{named:?}"));
             let on_action = ON_ACTION.lock().ok().and_then(|current| current.clone());
             match on_action {
                 Some(on_action) => {
-                    log::info!(target: "intent", "call surface: {known} asked for by the Live Activity");
+                    tracing::info!(target: "intent", action = known.as_str(), "the Live Activity asked for an action");
                     on_action(&action.to_string())
                 }
-                None => log::warn!(target: "intent", "call surface: {known} asked for with no call running"),
+                None => tracing::warn!(target: "intent", action = known.as_str(), "the Live Activity asked for an action with no call running"),
             }
         }
     }

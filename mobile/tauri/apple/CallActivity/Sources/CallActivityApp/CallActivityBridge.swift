@@ -204,8 +204,6 @@ final class Controller {
     private var watching: Task<Void, Never>?
     /// The last of ActivityKit's calls asked for: each waits for the one before.
     private var queue: Task<Void, Never>?
-    /// The stills the last state sent named (`CallStills.naming`), said again only when they change.
-    private var named: String?
 
     static let staleAfter: TimeInterval = 180
     static let refreshInterval: TimeInterval = 60
@@ -255,10 +253,8 @@ final class Controller {
         watching = nil
         activity = nil
         sent = nil
-        named = nil
         report = nil
         let all = Activity<CallActivityAttributes>.activities
-        NSLog("Sidevoice: Live Activity: ending %d", all.count)
         enqueue {
             for activity in all {
                 if #available(iOS 16.2, *) {
@@ -276,7 +272,6 @@ final class Controller {
     private func endOrphans() {
         let orphans = Activity<CallActivityAttributes>.activities.filter { $0.id != lifecycle.current }
         guard !orphans.isEmpty else { return }
-        NSLog("Sidevoice: Live Activity: ending %d orphan(s)", orphans.count)
         enqueue {
             for activity in orphans {
                 if #available(iOS 16.2, *) {
@@ -300,13 +295,11 @@ final class Controller {
     @discardableResult
     private func drop(_ id: String, _ life: ActivityLifecycle.Life) -> Bool {
         guard lifecycle.observed(id, life) else { return false }
-        NSLog("Sidevoice: Live Activity: %@ is over; the call has none now", id)
         let over = activity
         watching?.cancel()
         watching = nil
         activity = nil
         sent = nil
-        named = nil
         if let over {
             enqueue {
                 if #available(iOS 16.2, *) {
@@ -333,13 +326,12 @@ final class Controller {
         case .nothing:
             return
         case .wait:
-            NSLog("Sidevoice: the call's Live Activity waits until the app is in front")
             return
         case .request:
             break
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            NSLog("Sidevoice: Live Activities are off for the app")
+            CallLog.warning("Live Activities are off for the app; the call has no card")
             Coming.now.set(false)
             return
         }
@@ -357,17 +349,14 @@ final class Controller {
         } catch {
             failedAt = Date()
             Coming.now.set(false)
-            // The error's domain and code, never its text: the system's words are free text.
-            let failure = error as NSError
-            NSLog("Sidevoice: the call's Live Activity did not start: %@ %d", failure.domain, failure.code)
+            // The error's code, never its text or its domain: the system's words are free text.
+            CallLog.error("the call's Live Activity did not start; the call goes on without a card", code: (error as NSError).code)
             return
         }
         Coming.now.set(false)
-        NSLog("Sidevoice: Live Activity: requested %@", new.id)
         activity = new
         lifecycle.adopt(new.id)
         sent = state
-        sayStills(state)
         sentAt = Date()
         watch(new)
     }
@@ -431,7 +420,6 @@ final class Controller {
         scheduleWake()
         if state == sent && !refresh { return }
         sent = state
-        sayStills(state)
         sentAt = Date()
         let stale = Date().addingTimeInterval(Self.staleAfter)
         enqueue {
@@ -441,16 +429,6 @@ final class Controller {
                 await activity.update(using: state)
             }
         }
-    }
-
-    /// The stills `state` names, in the unified log (public, category `stills`) when they are not the last state's: the
-    /// step between the app keeping a still (the Rust side's `call stills: kept`) and the extension drawing it
-    /// (`still drawn`, `still not drawn`), with whether the app finds each file where the extension reads it.
-    private func sayStills(_ state: CallState) {
-        let now = CallStills.naming([state.creature] + state.others)
-        guard now != named else { return }
-        named = now
-        CallLog.stills.notice("activity state names stills: \(now, privacy: .public)")
     }
 
     /// Runs `work` after every call asked for before it.

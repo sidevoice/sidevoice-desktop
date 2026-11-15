@@ -166,7 +166,7 @@ pub fn cue_available(read: impl Fn(&str) -> Option<Vec<u8>>) -> bool {
         Ok(_) => true,
         // A phone with a player that offers none: the page plays its own sound, which a call's session may not let out.
         Err(_) => {
-            log::warn!(target: "cue", "cue: not offered, the bundled web's sounds are not usable");
+            tracing::warn!(target: "cue", "the cue is not offered because the bundled web's sounds are not usable");
             false
         }
     }
@@ -356,20 +356,21 @@ thread_local! {
 /// thread, behind this start: what it plays is stopped right after.
 pub fn start_cue(cue: Cue, prepared: Prepared, ticket: u64, when: When) -> Result<(), String> {
     if !cue_current(ticket) {
-        log::info!(target: "cue", "cue {cue:?}: a start superseded before it played");
+        tracing::info!(target: "cue", ?cue, "a cue start was superseded before it played");
         return Ok(());
     }
     LOCK.with_borrow_mut(|lock| {
         if when == When::WhileLocked {
-            log::info!(
+            tracing::info!(
                 target: "cue",
-                "cue {cue:?}: plays while the screen is locked (locked now: {})",
-                lock.locked
+                ?cue,
+                locked = lock.locked,
+                "the cue plays only while the screen is locked"
             );
         }
         let started = lock.start(cue, prepared, ticket, when, &mut System);
         if started.is_ok() && (when == When::Always || lock.locked) {
-            log::info!(target: "cue", "cue {cue:?}: plays");
+            tracing::info!(target: "cue", ?cue, "the cue plays");
         }
         started
     })
@@ -384,16 +385,12 @@ pub fn stop_cue(cue: Cue) {
 fn screen_changed(locked: bool) {
     LOCK.with_borrow_mut(|lock| {
         if lock.locked != locked {
-            log::info!(target: "cue", "screen: {}", if locked { "locked" } else { "unlocked" });
+            tracing::info!(target: "cue", locked, "the screen's lock changed");
         }
         match lock.changed(locked, cue_current, &mut System) {
-            Ok(true) => log::info!(
-                target: "cue",
-                "cue: {} with the screen",
-                if locked { "plays" } else { "stops" }
-            ),
+            Ok(true) => tracing::info!(target: "cue", locked, "the cue follows the screen's lock"),
             Ok(false) => {}
-            Err(_) => log::warn!(target: "cue", "cue: did not start at the lock"),
+            Err(_) => tracing::warn!(target: "cue", "the cue did not start at the lock"),
         }
     });
 }

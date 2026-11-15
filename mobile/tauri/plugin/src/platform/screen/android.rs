@@ -33,7 +33,7 @@ impl Os for Native {
         match kotlin::run::<_, Locked>(app, "screenLocked", ()) {
             Some(Ok(answer)) => answer.locked,
             Some(Err(_)) => {
-                log::warn!("screen: whether it is locked, not answered");
+                tracing::warn!("the screen's lock state was not answered");
                 false
             }
             None => false,

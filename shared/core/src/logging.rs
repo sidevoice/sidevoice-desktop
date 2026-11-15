@@ -5,7 +5,6 @@
 use std::cell::Cell;
 use std::io::{IsTerminal, Write};
 use std::sync::{Mutex, PoisonError};
-use tracing_subscriber::filter::{filter_fn, FilterExt};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -184,12 +183,15 @@ impl<F: Fn(&str)> Drop for Line<'_, F> {
 
 /// What a process adds to [`init`]'s file layer: a layer of its own (the phone's system log), and which of the other parts it
 /// wants.
-pub struct Extras<L> {
-    /// A layer of the process's own, under the same filter.
+pub struct Extras<'a, L> {
+    /// A layer of the process's own (the phone's system log). It is not under `SIDEVOICE_LOG`: it takes `warn` and `error` of
+    /// `system_targets` only, never a backtrace (`system_log::filter`).
     pub layer: Option<L>,
-    /// Whether stderr gets a layer when it is a terminal (never on the phone, where stderr is the system's public log).
+    /// The targets `layer` takes: a subset of `own`, leaving out a target whose lines may carry what the page says.
+    pub system_targets: &'a [&'a str],
+    /// Whether stderr gets a layer when it is a terminal (never on the phone: its stderr is not ours to fill).
     pub stderr: bool,
-    /// Whether the panic hook is installed here (the phone's has its own, which never logs).
+    /// Whether the shared panic hook is installed.
     pub panic_hook: bool,
 }
 
@@ -201,12 +203,13 @@ pub fn init<F>(own: &[&str], home: Option<&std::path::Path>, sink: F)
 where
     F: Fn(&str) + Send + Sync + 'static,
 {
-    let extras: Extras<tracing_subscriber::layer::Identity> = Extras { layer: None, stderr: true, panic_hook: true };
+    let extras: Extras<tracing_subscriber::layer::Identity> =
+        Extras { layer: None, system_targets: &[], stderr: true, panic_hook: true };
     init_with(own, home, sink, extras);
 }
 
 /// [`init`] with `extras`.
-pub fn init_with<F, L>(own: &[&str], home: Option<&std::path::Path>, sink: F, extras: Extras<L>)
+pub fn init_with<F, L>(own: &[&str], home: Option<&std::path::Path>, sink: F, extras: Extras<'_, L>)
 where
     F: Fn(&str) + Send + Sync + 'static,
     L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
@@ -229,12 +232,8 @@ where
             .log_internal_errors(false)
     });
     STDERR_LAYER.store(stderr.is_some(), std::sync::atomic::Ordering::Relaxed);
-    // The process's own layer (the phone's system log) never gets the backtrace either: it has its own filter, the same
-    // directives with the backtrace target off.
-    let (own_filter, _) = self::filter(value.as_deref(), own);
-    let extra = extras
-        .layer
-        .map(|layer| layer.with_filter(own_filter.and(filter_fn(|metadata| !is_backtrace_target(metadata.target())))));
+    // The process's own layer (the phone's system log) has a filter of its own, whatever `SIDEVOICE_LOG` says.
+    let extra = extras.layer.map(|layer| layer.with_filter(crate::system_log::filter(extras.system_targets)));
     let installed =
         tracing_subscriber::registry().with(extra).with(file.and_then(stderr).with_filter(filter)).try_init().is_ok();
     if installed {
@@ -380,6 +379,18 @@ fn record_panic(payload: &(dyn std::any::Any + Send), location: Option<(&str, u3
     );
 }
 
+/// A code a platform or a caller named (an error's key, a refusal's reason), as a log field: as it is when it is 1 to 64 of
+/// `[a-z0-9_.-]` (guideline section 6), else `invalid`.
+pub fn checked_code(code: &str) -> &str {
+    let plain = (1..=64).contains(&code.len())
+        && code.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b));
+    if plain {
+        code
+    } else {
+        "invalid"
+    }
+}
+
 /// An id a page or client named, as a log field: as it is when it is 1 to 64 of `[A-Za-z0-9._:-]`, else `invalid`. The sender
 /// chooses the bytes, so a hostile id could forge log lines.
 pub fn client_id(id: &str) -> &str {
@@ -471,6 +482,14 @@ mod tests {
         assert!(is_backtrace_target("crash_backtrace") && is_backtrace_target("crash_backtrace::x"));
         assert!(!is_backtrace_target("crash_backtrace_x") && !is_backtrace_target("panic"));
         assert!(!PANIC_TARGET.starts_with(BACKTRACE_TARGET) && !BACKTRACE_TARGET.starts_with(PANIC_TARGET));
+    }
+
+    #[test]
+    fn a_code_is_plain_or_invalid() {
+        assert_eq!(checked_code("call-refused"), "call-refused");
+        for hostile in ["", "Not Visible", "a:b", "x\nforged", &"a".repeat(65)] {
+            assert_eq!(checked_code(hostile), "invalid");
+        }
     }
 
     #[test]

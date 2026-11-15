@@ -34,10 +34,6 @@ trait Os {
     /// is held until the process goes (iOS: the main queue `end` hands its work to never runs). Each OS says what it does.
     fn end_now(limit: std::time::Duration);
 
-    /// A line for the system's log (iOS: the unified log, subsystem `ai.sidevoice`, public strings), where the app's own
-    /// log file is not read by `log show`. Nothing elsewhere.
-    fn os_log(_category: &str, _message: &str) {}
-
     /// Whether the surface is on the system's screens now, or on its way (iOS: a Live Activity that has been requested and
     /// is not over, or one the call's start asked for with Live Activities on and not yet requested: it needs iOS 16.1,
     /// the person may have it off, and it starts only while the app is in front). False where none is.
@@ -68,8 +64,4 @@ pub fn end_now(limit: std::time::Duration) {
 
 pub fn running() -> bool {
     Native::running()
-}
-
-pub fn os_log(category: &str, message: &str) {
-    Native::os_log(category, message)
 }

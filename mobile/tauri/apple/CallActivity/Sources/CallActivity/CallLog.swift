@@ -1,33 +1,29 @@
 import os
 
-/// The activity's diagnostics, in the unified log (`log show --predicate 'subsystem == "ai.sidevoice"'`), from the app and
-/// from the widget extension. Public strings only for what holds no conversation: ids, sizes, names, lengths. NSLog's strings are said to be redacted on a device, which is unverified (check on a device before relying on it: send no content through NSLog), and the Rust side's log
-/// is a file, so what happens to the creatures' stills and to the buttons is written here.
+/// The activity's lines for the unified log (subsystem `ai.sidevoice`, one category), from the app and from the widget
+/// extension. The Sidevoice logging guideline applies (section 8): only warnings and errors are written, never an info or
+/// debug line; each is a fixed sentence, so a literal (`StaticString`) is all a message can be, with at most one number as its
+/// field. Nothing from outside goes in: no still or file name, no device or route name, no URL, no text, no system error
+/// text. The unified log's privacy marks are not relied on: every piece written is public, because it is fixed.
 public enum CallLog {
     public static let subsystem = "ai.sidevoice"
-    /// The creatures' stills: kept by the app, read by the extension.
-    public static let stills = Logger(subsystem: subsystem, category: "stills")
-    /// The buttons' App Intents.
-    public static let intent = Logger(subsystem: subsystem, category: "intent")
-    /// The words in the island.
-    public static let text = Logger(subsystem: subsystem, category: "text")
-    /// The thinking sound the app plays for the page: whether it starts, plays, or why not (ids, states, errors).
-    public static let cue = Logger(subsystem: subsystem, category: "cue")
-    /// The app's audio session: its category, mode, options, route, volume, rates and buffers, and why they changed.
-    public static let audio = Logger(subsystem: subsystem, category: "audio")
-    /// The app's own log lines (the Rust side's), by category.
-    public static let app = Logger(subsystem: subsystem, category: "app")
+    private static let logger = Logger(subsystem: subsystem, category: "app")
 
-    /// A line the Rust side hands over (`SidevoiceLog`): its category, as the unified log has it. The stills', the intents', the cue's and
-    /// the audio session's lines hold ids, sizes, names and levels, never the conversation's words, and are public; the app's own lines may carry what
-    /// the person said, and stay private (a device's log shows them as `<private>`).
-    public static func write(_ category: String, _ message: String) {
-        switch category {
-        case "stills": stills.notice("\(message, privacy: .public)")
-        case "intent": intent.notice("\(message, privacy: .public)")
-        case "cue": cue.notice("\(message, privacy: .public)")
-        case "audio": audio.notice("\(message, privacy: .public)")
-        default: app.notice("\(message, privacy: .private)")
+    /// Something degraded, then recovered or went on without.
+    public static func warning(_ message: StaticString, code: Int? = nil) {
+        if let code {
+            logger.warning("\(message.description, privacy: .public) code=\(code, privacy: .public)")
+        } else {
+            logger.warning("\(message.description, privacy: .public)")
+        }
+    }
+
+    /// Something failed for good.
+    public static func error(_ message: StaticString, code: Int? = nil) {
+        if let code {
+            logger.error("\(message.description, privacy: .public) code=\(code, privacy: .public)")
+        } else {
+            logger.error("\(message.description, privacy: .public)")
         }
     }
 }
