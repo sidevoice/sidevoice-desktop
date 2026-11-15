@@ -16,15 +16,9 @@ import SwiftUI
 enum CallActions {
     /// Hands the action to the app's Rust side; the hand-over is synchronous (the call acts after it, on its own threads).
     static func send(_ action: String, from intent: String) {
-        let info = ProcessInfo.processInfo
-        let process = Bundle.main.bundlePath.hasSuffix(".appex") ? "widget extension" : "app"
-        CallLog.intent.notice(
-            "intent \(intent, privacy: .public) performing: \(action, privacy: .public) in the \(process, privacy: .public) (\(info.processName, privacy: .public), pid \(info.processIdentifier))"
-        )
-        let handed = deliver(action)
-        CallLog.intent.notice(
-            "intent \(intent, privacy: .public): \(handed ? "handed to the call" : "found no call; the card is stale and is ended", privacy: .public)"
-        )
+        if !deliver(action) {
+            CallLog.warning("a button found no call to hand its action to; the card is stale and is ended")
+        }
     }
 
     /// The class is the app's (Rust, objc2), registered when the call's activity starts. Without it this process has no
@@ -99,9 +93,7 @@ struct ToggleRoute: LiveActivityIntent {
     static var isDiscoverable = false
     init() {}
     func perform() async throws -> some IntentResult {
-        CallLog.intent.notice("intent ToggleRoute performing (pid \(ProcessInfo.processInfo.processIdentifier))")
         AudioRoute.toggle()
-        CallLog.intent.notice("intent ToggleRoute: switched the output (native; no call needed)")
         return .result()
     }
 }

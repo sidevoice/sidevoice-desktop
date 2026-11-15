@@ -16,10 +16,10 @@ impl KeepScreenOn {
     }
 
     fn set(&self, on: bool) {
-        if let Err(error) = keep_screen_on(&self.app, on) {
-            log::warn!(
-                "screen: could not {} the screen on: {error}",
-                if on { "keep" } else { "release" }
+        if keep_screen_on(&self.app, on).is_err() {
+            tracing::warn!(
+                keep = on,
+                "the screen could not be kept on or released for a download"
             );
         }
     }

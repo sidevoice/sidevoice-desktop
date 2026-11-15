@@ -17,7 +17,6 @@ mod downloads;
 mod hold;
 mod i18n;
 pub mod pairings;
-mod panics;
 mod platform;
 mod surface;
 
@@ -226,7 +225,7 @@ fn cue(
     };
     // Every refusal goes to the app's log at warn: the page says it only in its own console.
     let refusal = |why: &str| {
-        log::warn!(target: "cue", "cue refused: {why}");
+        tracing::warn!(target: "cue", reason = why, "a cue request was refused and nothing plays");
         serde_json::json!({ "key": "bad_request", "message": why })
     };
     the_page(&app, &webview).map_err(|why| refusal(&why))?;
@@ -263,11 +262,11 @@ fn cue(
     let ticket = cue_ticket();
     room.then(move |room| {
         if !cue_current(ticket) {
-            log::info!(target: "cue", "cue {cue:?}: a start superseded before it was checked");
+            tracing::info!(target: "cue", ?cue, "a cue start was superseded before it was checked");
             return;
         }
         if let Some(why) = room.cue_refusal() {
-            log::warn!(target: "cue", "cue {cue:?} refused: {why}");
+            tracing::warn!(target: "cue", ?cue, reason = why.as_str(), "a cue start was refused and nothing plays");
             return;
         }
         // Read and decoded on a thread of its own: neither the main thread nor the room's, whose next job may be the call's end.
@@ -288,25 +287,25 @@ fn cue(
                 ) {
                     Ok(prepared) => prepared,
                     Err(_) => {
-                        log::warn!(target: "cue", "cue {cue:?} did not start: the sound was not prepared");
+                        tracing::warn!(target: "cue", ?cue, "the cue did not start because its sound was not prepared");
                         return;
                     }
                 };
                 if !cue_current(ticket) {
-                    log::info!(target: "cue", "cue {cue:?}: a start superseded while its sound was read");
+                    tracing::info!(target: "cue", ?cue, "a cue start was superseded while its sound was read");
                     return;
                 }
                 let queued = handle.run_on_main_thread(move || {
                     if start_cue(cue, prepared, ticket, when).is_err() {
-                        log::warn!(target: "cue", "cue {cue:?} did not start");
+                        tracing::warn!(target: "cue", ?cue, "the cue did not start");
                     }
                 });
                 if queued.is_err() {
-                    log::warn!(target: "cue", "cue {cue:?} did not start: the main thread did not take it");
+                    tracing::warn!(target: "cue", ?cue, "the cue did not start because the main thread did not take it");
                 }
             });
         if let Err(error) = spawned {
-            log::warn!(target: "cue", "cue {cue:?} did not start: no thread (os error {:?})", error.raw_os_error());
+            tracing::warn!(target: "cue", ?cue, os_error = error.raw_os_error(), "the cue did not start because no thread could be created");
         }
     });
     Ok(true)
@@ -413,11 +412,11 @@ fn call_state(
     if (previous.ready, previous.joined, previous.mic_enabled)
         != (snapshot.ready, snapshot.joined, snapshot.mic_enabled)
     {
-        log::info!(
-            "call_state: ready={} joined={} mic={}",
-            snapshot.ready,
-            snapshot.joined,
-            snapshot.mic_enabled
+        tracing::info!(
+            ready = snapshot.ready,
+            joined = snapshot.joined,
+            mic = snapshot.mic_enabled,
+            "the page reported a new call state"
         );
     }
     Ok(())
@@ -438,18 +437,20 @@ async fn call_still(
 ) -> Result<(), String> {
     use base64::Engine as _;
     if let Err(error) = the_page(&app, &webview) {
-        log::warn!(target: "stills", "call_still from a webview that is not the page: {error}");
+        tracing::warn!(target: "stills", reason = error.as_str(), "a still came from a webview that is not the page and was refused");
         return Err(error);
     }
-    log::info!(
+    tracing::info!(
         target: "stills",
-        "call_still: id of {} bytes ({} base64 bytes, {px} px) from page {page}",
-        id.len(),
-        png.len()
+        id_len = id.len(),
+        base64_len = png.len(),
+        px,
+        page,
+        "a still arrived from the page"
     );
-    // Every refusal is said, in the stills' public category: an id and a size, never a conversation's words.
+    // Every refusal is said with a size and a fixed reason, never the id (the page names it) or a conversation's words.
     let refused = |why: &str| {
-        log::warn!(target: "stills", "call_still: id of {} bytes refused: {why}", id.len());
+        tracing::warn!(target: "stills", id_len = id.len(), reason = why, "a still from the page was refused");
         format!("call_still: {why}")
     };
     if png.len() > sidevoice_mobile_plugin::STILL_LIMIT / 3 * 4 + 4 {
@@ -465,7 +466,7 @@ async fn call_still(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| {
-        log::warn!(target: "stills", "call_still: not kept");
+        tracing::warn!(target: "stills", "a still from the page was not kept");
         format!("call_still: {error}")
     })
 }
@@ -502,9 +503,6 @@ impl From<CallReport> for CallState {
 
 /// The app: one window, on the bundled interface, with the members the apps share.
 fn run_app() {
-    // Before anything that may panic: every panic into a file that the next launch reads, since one the app cannot unwind
-    // from aborts it before anything else is written (`panics`).
-    panics::install();
     init_logging();
     #[allow(
         clippy::disallowed_macros,
@@ -539,13 +537,9 @@ fn run_app() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            // The log's file (and its folder), then where the panics' file goes, and the last run's panics into the log (`panics`).
+            // The log's file (and its folder): the lines written before it are in it first, and the start event.
             open_log_file(&handle);
-            tracing::info!(version = env!("CARGO_PKG_VERSION"), "app started");
-            match handle.path().app_log_dir() {
-                Ok(dir) => panics::watch(&dir),
-                Err(_) => tracing::warn!("panics: no log folder"),
-            }
+            sidevoice_shared::logging::announce(platform::resource::current());
             // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
             // and on the room's call's thread, in order with its reports and interruptions (`call::RoomCall`).
             let media_app = handle.clone();
@@ -567,19 +561,19 @@ fn run_app() {
                     let _ = window.eval("window.dispatchEvent(new Event('sidevoice-audio-route'));");
                 }
             })).is_err() {
-                log::warn!("audio route: not observed");
+                tracing::warn!("audio route changes cannot be observed; the page is not told when the route changes");
             }
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
             if platform::tls::init().is_err() {
-                log::error!("tls: not initialised");
+                tracing::error!("the TLS verifier was not initialised; remote providers and downloads will fail");
             }
             // The creatures' stills an earlier run kept for the call's surfaces: the page sends the ones it shows again.
             if let Err(error) = sidevoice_mobile_plugin::clear_stills(&handle) {
-                log::warn!(target: "stills", "call_still: the earlier stills were not removed (os error {:?})", error.raw_os_error());
+                tracing::warn!(target: "stills", os_error = error.raw_os_error(), "the stills an earlier run kept were not removed");
             }
             // Declared now, activated only while a call's audio is open (`call::PhoneCall`).
             if call::configure().is_err() {
-                log::error!("audio session: not declared");
+                tracing::error!("the audio session was not declared; the call cannot record");
             }
             let phone = Arc::new(call::PhoneCall::new(handle.clone()));
             // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
@@ -617,7 +611,7 @@ fn run_app() {
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
                 // The page's console warnings and errors, uncaught errors and unhandled rejections, into the app's log (as
-                // the desktop's room): the page's lines are the private `app` category of the unified log (`system_log`).
+                // the desktop's room): they stay in the app's file; the system log takes none of the page's.
                 .initialization_script(sidevoice_shared_tauri::js::WEBVIEW_LOG)
                 .initialization_script(bridge::script(
                     APP_ORIGIN,
@@ -753,8 +747,9 @@ fn open_log_file(app: &AppHandle) {
     }
 }
 
-/// The targets a bare `SIDEVOICE_LOG` level applies to: our crates and the fixed targets (`panic`, the page's `webview`, the
-/// system log's four categories). Every other target stays at `warn` unless the variable names it.
+/// The targets a bare `SIDEVOICE_LOG` level applies to: our crates and the fixed targets (`panic` and `crash_backtrace`,
+/// the page's `webview`, and the four of the call's native parts). Every other target stays at `warn` unless the variable
+/// names it. They share no prefix with each other.
 const OWN_TARGETS: &[&str] = &[
     "sidevoice_mobile_lib",
     "sidevoice_mobile_plugin",
@@ -764,7 +759,8 @@ const OWN_TARGETS: &[&str] = &[
     "sidevoice_shared_headset",
     "sidevoice_voice",
     "sidevoice_engine",
-    "panic",
+    sidevoice_shared::logging::PANIC_TARGET,
+    sidevoice_shared::logging::BACKTRACE_TARGET,
     "webview",
     "stills",
     "intent",
@@ -772,30 +768,54 @@ const OWN_TARGETS: &[&str] = &[
     "audio",
 ];
 
-/// The process's subscriber, first thing in `run_app`: the file layer, and the system's. No layer writes to stderr (on iOS
-/// that is the system's public log), and the panic hook is [`panics`]', which never logs. `run_app` runs again when Android
+/// The targets the phone's system log takes, at `warn` and above: ours, but not the page's `webview` (its lines are the
+/// page's console, narrowed by the forwarder; they stay in the app's file), and not the backtrace (written out in the filter
+/// all the same).
+const SYSTEM_TARGETS: &[&str] = &[
+    "sidevoice_mobile_lib",
+    "sidevoice_mobile_plugin",
+    "sidevoice_shared",
+    "sidevoice_shared_tauri",
+    "sidevoice_shared_i18n",
+    "sidevoice_shared_headset",
+    "sidevoice_voice",
+    "sidevoice_engine",
+    sidevoice_shared::logging::PANIC_TARGET,
+    "stills",
+    "intent",
+    "cue",
+    "audio",
+];
+
+/// The process's subscriber, first thing in `run_app` (so before anything that may panic): the file layer, the system's
+/// (`platform::system_log`: `warn` and `error` of our targets, no backtrace) and the shared panic hook, which replaces the
+/// standard hook and writes the record into the file at once. No layer writes to stderr. `run_app` runs again when Android
 /// recreates the activity: the second call finds the subscriber installed and does nothing.
 fn init_logging() {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let system = sidevoice_shared::system_log::SystemLog::new(
-        sidevoice_shared::logging::Home::new(home.as_deref()),
-        platform::system_log::write,
-    );
     sidevoice_shared::logging::init_with(
         OWN_TARGETS,
         home.as_deref(),
         |line: &str| {
-            let mut early = EARLY.lock().unwrap_or_else(|e| e.into_inner());
-            match LOG_SINK.get() {
-                Some(file) => write_line(file.as_ref(), line),
-                None if early.len() < EARLY_LINES => early.push(line.to_owned()),
-                None => {}
+            // In the panic hook the thread may already hold the buffer: only try.
+            let early = if sidevoice_shared::logging::in_panic_hook() {
+                EARLY.try_lock().ok()
+            } else {
+                Some(EARLY.lock().unwrap_or_else(|e| e.into_inner()))
+            };
+            match (LOG_SINK.get(), early) {
+                (Some(file), _) => write_line(file.as_ref(), line),
+                (None, Some(mut early)) if early.len() < EARLY_LINES => early.push(line.to_owned()),
+                _ => {}
             }
         },
         sidevoice_shared::logging::Extras {
-            layer: Some(system),
+            layer: Some(platform::system_log::layer(
+                sidevoice_shared::logging::Home::new(home.as_deref()),
+            )),
+            system_targets: SYSTEM_TARGETS,
             stderr: false,
-            panic_hook: false,
+            panic_hook: true,
         },
     );
 }

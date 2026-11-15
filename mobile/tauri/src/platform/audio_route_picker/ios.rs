@@ -40,7 +40,7 @@ thread_local! {
 }
 
 fn failed(why: &str) -> String {
-    log::warn!("the output route picker did not open: {why}");
+    tracing::warn!(reason = why, "the output route picker did not open");
     "audio-route-picker-failed".into()
 }
 

@@ -65,11 +65,11 @@ fn mode_for(on_phone: Option<bool>) -> SessionMode {
     }
 }
 
-/// Logs the audio session as it is `when` (iOS; target `audio`, public in the unified log: the system's names, levels and
+/// Logs the audio session as it is `when` (iOS; target `audio`, `info`, so the app's file only: the system's names, levels and
 /// the route's port types, never a port's name or a word of the call). Nothing where there is no session to describe.
 fn report(when: &str) {
     if let Some(session) = audio_session::describe() {
-        log::info!(target: "audio", "audio {when}: {session}");
+        tracing::info!(target: "audio", when, session = session.as_str(), "the audio session was read");
     }
 }
 
@@ -243,7 +243,7 @@ impl PhoneCall {
         match Session::configure(&call_audio(wanted)) {
             Ok(()) => {
                 audio.declared = Some(wanted);
-                log::info!(target: "audio", "audio mode switched {now:?} -> {wanted:?} on {why}");
+                tracing::info!(target: "audio", from = ?now, to = ?wanted, reason = why, "the audio session's mode was switched");
                 if speaker {
                     loudspeaker::take();
                 }
@@ -255,8 +255,8 @@ impl PhoneCall {
                 report("after the mode switch");
             }
             Err(_) => {
-                // The system's text stays out of a public category: the modes and the reason say what was asked.
-                log::warn!(target: "audio", "audio mode not switched {now:?} -> {wanted:?} on {why}");
+                // The system's text stays out of the log: the modes and the reason say what was asked.
+                tracing::warn!(target: "audio", from = ?now, to = ?wanted, reason = why, "the audio session's mode was not switched; the route may be quiet");
             }
         }
     }
@@ -281,7 +281,7 @@ impl PhoneCall {
                 true
             }
             Err(_) => {
-                log::warn!("call: the audio session was not activated again");
+                tracing::warn!("call: the audio session was not activated again");
                 false
             }
         }
@@ -315,7 +315,7 @@ impl CallActivity for PhoneCall {
         match configure() {
             Ok(mode) => audio.declared = Some(mode),
             Err(_) => {
-                log::warn!(target: "audio", "call: the audio session was not declared again");
+                tracing::warn!(target: "audio", "call: the audio session was not declared again");
             }
         }
         let deadline = Instant::now() + SYSTEM_AUDIO_LIMIT;
@@ -324,19 +324,19 @@ impl CallActivity for PhoneCall {
             match audio.system.gate(left.is_zero()) {
                 Gate::Activate => {
                     Session::activate()?;
-                    log::info!("call: the audio opens (no system's call)");
+                    tracing::info!("call: the audio opens (no system's call)");
                     break;
                 }
                 Gate::Open => {
-                    log::info!("call: the audio opens: the system's call made it ready");
+                    tracing::info!("call: the audio opens: the system's call made it ready");
                     break;
                 }
                 Gate::Refuse(why) => {
-                    log::warn!("call: no audio: {why}");
+                    tracing::warn!(reason = why, "the call's audio is not opened");
                     return Err(ACTIVATE_FAILED.into());
                 }
                 Gate::Wait => {
-                    log::info!("call: the audio waits for the system's call to make it ready");
+                    tracing::info!("call: the audio waits for the system's call to make it ready");
                     audio = self.changed.wait_timeout(audio, left).unwrap().0;
                 }
             }
@@ -361,7 +361,7 @@ impl CallActivity for PhoneCall {
             return;
         }
         if Session::deactivate().is_err() {
-            log::warn!("call: the audio session was not given back");
+            tracing::warn!("call: the audio session was not given back");
         }
         report("as the last voice call's audio stops");
     }
@@ -385,12 +385,12 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
             }
         })
     {
-        log::warn!(target: "audio", "audio: the route is not followed (os error {:?})", error.raw_os_error());
+        tracing::warn!(target: "audio", os_error = error.raw_os_error(), "the audio route is not followed because no thread could be created");
     }
     let routes = Mutex::new(routes);
     if audio_session::observe(Arc::new(move |event| {
         if let Some(session) = audio_session::describe() {
-            log::info!(target: "audio", "audio {event}: {session}");
+            tracing::info!(target: "audio", event = event.as_str(), session = session.as_str(), "the audio session was read after a system notice");
         }
         if event.starts_with("route change") {
             let _ = routes.lock().unwrap().send(event);
@@ -398,11 +398,11 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
     }))
     .is_err()
     {
-        log::warn!(target: "audio", "audio: the session is not observed");
+        tracing::warn!(target: "audio", "the audio session is not observed; route changes are not followed");
     }
     let app = app.clone();
     let listener = Arc::new(move |event: Interruption| {
-        log::info!("audio session: {event:?}");
+        tracing::info!(?event, "the audio session was interrupted or reset");
         let signal = match event {
             Interruption::Began => Signal::Began,
             // Not resumed on its own when the system advises against it, or the session could not be activated again.
@@ -414,8 +414,8 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
             // reopens its streams itself. Nothing of the call pauses or resumes.
             Interruption::Reset => {
                 match phone.redeclare() {
-                    Ok(()) => log::info!("audio session: declared again after the reset"),
-                    Err(_) => log::error!("audio session: not declared again"),
+                    Ok(()) => tracing::info!("audio session: declared again after the reset"),
+                    Err(_) => tracing::error!("audio session: not declared again"),
                 }
                 phone.reactivate();
                 return;
@@ -426,7 +426,7 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
         }
     });
     if interruption::observe(listener).is_err() {
-        log::error!("audio session: interruptions are not observed");
+        tracing::error!("audio session: interruptions are not observed");
     }
 }
 
@@ -519,7 +519,7 @@ fn retire(
             Ok(()) => {
                 forgotten.remove(&id);
             }
-            Err(_) => log::warn!("call_forget: refused"),
+            Err(_) => tracing::warn!("call_forget: refused"),
         }
     }
 }
@@ -608,7 +608,7 @@ impl RoomCall {
             // The old page's stills go with it (nothing draws them once its call has ended): the new page sends its own.
             room.forgotten.clear();
             if let Err(error) = clear_stills(&room.app) {
-                log::warn!(target: "stills", "call_still: the old page's stills were not removed (os error {:?})", error.raw_os_error());
+                tracing::warn!(target: "stills", os_error = error.raw_os_error(), "the old page's stills were not removed");
             }
             // What the old page's interruptions held is let go first; the new page starts with none.
             room.clear_interruption();
@@ -674,10 +674,11 @@ impl RoomCall {
         let (done, kept) = mpsc::channel();
         self.then(move |room| {
             let result = if room.page != page {
-                log::info!(
+                tracing::info!(
                     target: "stills",
-                    "call stills: a still is of page {page}, the room is on {}: dropped",
-                    room.page
+                    page,
+                    room_page = room.page,
+                    "a still of another page was dropped"
                 );
                 Ok(())
             } else {
@@ -706,7 +707,7 @@ impl RoomCall {
     /// budget, so a stuck room thread (a start waiting on the main thread) cannot keep it from ending. Each wait is
     /// capped, leaving the rest of the budget to the voice host's release after this.
     pub fn end(&self, deadline: Instant) {
-        log::info!("call: quitting: ending the call");
+        tracing::info!("call: quitting: ending the call");
         let left = || deadline.saturating_duration_since(Instant::now());
         end_surface_now(left().min(QUIT_SURFACE_LIMIT));
         let (done, finished) = mpsc::channel();
@@ -785,7 +786,7 @@ impl Room {
                         self.since = since;
                         // The system is told the page's mute and title at once (`show`), whatever it started with.
                         self.shown = None;
-                        log::info!("call: started{}", if kind { " (the system's)" } else { "" });
+                        tracing::info!(system = kind, "the call started");
                         break;
                     }
                     // The call goes on as the app's own (in front on Android: it does not outlive the screen; on iOS with
@@ -793,9 +794,25 @@ impl Room {
                     // `microphone-permission`, `call-refused`, …).
                     Err(error) => {
                         self.phone.system_call(false);
-                        log::error!(
-                            "call: the {} call did not start: {error}",
-                            if kind { "system's" } else { "app's own" }
+                        // The code the platform gave (`not-visible`, `microphone-permission`, …), when it is one. Never the
+                        // error's text (Kotlin's message, the plugin's): this line goes to the public system log.
+                        let reason = match &error {
+                            sidevoice_mobile_plugin::CallServiceError::Refused {
+                                code: Some(code),
+                                ..
+                            } => sidevoice_shared::logging::checked_code(code),
+                            sidevoice_mobile_plugin::CallServiceError::Refused {
+                                code: None,
+                                ..
+                            } => "refused",
+                            sidevoice_mobile_plugin::CallServiceError::Unreachable(_) => {
+                                "unreachable"
+                            }
+                        };
+                        tracing::error!(
+                            system = kind,
+                            reason,
+                            "the call did not start with this kind of call; the next kind is tried or the call goes without"
                         );
                     }
                 }
@@ -810,9 +827,9 @@ impl Room {
             self.shown = None;
             self.phone.system_call(false);
             if stop_call_service(&self.app).is_err() {
-                log::warn!("call: the call's service did not stop");
+                tracing::warn!("call: the call's service did not stop");
             }
-            log::info!("call: ended");
+            tracing::info!("call: ended");
         }
     }
 
@@ -856,7 +873,7 @@ impl Room {
                 self.updated_at = Some(Instant::now());
                 self.collect();
             }
-            Err(_) => log::warn!("call: the system's call was not updated"),
+            Err(_) => tracing::warn!("call: the system's call was not updated"),
         }
     }
 
@@ -897,7 +914,7 @@ impl Room {
     /// before anything the native side makes the call tell it.
     fn act(&mut self, action: SurfaceAction) {
         let native = native_action(action);
-        log::info!(target: "intent", "call: {action:?} from the call's surface; natively: {native:?}");
+        tracing::info!(target: "intent", ?action, ?native, "a button on the call's surface asked for an action");
         // The page's mute command is sent by `set_mute`, which every native mute goes through.
         if let Some(mut request) = surface_command(action) {
             request["page"] = self.page.into();
@@ -937,11 +954,13 @@ impl Room {
     fn toggle_mute(&mut self, by: &str, showed: Option<bool>) {
         let has = !self.state.mic_enabled;
         let muted = toggled(showed, has);
-        log::info!(
+        tracing::info!(
             target: "intent",
-            "call: toggle-mute from the {by}: it showed muted={}, the app has muted={has}, so muted={muted}{}",
-            showed.map_or_else(|| "none".to_owned(), |showed| showed.to_string()),
-            if muted == has { ", as it is already" } else { "" }
+            by,
+            showed,
+            has,
+            muted,
+            "a toggle of the mute was resolved"
         );
         // A mute set is shown at once (`set_mute`); anything else is drawn again here.
         if muted == has || !self.set_mute(muted) {
@@ -957,15 +976,11 @@ impl Room {
         let app = self.app.clone();
         tauri::async_runtime::spawn(async move {
             let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) else {
-                log::warn!(target: "intent", "call: {what}: no voice host");
+                tracing::warn!(target: "intent", what, "a button's action found no voice host");
                 return;
             };
             let found = work(host).await;
-            log::info!(
-                target: "intent",
-                "call: {what} done natively{}",
-                if found { "" } else { " (no call to act on)" }
-            );
+            tracing::info!(target: "intent", what, found, "a button's action was done natively");
         });
     }
 
@@ -976,7 +991,7 @@ impl Room {
     /// set.
     fn set_mute(&mut self, muted: bool) -> bool {
         if self.mic_disabled {
-            log::info!(target: "intent", "call: mute {muted}: the call's mute cannot be used now");
+            tracing::info!(target: "intent", muted, "a mute was asked for while the call's mute cannot be used");
             return false;
         }
         self.state.mic_enabled = !muted;
@@ -1012,20 +1027,21 @@ impl Room {
         match report {
             MicReport::Taken => {}
             MicReport::Held { first } => {
-                log::info!(
+                tracing::info!(
                     target: "intent",
-                    "call: the page reports the microphone {}: kept {}, a native mute waits for the page to run it",
-                    word(reported),
-                    word(mic)
+                    reported = word(reported),
+                    kept = word(mic),
+                    "the page reports another microphone state; a native mute waits for the page to run it"
                 );
                 if first {
                     self.mute_wait_later();
                 }
             }
-            MicReport::TimedOut => log::warn!(
+            MicReport::TimedOut => tracing::warn!(
                 target: "intent",
-                "call: the page still reports the microphone {} {MUTE_WAIT:?} after it reported again: taken, it did not run the native mute",
-                word(reported)
+                reported = word(reported),
+                wait_ms = MUTE_WAIT.as_millis() as u64,
+                "the page did not run the native mute in time; its report is taken"
             ),
         }
         self.state.mic_enabled = mic;
@@ -1067,7 +1083,7 @@ impl Room {
     /// lanes disposed of).
     fn hang_up(&mut self) {
         if self.holding.is_none() && !self.state.joined {
-            log::info!(target: "intent", "call: hang-up: no call");
+            tracing::info!(target: "intent", "call: hang-up: no call");
             return;
         }
         self.hung_up = Some(self.reported_since);
@@ -1131,7 +1147,7 @@ impl Room {
             || match request_call_focus(&app) {
                 Ok(()) => true,
                 Err(_) => {
-                    log::warn!("call: the audio focus was not asked for again");
+                    tracing::warn!("call: the audio focus was not asked for again");
                     false
                 }
             },
@@ -1151,7 +1167,7 @@ impl Room {
             match effect {
                 // The page mutes (its own mute, remembered by the page as ours).
                 Effect::Interrupt => {
-                    log::info!("call: paused, the system took the audio");
+                    tracing::info!("call: paused, the system took the audio");
                     run_on_page(
                         &self.app,
                         serde_json::json!({ "command": "interrupt", "page": self.page, "since": self.since }),
@@ -1163,10 +1179,7 @@ impl Room {
                     serde_json::json!({ "command": "resume", "page": self.page, "since": self.since, "restoreMic": restore_mic }),
                 ),
                 Effect::Playback(held) => {
-                    log::info!(
-                        "call: the playback is {}",
-                        if held { "held" } else { "released" }
-                    );
+                    tracing::info!(held, "the call's playback was held or released");
                     if let Some(host) = self.app.try_state::<AppHost>() {
                         host.pause_playback(held);
                     }
@@ -1182,7 +1195,7 @@ impl Room {
 /// `page` and `since` when the command reaches it, which can be after another page or call has taken its place); a
 /// change of the audio focus pauses the call or resumes it (an interruption never hangs up).
 fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, event: CallEvent) {
-    log::info!("call service: {event:?}");
+    tracing::info!(?event, "the call's service reported an event");
     let Some(room) = app.try_state::<RoomCall>() else {
         return;
     };
@@ -1246,11 +1259,14 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
                 if mine(room) {
                     room.act(action);
                 } else {
-                    log::info!(
+                    tracing::info!(
                         target: "intent",
-                        "call: {action:?} dropped: it is of start {start} on page {page}, the room holds {:?} on page {}",
-                        room.holding,
-                        room.page
+                        ?action,
+                        start,
+                        page,
+                        holding = ?room.holding,
+                        room_page = room.page,
+                        "an action of an older call was dropped"
                     );
                     room.refresh();
                 }
@@ -1264,7 +1280,7 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             if !mine(room) {
                 return; // an older service's end: the call it was for is over already
             }
-            log::info!("call: hung up by the service ({reason:?})");
+            tracing::info!(?reason, "the call was hung up by the service");
             // The page first, so that it has the hang-up before what the stopped calls tell it.
             run_on_page(
                 &room.app,

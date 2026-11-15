@@ -228,11 +228,11 @@ class CallService : Service() {
         if (!systemCall) {
             // Telecom is not here to put the call in the communication mode and route it: the service does it itself.
             routeCommunication()
-            audioReady(mine, "own call: no Telecom call")
+            audioReady(mine)
             return
         }
         val deadline = Runnable {
-            audioReady(mine, "fallback: Telecom did not make the call active within $AUDIO_READY_LIMIT_MS ms")
+            audioReady(mine)
         }
         audioDeadline = deadline
         main.postDelayed(deadline, AUDIO_READY_LIMIT_MS)
@@ -243,11 +243,10 @@ class CallService : Service() {
      * The call's audio of [mine] may open now, for the reason [why] (logged): reported once per start, and only while
      * [mine] is the session this instance serves.
      */
-    private fun audioReady(mine: CallSession.Session, why: String) {
+    private fun audioReady(mine: CallSession.Session) {
         if (session?.id != mine.id || audioReadyFor == mine.id) return
         audioReadyFor = mine.id
         cancelAudioDeadline()
-        Log.i(TAG, "audio: the call's audio opens now: $why")
         CallSession.audioReady(mine)
     }
 
@@ -453,8 +452,8 @@ class CallService : Service() {
         try {
             calls.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
         } catch (error: RuntimeException) {
-            Log.w(TAG, "Telecom: the app was not registered; the call stays the app's own", error)
-            audioReady(mine, "fallback: Telecom did not register the app")
+            Log.w(TAG, "Telecom: the app was not registered; the call stays the app's own error.type=${error.javaClass.simpleName}")
+            audioReady(mine)
             return
         }
         val attributes = CallAttributesCompat(
@@ -492,8 +491,8 @@ class CallService : Service() {
                         val result = call.setActive()
                         if (registered !== call) return@launch // ended meanwhile, and disconnected
                         if (result !is CallControlResult.Success) {
-                            Log.w(TAG, "Telecom: the call was not set active: $result; it stays the app's own")
-                            audioReady(mine, "fallback: Telecom did not set the call active")
+                            Log.w(TAG, "Telecom: the call was not set active; it stays the app's own result=${result.javaClass.simpleName}")
+                            audioReady(mine)
                             registered = null
                             call.disconnect(DisconnectCause(DisconnectCause.ERROR))
                             // Its collectors (mute, route) do not end with the disconnect: they go now, and the call's
@@ -506,7 +505,7 @@ class CallService : Service() {
                             val (route, _) = combine(call.currentCallEndpoint, call.availableEndpoints) { current, available ->
                                 current to available
                             }.first { (current, available) -> CallRoute.settled(current.type, available.map { it.type }) }
-                            audioReady(mine, "Telecom made the call active, on ${route.name} (endpoint type ${route.type})")
+                            audioReady(mine)
                         }
                     }
                     // A mute from outside the app: a change of the system's microphone mute (Telecom's mute is that), told
@@ -536,8 +535,8 @@ class CallService : Service() {
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                Log.w(TAG, "Telecom refused the call; it stays the app's own", error)
-                audioReady(mine, "fallback: Telecom refused the call")
+                Log.w(TAG, "Telecom refused the call; it stays the app's own error.type=${error.javaClass.simpleName}")
+                audioReady(mine)
             }
         }
     }
@@ -580,7 +579,7 @@ class CallService : Service() {
             try {
                 call.disconnect(DisconnectCause(DisconnectCause.LOCAL))
             } catch (error: Exception) {
-                Log.w(TAG, "Telecom: the call was not disconnected", error)
+                Log.w(TAG, "Telecom: the call was not disconnected error.type=${error.javaClass.simpleName}")
             } finally {
                 job?.cancel()
             }
@@ -736,11 +735,11 @@ class CallService : Service() {
             available.firstOrNull { it.type in HEADPHONES }
         }
         if (target == null) {
-            Log.i(TAG, "route: nothing to switch to")
+            // Nothing to switch to: the route stays.
         } else {
             val taken = audio.setCommunicationDevice(target)
             routeChosen = routeChosen || taken
-            Log.i(TAG, "route: switch to ${target.productName} (type ${target.type}): ${if (taken) "set" else "refused"}")
+            if (!taken) Log.w(TAG, "route: the system refused the output switch; the route stays")
         }
         show(mine.id)
     }
@@ -796,7 +795,6 @@ class CallService : Service() {
             audio.mode = AudioManager.MODE_IN_COMMUNICATION
             communicating = true
         }
-        Log.i(TAG, "route: audio mode communication (was ${modeBefore})")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // A headset if one is connected, otherwise the loudspeaker: never the earpiece, which the communication mode
             // would choose by itself (D-LA-ROUTE: the speaker by default, no earpiece).
@@ -805,17 +803,16 @@ class CallService : Service() {
                 ?: available.firstOrNull { it.type in HEADPHONES }
                 ?: available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
             if (device == null) {
-                Log.i(TAG, "route: no headset or loudspeaker for the call; the system's route stays")
+                // No headset or loudspeaker for the call: the system's route stays.
             } else {
                 val taken = audio.setCommunicationDevice(device)
-                Log.i(TAG, "route: communication device ${device.productName} (type ${device.type}): ${if (taken) "set" else "refused"}")
+                if (!taken) Log.w(TAG, "route: the system refused the communication device; the route stays")
                 routedDevice = taken
             }
         } else if (outputs(audio).any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }) {
             @Suppress("DEPRECATION")
             audio.startBluetoothSco()
             routedSco = true
-            Log.i(TAG, "route: Bluetooth SCO started (Android before 12)")
         } else {
             keepOffEarpiece()
         }
@@ -838,18 +835,16 @@ class CallService : Service() {
             val speaker = audio.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
             val taken = speaker != null && audio.setCommunicationDevice(speaker)
             routedDevice = routedDevice || taken
-            Log.i(TAG, "route: on the earpiece by itself, to the loudspeaker: ${if (taken) "set" else "refused"}")
+            if (!taken) Log.w(TAG, "route: the system refused the loudspeaker; the call stays on the earpiece")
         } else {
             // Before Android 12 the communication mode plays on the earpiece unless headphones are connected.
             val headphones = outputs(audio).any { it.type in HEADPHONES }
             if (!headphones && !audio.isSpeakerphoneOn) {
                 audio.isSpeakerphoneOn = true
                 routedSpeakerphone = true
-                Log.i(TAG, "route: no headphones, the loudspeaker (Android before 12)")
             } else if (headphones && routedSpeakerphone) {
                 audio.isSpeakerphoneOn = false
                 routedSpeakerphone = false
-                Log.i(TAG, "route: headphones connected, off the loudspeaker (Android before 12)")
             }
         }
     }
@@ -874,7 +869,6 @@ class CallService : Service() {
         }
         audio.mode = modeBefore
         communicating = false
-        Log.i(TAG, "route: communication route cleared, audio mode back to ${modeBefore}")
     }
 
     private fun abandonFocus() {

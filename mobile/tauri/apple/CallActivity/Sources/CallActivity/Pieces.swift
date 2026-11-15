@@ -479,25 +479,29 @@ extension CallStills {
     }
 
     private static let once = Once()
-    private static let log = CallLog.stills
+
+    /// Why a still cannot be drawn. Each cause is a case and says itself in the log as a fixed sentence: the file's name is the
+    /// page's, and stays out of the log.
+    enum Problem: String {
+        case noContainer, notAFileName, noFile, notDecodable
+
+        func report() {
+            switch self {
+            case .noContainer: CallLog.error("the extension has no App Group container; the placeholder is drawn")
+            case .notAFileName: CallLog.error("a still is named by something that is not a file name; the placeholder is drawn")
+            case .noFile: CallLog.error("a named still is not in the App Group container; the placeholder is drawn")
+            case .notDecodable: CallLog.error("a named still does not decode as an image; the placeholder is drawn")
+            }
+        }
+    }
 
     /// Why the still `file` cannot be drawn, or nil when it can: no App Group container (the widget extension is signed
     /// without the group), no such file (the app wrote it elsewhere, or not at all), or a file that does not decode.
-    static func problem(_ file: String) -> String? {
-        guard directory != nil else { return "no App Group container (\(appGroup))" }
-        guard let url = url(file) else { return "not a file name: \(file)" }
-        guard FileManager.default.fileExists(atPath: url.path) else { return "no file \(file) in the App Group container" }
-        return UIImage(contentsOfFile: url.path) == nil ? "\(file) does not decode as an image" : nil
-    }
-
-    /// The stills an activity's state names (the creature, then the stack's faces), each by its file and whether this
-    /// process can draw it (`problem`), or `none`: the app says it in the unified log as the state starts naming others,
-    /// beside what the extension says as it draws them.
-    public static func naming(_ creatures: [CallState.Creature?]) -> String {
-        creatures.map { (creature: CallState.Creature?) -> String in
-            guard let file = creature?.file, !file.isEmpty else { return "none" }
-            return "\(file) (\(problem(file) ?? "there"))"
-        }.joined(separator: ", ")
+    static func problem(_ file: String) -> Problem? {
+        guard directory != nil else { return .noContainer }
+        guard let url = url(file) else { return .notAFileName }
+        guard FileManager.default.fileExists(atPath: url.path) else { return .noFile }
+        return UIImage(contentsOfFile: url.path) == nil ? .notDecodable : nil
     }
 
     /// A slot that has no still to draw (the placeholder is drawn instead): said once, by cause, in the unified log, so that a
@@ -505,7 +509,7 @@ extension CallStills {
     /// the one it named (`image` says why).
     static func missing(_ creature: CallState.Creature?) {
         guard creature?.file.isEmpty != false else { return }
-        if once.first("not named") { log.error("no still named in the call's state: the app has not kept one for it") }
+        if once.first("not named") { CallLog.error("no still is named in the call's state; the placeholder is drawn") }
     }
 
     private static let scaled = NSCache<NSString, UIImage>()
@@ -598,7 +602,6 @@ extension CallStills {
         let key = "\(directory?.path ?? "-")/\(file)@\(Int(pixels))" as NSString
         if let image = scaled.object(forKey: key) { return image }
         if let url = url(file), let image = UIImage(contentsOfFile: url.path) {
-            if once.first("drawn \(file)") { log.notice("still drawn: \(file, privacy: .public)") }
             let width = image.size.width * image.scale, height = image.size.height * image.scale
             let fit = min(1, pixels / max(width, height, 1))
             let small = fit < 1
@@ -608,7 +611,7 @@ extension CallStills {
             return small
         }
         if let reason = problem(file) {
-            if once.first(reason) { log.error("still not drawn: \(reason, privacy: .public)") }
+            if once.first(reason.rawValue) { reason.report() }
         }
         return nil
     }

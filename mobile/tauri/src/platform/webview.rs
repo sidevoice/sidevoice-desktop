@@ -33,6 +33,10 @@ pub fn fill_screen(webview: &PlatformWebview) {
 /// Logs where the web view is (a device test shows what the screen really holds, not what the code assumes).
 pub fn log_layout(when: &str, webview: &PlatformWebview) {
     if let Some(layout) = Native::layout(webview) {
-        log::info!("layout {when}: {layout}");
+        tracing::info!(
+            when,
+            layout = layout.as_str(),
+            "the web view layout was measured"
+        );
     }
 }

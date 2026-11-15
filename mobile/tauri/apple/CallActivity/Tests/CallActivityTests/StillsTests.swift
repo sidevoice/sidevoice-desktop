@@ -45,24 +45,18 @@ final class StillsTests: XCTestCase {
 
     func testNoAppGroupContainerIsNamed() {
         CallStills.directory = nil
-        XCTAssertTrue(CallStills.problem("straw-hat.png")?.contains("no App Group container") ?? false)
+        XCTAssertEqual(CallStills.problem("straw-hat.png"), .noContainer)
         XCTAssertNil(CallStills.image("straw-hat.png"))
     }
 
     func testAMissingFileIsNamed() {
         CallStills.directory = Bundle.module.url(forResource: "Fixtures", withExtension: nil)
-        XCTAssertTrue(CallStills.problem("nope.png")?.contains("no file nope.png") ?? false)
+        XCTAssertEqual(CallStills.problem("nope.png"), .noFile)
         XCTAssertNil(CallStills.image("nope.png"))
-    }
-
-    func testTheNamedStillsSayWhetherEachIsThere() {
-        CallStills.directory = Bundle.module.url(forResource: "Fixtures", withExtension: nil)
-        let named = CallStills.naming([CallState.Creature(file: "straw-hat.png"), nil, CallState.Creature(file: "nope.png")])
-        XCTAssertTrue(named.hasPrefix("straw-hat.png (there), none, nope.png (no file nope.png in "), named)
     }
 
     func testAPathIsNotAFileName() {
         CallStills.directory = Bundle.module.url(forResource: "Fixtures", withExtension: nil)
-        XCTAssertNotNil(CallStills.problem("../x.png"))
+        XCTAssertEqual(CallStills.problem("../x.png"), .notAFileName)
     }
 }

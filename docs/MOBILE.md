@@ -147,13 +147,8 @@ through `run` (the call's service hangs up through it).
   cargo the native project runs again from inside its build (Xcode's build phase, Gradle's `rust` task) gets from the
   Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
   (`mobile/tauri/frameworks/`, the `.so` files of `jniLibs`).
-- **The log**: `tracing`, as the [logging guideline](https://github.com/sidevoice/.github-private/blob/main/docs/logging.md) says: one subscriber (`mobile/tauri/src/lib.rs`, `SIDEVOICE_LOG`, default `info`; the Xcode scheme sets it, Android has no environment) with a file in the app's log folder (written by `tauri-plugin-log`'s file logger, 2 MB x 5) and the system's log (`shared/core/src/system_log.rs`): the unified log on iOS through the Swift `SidevoiceLog`, logcat on Android with the tag `sidevoice`. The plugin itself only serves the page's `log` command. On iOS the category is the event's real target, also for `log` records: `stills`, `intent`, `cue` and `audio` are public and carry only codes, counts and the system's enum names (no port names, no error text, no ids named by the page); everything else, the page's lines included, is `app`, private. No layer writes to stdout or stderr.
-  - **Panics** (`mobile/tauri/src/panics.rs`): a hook logs each one (its thread, place and message) and adds it to
-    `last-panic.txt` beside the log file, at most 16 KB; the next launch logs that file's panics as the last run's
-    (`the last run panicked:`) and removes it. The hook never logs itself: a panic inside a log call holds the logger's
-    lock, and logging from the hook would then deadlock (the standard hook still prints to standard error). It is
-    installed once, first thing in `run_app`; the file's place is known once the log folder is (`setup`). A panic the app cannot unwind from aborts it before anything else is
-    written, and the system's crash report has only the stack.
+- **The log**: `tracing`, as the [logging guideline](https://github.com/sidevoice/.github-private/blob/main/docs/logging.md) says: one subscriber (`mobile/tauri/src/lib.rs`, `SIDEVOICE_LOG` for the file only, default `info`; the Xcode scheme sets it, Android has no environment) with a file in the app's log folder (written by `tauri-plugin-log`'s file logger, 2 MB x 5, full detail) and the system's log: `warn` and `error` of our own targets, nothing else (`shared/core/src/system_log.rs`: a `Targets` filter that `SIDEVOICE_LOG` cannot widen, with `crash_backtrace` off by name). On iOS the layer is `tracing-oslog` (subsystem `ai.sidevoice`, one category, `app`), on Android logcat under the tag `sidevoice`. A dependency's line, the page's console lines (target `webview`) and the info and debug lines of ours stay in the file. Our lines are masked at the source (fixed sentences, ids and counts in fields), because `tracing-oslog` writes them public. On iOS `tracing-oslog` also writes the names and fields of admitted spans (`target::name(field: value)`) into the public activity name, from DEBUG up: the span fields of our targets must only hold values allowed in the system log. The plugin itself only serves the page's `log` command. No layer writes to stdout or stderr.
+  - **Panics**: the shared hook (`shared/core/src/logging.rs`, installed with the subscriber, first thing in `run_app`) replaces the standard hook and never chains it: a `panic` event with the place, the thread, the version and the message only when it is a literal, then a `crash_backtrace` event with the frames, which only the app's file receives. The record is written to the file at once, so there is no file to re-read at the next launch; the writers only try their locks inside the hook. Neither platform has a crash handler of ours (no Sentry yet), so nothing reports a panic twice; the system's own crash report, after an abort, has the stack only.
 
 ### Not verified
 
@@ -412,7 +407,7 @@ its buttons need iOS 17 (before that it only shows the call).
 - **The activity's life.** The system can end the activity (or the person can swipe it away) during a call. The app
   follows its state (`ActivityLifecycle`, `activityStateUpdates`), drops it when it is over and requests a new one with the
   next state (at once if the app is in front, else when it next is); at launch and whenever it comes to the front it ends
-  the app's activities that are not the call's (what a crash left). The buttons log each step to the unified log, subsystem `ai.sidevoice`, category `intent`.
+  the app's activities that are not the call's (what a crash left). A button that finds no call logs one warning.
 - **Updates.** Every change goes out at once. **The words** (the expanded island only: never on the Lock Screen, in the
   compact or minimal) are chunked by the app, where the updates are made (`TextChunker`, `TextPager` in the package; the
   port of research/live-activity-design-2026-11-02/src/text-chunks.js): the page's `page.text` (the whole reply, one page:
@@ -449,19 +444,7 @@ its buttons need iOS 17 (before that it only shows the call).
   while the call is on the speaker, until they go.
 - **The words** are the page's (`words` in the call surface), so the activity has no catalogue of its own; the output's
   name in the audio switch's accessible name is the system's.
-- **Diagnostics.** The app's log (the Rust side's `log::`, and the page's console warnings and errors, uncaught errors and
-  unhandled rejections through shared/tauri/js/webview-log.js, as on the desktop) is a file, which `log show` does not read; on
-  iOS every line also goes to the unified log (`SidevoiceLog`, subsystem `ai.sidevoice`; the public categories are `stills`, `intent`, `cue`
-  and `audio`, chosen by the event's real target and carrying only codes, counts and the system's names; every other line, the page's console
-  lines included, is `app`, private). A still the activity cannot draw is a placeholder, the
-  Sidevoice mark (white, 56 % of its slot, on the slot's ground), never an empty slot, and the cause is logged once. A still's
-  way is one public `stills` line per step, which `log show --predicate 'subsystem == "ai.sidevoice" AND category == "stills"'`
-  reads from a sysdiagnose or `log collect` (the page's own `console.warn` about a still is private now: the app's lines below cover each step):
-  - the app received it (`call_still: id of <n> bytes (<n> base64 bytes, <px> px) from page <n>`), refused it (`call_still: id of <n> bytes refused: …`,
-    `call stills: refused a still (id of <n> bytes, …): <code>`, `call_still: not kept`) or kept it (`call stills: kept a still (<n> bytes, <px> px)`),
-    in the folder said once (`call stills: folder kept (shared container: true|false)`), never with an id or a path;
-  - the activity's state names it (`activity state names stills: <file> (there|<why not>), …`, the app's Swift);
-  - the extension drew it (`still drawn: <file>`) or not (`still not drawn: <why>`, `no still named in the call's state`).
+- **Diagnostics.** The app's log (the Rust side's `tracing` events, and the page's console warnings and errors, uncaught errors and unhandled rejections through shared/tauri/js/webview-log.js, as on the desktop) is a file, which `log show` does not read; the unified log has only the `warn` and `error` lines of our own targets (`ai.sidevoice`, category `app`), from the Rust side and from the Swift (`CallLog`: fixed sentences, at most one number, never a file, device or route name). A still the activity cannot draw is a placeholder, the Sidevoice mark (white, 56 % of its slot, on the slot's ground), never an empty slot, and the cause is logged once as an error (`the extension has no App Group container`, `a still is named by something that is not a file name`, `a named still is not in the App Group container`, `a named still does not decode as an image`, `no still is named in the call's state`). The app's own steps for a still (`a still arrived from the page`, `a still from the page was refused`, `a still was kept`, with sizes and a fixed reason, never the id) are `info` or `warn` lines of the target `stills`: the app's file has them all, the unified log the refusals.
 
   `mobile testflight` prints the entitlements the app and the extension were signed with, and refuses the archive
   when either lacks the App Group (`cargo xtask mobile testflight`, `ios::check_ipa`).
@@ -641,15 +624,14 @@ during an upload collapse into the newest one. Its one step is `cargo xtask mobi
 
 ## The audio session log (iOS)
 
-**The log.** The unified log's public category `audio` (subsystem `ai.sidevoice`) has one line per moment, each with the
-session as the system has it then (category, mode, options, the route's output and
+**The log.** The app's file (target `audio`, `info`) has one line per moment, each with the
+session as the system has it then (system constants and numbers only, never a port's name) (category, mode, options, the route's output and
 input ports, `outputVolume`, `isOtherAudioPlaying`, `secondaryAudioShouldBeSilencedHint`, the sample rate, the IO buffer
 and their preferred values, the output latency and channels): at the app's start, as a voice call's
 audio opens and as the last one's stops (a try in Settings too); and at every route change (with
 its reason and the route before), interruption (with its type, `shouldResume` and reason), loss and reset of the media
-services, and move of the output volume (the volume keys), and every switch of the session's mode (`audio mode switched Default -> VoiceChat on route change: reason …`). sidevoice-voice exposes no gain of its playback to log.
-`log stream --predicate 'subsystem == "ai.sidevoice" AND category == "audio"'` (or Console with `subsystem:ai.sidevoice
-category:audio`).
+services, and move of the output volume (the volume keys), and every switch of the session's mode (`the audio session's mode was switched`, with `from`, `to` and `reason`). sidevoice-voice exposes no gain of its playback to log.
+The unified log has only the refusals (`warn`); read the app's file for the rest.
 
 **The page's own sounds.** The thinking sound's try in Settings (`previewThinkingSound`) and the recording's playback are
 the web view's (Web Audio, an `<audio>` element), not the voice's: WebKit plays them through its own audio session, in its
