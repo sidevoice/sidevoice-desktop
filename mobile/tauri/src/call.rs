@@ -794,10 +794,24 @@ impl Room {
                     // `microphone-permission`, `call-refused`, …).
                     Err(error) => {
                         self.phone.system_call(false);
-                        // The code the platform gave (`not-visible`, `microphone-permission`, …), when it is one.
+                        // The code the platform gave (`not-visible`, `microphone-permission`, …), when it is one. Never the
+                        // error's text (Kotlin's message, the plugin's): this line goes to the public system log.
+                        let reason = match &error {
+                            sidevoice_mobile_plugin::CallServiceError::Refused {
+                                code: Some(code),
+                                ..
+                            } => sidevoice_shared::logging::checked_code(code),
+                            sidevoice_mobile_plugin::CallServiceError::Refused {
+                                code: None,
+                                ..
+                            } => "refused",
+                            sidevoice_mobile_plugin::CallServiceError::Unreachable(_) => {
+                                "unreachable"
+                            }
+                        };
                         tracing::error!(
                             system = kind,
-                            reason = sidevoice_shared::logging::checked_code(&error),
+                            reason,
                             "the call did not start with this kind of call; the next kind is tried or the call goes without"
                         );
                     }

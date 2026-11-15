@@ -19,6 +19,9 @@ use tracing_subscriber::layer::{Context, Filter};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
 
+/// Note for iOS: `tracing-oslog` writes the names and fields of every admitted span (`target::name(field: value)`) into the
+/// public activity name from DEBUG up, so the span fields of our targets must only hold values allowed in the system log.
+///
 /// The most a span of ours may be verbose to be seen by the system layer. A layer that builds something for each span (iOS's
 /// `os_activity`) needs the spans an event is in; the cost is held by taking none of `trace`, which is where the hot paths are.
 const SPAN_LEVEL: LevelFilter = LevelFilter::DEBUG;
