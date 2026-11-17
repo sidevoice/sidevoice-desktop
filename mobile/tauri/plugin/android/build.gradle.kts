@@ -26,7 +26,13 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
         // Robolectric's Android 16 reaches into the JDK's file descriptors.
-        unitTests.all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+        unitTests.all {
+            it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
+            // Native graphics hold every bitmap off-heap; Gradle's 512 MB default for a test JVM is tight for the call card's renders.
+            it.maxHeapSize = "2g"
+            // A native crash (#532) leaves its hs_err log where CI uploads it, not in the project directory.
+            it.jvmArgs("-XX:ErrorFile=${layout.buildDirectory.get().asFile}/hs_err/hs_err_pid%p.log")
+        }
     }
 }
 
