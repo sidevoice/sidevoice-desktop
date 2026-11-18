@@ -890,4 +890,30 @@ Denies the voice_update command without any pre-configured scope.
 
 </td>
 </tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:allow-webview-log`
+
+</td>
+<td>
+
+Enables the webview_log command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:deny-webview-log`
+
+</td>
+<td>
+
+Denies the webview_log command without any pre-configured scope.
+
+</td>
+</tr>
 </table>

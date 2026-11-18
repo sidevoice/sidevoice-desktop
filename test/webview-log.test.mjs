@@ -6,6 +6,22 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../shared/tauri/js/webview-log.js", import.meta.url), "utf8");
 
+// The entry as the Rust side renders it (shared/tauri/src/webview_log.rs), to read the tests.
+function item(i) {
+  if (i.kind === "number" || i.kind === "bool") return String(i.value);
+  if (i.kind === "string" || i.kind === "other") return `[${i.kind}]`;
+  if (i.kind !== "object") return i.kind;
+  const frame = (a) => `${a.file}:${a.line}${a.column === undefined ? "" : ":" + a.column}`;
+  const parts = ["name", "code", "key"].filter((f) => i[f]).map((f) => `${f}=${i[f]}`);
+  if (i.at) parts.push(`at=${frame(i.at)}`);
+  return parts.length ? `{${parts.join(" ")}}` : "[object]";
+}
+function text(entry) {
+  const head = { console: `console.${entry.level}`, uncaught: "uncaught", rejection: "unhandled rejection" }[entry.source];
+  const at = entry.at ? ` at ${entry.at.file}:${entry.at.line}:${entry.at.column}` : "";
+  return `${head}: ${entry.items.map(item).join(" ")}${at}`;
+}
+
 function setup() {
   const module = { exports: {} };
   vm.runInNewContext(source, { module });
@@ -15,7 +31,7 @@ function setup() {
   const win = {
     console: { warn: (...a) => original.push(["warn", ...a]), error: (...a) => original.push(["error", ...a]) },
     addEventListener: (type, fn) => (listeners[type] = fn),
-    __TAURI_INTERNALS__: { invoke: (command, args) => (calls.push({ command, ...args }), Promise.resolve()) },
+    __TAURI_INTERNALS__: { invoke: (command, args) => (calls.push({ command, entry: args.entry, message: text(args.entry) }), Promise.resolve()) },
   };
   module.exports(win);
   return { win, calls, listeners, original };
@@ -25,9 +41,9 @@ test("console.error and console.warn reach the plugin and still reach the consol
   const { win, calls, original } = setup();
   win.console.error("boom", 3);
   win.console.warn("careful");
-  assert.deepEqual(calls.map((c) => [c.command, c.level, c.message]), [
-    ["plugin:log|log", 5, "console.error: [string] 3"],
-    ["plugin:log|log", 4, "console.warn: [string]"],
+  assert.deepEqual(calls.map((c) => [c.command, c.message]), [
+    ["plugin:sidevoice-shared-tauri|webview_log", "console.error: [string] 3"],
+    ["plugin:sidevoice-shared-tauri|webview_log", "console.warn: [string]"],
   ]);
   assert.equal(original.length, 2);
 });
@@ -65,6 +81,12 @@ test("uncaught errors and unhandled rejections are logged", () => {
   assert.ok(!calls[0].message.includes("canary"));
   assert.equal(calls[1].message, "uncaught: [string] at app.js:1:2");
   assert.equal(calls[2].message, "unhandled rejection: {key=voice.failure.start}");
+});
+
+test("a string never leaves the page, only its kind", () => {
+  const { win, calls } = setup();
+  win.console.warn("canary words 7f3a", { message: "canary words 7f3a" }, new Error("canary words 7f3a"));
+  assert.ok(!JSON.stringify(calls[0].entry).includes("canary"));
 });
 
 test("a flood is cut", () => {

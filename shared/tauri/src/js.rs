@@ -13,8 +13,8 @@ pub const MEMBERS: &str = include_str!("../js/members.js");
 pub const TRANSPORT: &str = include_str!("../js/transport.js");
 
 /// The page's problems in the app's log (`js/webview-log.js`): its `console.warn` and `console.error`, uncaught errors and
-/// unhandled rejections, through tauri-plugin-log's `log` command (target `webview`), narrowed and masked. An app that
-/// injects it registers that plugin and grants its window `log:allow-log`.
+/// unhandled rejections, through the plugin's `webview_log` command (target `webview`), which allows only listed shapes (`src/webview_log.rs`). An app that
+/// injects it grants its window `allow-webview-log`.
 pub const WEBVIEW_LOG: &str = include_str!("../js/webview-log.js");
 
 #[cfg(test)]
