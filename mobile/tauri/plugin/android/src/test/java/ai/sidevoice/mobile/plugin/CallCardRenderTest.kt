@@ -124,7 +124,13 @@ class CallCardRenderTest {
         val canvas = Canvas(bitmap)
         canvas.drawColor(if (night(context)) SHADE_DARK else SHADE_LIGHT)
         parent.draw(canvas)
-        FileOutputStream(File(out, "$name.png")).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        // Freed here, on the test thread, not left to the garbage collector: the native bitmaps of ~50 renders would otherwise be
+        // released by the JVM's cleaner thread. A hypothesis for the executor's intermittent SIGSEGV (#532), not a proven cause.
+        try {
+            FileOutputStream(File(out, "$name.png")).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun night(context: Context): Boolean =
