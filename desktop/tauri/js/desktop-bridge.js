@@ -548,6 +548,8 @@
       // Private pairings and the reset are available on every desktop platform; the uninstall only where the app can
       // also remove itself (macOS).
       pairings: members.pairings(),
+      // The crash reports setting, kept by the app (shared/tauri crash_reports): on by default, the page reads and sets it.
+      crashReports: members.crashReports(),
       reset: Object.freeze({
         deleteAll: () => call("data_delete_all"),
         resetReport: () => call("data_reset_report"),

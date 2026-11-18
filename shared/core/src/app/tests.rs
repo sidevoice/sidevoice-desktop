@@ -230,6 +230,12 @@ fn a_load_after_close_is_refused_and_one_that_will_not_end_is_given_up() {
     assert!(held.is_empty());
     assert!(started.elapsed() < Duration::from_secs(10), "bounded");
     assert!(!ended.load(Ordering::SeqCst));
+    // The abort reaches the task through the runtime: the lease goes when a worker drops the task, which on a busy machine is a
+    // moment after `close` has returned (this was asked the instant it returned, and failed there under load).
+    let given_up = Instant::now();
+    while gate.0.load(Ordering::SeqCst) != 0 && given_up.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert_eq!(gate.0.load(Ordering::SeqCst), 0, "given up, its lease let go");
 
     let mut late = Box::pin(host.detached(async { Ok::<(), Refusal>(()) }));

@@ -25,7 +25,9 @@
 //! - `two-users` (Linux, CI only: it adds a user with `sudo`): the local host with two users; the second gets nowhere.
 //! - `bundle [--channel C]` (Linux, Windows): this host's installers: the .deb and the AppImage, or the NSIS
 //!   installer. With `--channel release` or `nightly`, the AppImage and the installer are also signed as updates
-//!   (their `.sig`, checked).
+//!   (their `.sig`, checked). Every Tauri build here is `tauri build --no-bundle`, then the debug files split off the
+//!   binary into target/debug-files and the binary stripped of them (platform/debug_files.rs), then `tauri bundle`: the
+//!   bundler signs the stripped binary, never the other way round.
 //!
 //! The mobile app's native projects (mobile.rs):
 //!
@@ -123,6 +125,11 @@
 //! - `publish apk-nightly`: the signed APK (dist/Sidevoice-android.apk) and its `.sha256` attached to the
 //!   `nightly` pre-release as `Sidevoice_nightly_android.apk` (mobile-android-signed.yml).
 //!
+//! Crash reports (sentry.rs), `sentry-cli` with `SENTRY_AUTH_TOKEN`:
+//!
+//! - `sentry upload SERVICE PATH...`: the release `SERVICE@<version>` (SERVICE: `sidevoice-desktop`, `sidevoice-mobile`) and the
+//!   debug files under each PATH (the desktop's: target/debug-files), to the EU project; a release or nightly build only.
+//!
 //! The release PR (checks.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
 //!
 //! - `release-pr-title [BRANCH]`: the PR on release-please's BRANCH (default `GITHUB_REF_NAME`) has a release title.
@@ -141,7 +148,7 @@
 use std::process::ExitCode;
 
 use xtask::util::Channel;
-use xtask::{checks, host_graph, mobile, packaging, platform, platform_guard, publish, util};
+use xtask::{checks, host_graph, mobile, packaging, platform, platform_guard, publish, sentry, util};
 
 const USAGE: &str =
     "usage: cargo xtask web | lint | platform-guard | host-graph | platform-clippy | test | voice-contract | icons | permissions | two-users | bundle [--channel C] | engine-rev
@@ -156,6 +163,7 @@ const USAGE: &str =
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly | publish apk-nightly
   | release-pr-title [BRANCH] | release-pr-checks
+  | sentry upload SERVICE PATH...
 (C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
 
 fn main() -> ExitCode {
@@ -169,6 +177,7 @@ fn main() -> ExitCode {
         ["web"] => checks::web(),
         ["lint"] => checks::lint(),
         ["platform-guard"] => platform_guard::check(),
+        ["sentry", "upload", service, paths @ ..] => sentry::upload(service, paths),
         ["host-graph"] => host_graph::check(),
         ["mobile", "generate", project] => mobile::generate(project),
         ["mobile", "generated", project] => mobile::generated(project),

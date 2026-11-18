@@ -146,6 +146,7 @@
 		AC7B192F6F772B984C2013E8 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		AF77655BE2E35D9CB501F610 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		B129F4CBB75A235241D6CB33 /* audio_route_picker.rs */ = {isa = PBXFileReference; path = audio_route_picker.rs; sourceTree = "<group>"; };
+		B4DABE0897F2FA10576F0239 /* crash_reports.rs */ = {isa = PBXFileReference; path = crash_reports.rs; sourceTree = "<group>"; };
 		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B7E57CBB3A47BDAD3039528B /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		B84A32BB39D31571CE7230E4 /* CallIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallIntents.swift; sourceTree = "<group>"; };
@@ -336,6 +337,7 @@
 				64394271D504A3167B6E3545 /* acl_tests.rs */,
 				49F5B7CE8791856160DB8F83 /* bridge.rs */,
 				F94DC09ACE0378E1E536E6AE /* call.rs */,
+				B4DABE0897F2FA10576F0239 /* crash_reports.rs */,
 				F82202DB265069BB71A79851 /* developer_options.rs */,
 				216916D93E3C8D75635265CC /* downloads.rs */,
 				D36FBE442FE36E95B601C9D1 /* hold.rs */,

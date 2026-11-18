@@ -31,6 +31,7 @@ pub const COMMANDS: &[&str] = &[
     "voice_audio_devices",
     "voice_set_audio_devices",
     "microphone",
+    "crash_reports",
     "bridge_level",
     "bridge_playback",
     "pairings_read",

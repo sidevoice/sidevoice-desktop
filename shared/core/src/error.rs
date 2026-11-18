@@ -9,12 +9,30 @@ pub enum SharedError {
     NativeEngineFailed,
     #[error("voice models were still held at exit")]
     VoiceModelsHeld,
+    #[error("a crash report could not be sent")]
+    CrashReportNotSent,
+    #[error("the crash records could not be read or deleted")]
+    CrashRecordsUnavailable,
+    #[error("the crash report settings could not be kept")]
+    CrashSettingsNotKept,
+    #[error("the crash report settings could not be read")]
+    CrashSettingsUnreadable,
+    #[error("a step of the crash reporter failed and was contained")]
+    CrashReporterFailed,
 }
 
 impl SharedError {
     /// Every variant, for the test that holds the codes unique and well formed.
-    pub const ALL: [SharedError; 3] =
-        [SharedError::InvalidLogFilter, SharedError::NativeEngineFailed, SharedError::VoiceModelsHeld];
+    pub const ALL: [SharedError; 8] = [
+        SharedError::InvalidLogFilter,
+        SharedError::NativeEngineFailed,
+        SharedError::VoiceModelsHeld,
+        SharedError::CrashReportNotSent,
+        SharedError::CrashRecordsUnavailable,
+        SharedError::CrashSettingsNotKept,
+        SharedError::CrashSettingsUnreadable,
+        SharedError::CrashReporterFailed,
+    ];
 
     /// The stable code, `error.type` in the log.
     pub fn code(&self) -> &'static str {
@@ -22,6 +40,11 @@ impl SharedError {
             SharedError::InvalidLogFilter => "shared.invalid-log-filter",
             SharedError::NativeEngineFailed => "shared.native-engine-failed",
             SharedError::VoiceModelsHeld => "shared.voice-models-held",
+            SharedError::CrashReportNotSent => "shared.crash-report-not-sent",
+            SharedError::CrashRecordsUnavailable => "shared.crash-records-unavailable",
+            SharedError::CrashSettingsNotKept => "shared.crash-settings-not-kept",
+            SharedError::CrashSettingsUnreadable => "shared.crash-settings-unreadable",
+            SharedError::CrashReporterFailed => "shared.crash-reporter-failed",
         }
     }
 }

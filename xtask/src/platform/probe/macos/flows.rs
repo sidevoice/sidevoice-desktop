@@ -25,7 +25,7 @@ pub fn probe_app() -> Result<()> {
         features: Some("probe"),
         ..TauriBuild::default()
     };
-    crate::platform::macos_app::unsigned(build.command()?).run()?;
+    build.run(crate::platform::macos_app::unsigned)?;
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
         ensure(contains(&bytes, marker), format!("the probe build does not carry {marker}"))?;

@@ -5,6 +5,8 @@
 //! - `GET /api/device/identity?nonce=` → the core signs a fresh nonce; checked against the pinned key.
 //! - `POST /api/device/local/pair {name}` → a device token for this app (the core revokes the previous local one).
 //! - `DELETE /api/device/local` → this app's local device revoked.
+//! - `PUT /api/local/crash-reports {"send"}` → the core's own crash report switch, set from the app's (local channel only: the core
+//!   answers it on its socket, never on TCP or to a browser; one way, the app never reads it back).
 //! - Any authenticated route with the token, to tell whether the core still accepts it.
 
 use crate::checks::{self, Check};
@@ -155,6 +157,17 @@ impl CoreSocket {
             return Err(failed(format!("DELETE /api/device/local answered {}", answer.status)));
         }
         Ok(())
+    }
+
+    /// Sets the core's crash report switch to `send` (`PUT /api/local/crash-reports`, the local channel: no token). The core
+    /// keeps it, and erases its pending crash records and its id when it is `false`; its answer is not read back.
+    pub fn set_crash_reports(&self, send: bool) -> Result<(), CoreError> {
+        let body = serde_json::json!({ "send": send }).to_string();
+        let answer = self.call("PUT", "/api/local/crash-reports", &[], Some(body.as_bytes()), CALL_TIMEOUT)?;
+        match answer.status {
+            200 => Ok(()),
+            status => Err(failed(format!("PUT /api/local/crash-reports answered {status}"))),
+        }
     }
 
     /// Whether the core accepts `token`: an authenticated read (the device list), 200 or 401.

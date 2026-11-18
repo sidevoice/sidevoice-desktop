@@ -141,6 +141,14 @@ impl Action {
     }
 }
 
+/// A failed call on the core's socket, as a refusal.
+fn refused(error: CoreError) -> Refusal {
+    match error {
+        CoreError::Absent => Refusal::new("core.unreachable", "No core answers."),
+        CoreError::Unsafe(refusal) | CoreError::Failed(refusal) => refusal,
+    }
+}
+
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -190,6 +198,10 @@ pub struct LocalHost {
     /// its installer, while there is one.
     acting: AtomicUsize,
     stopped: AtomicBool,
+    /// What hears that a person's install put the service on a computer that had none ([`LocalHost::on_installed`]).
+    installed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// What hears that a core answers again after none did ([`LocalHost::on_core_up`]).
+    core_up_listener: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     log: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
@@ -222,6 +234,8 @@ impl LocalHost {
             install: Mutex::new(None),
             acting: AtomicUsize::new(0),
             stopped: AtomicBool::new(false),
+            installed: Mutex::new(None),
+            core_up_listener: Mutex::new(None),
             log,
         }))
     }
@@ -267,6 +281,28 @@ impl LocalHost {
             "host": pairing.host,
             "local": true,
         }))
+    }
+
+    /// Copies the app's crash report switch to this computer's core (`PUT /api/local/crash-reports`, the local channel the
+    /// core answers on its socket only): `send` is the app's choice. One way, app to core: nothing is read back. Refused when no
+    /// core answers; a caller does not retry in a loop.
+    pub fn set_crash_reports(&self, send: bool) -> Result<(), Refusal> {
+        self.core.set_crash_reports(send).map_err(refused)
+    }
+
+    /// Has `told` called each time a person's install of the service ends having put it on a computer that had none (the
+    /// installer's answer `installed`; not an update, not a reinstall, not the app's own background update), once the new core is
+    /// paired with or the wait for it is over. It runs on the install's thread after the install's answer is ready: it must not
+    /// block (start a thread).
+    pub fn on_installed(&self, told: impl Fn() + Send + Sync + 'static) {
+        *self.installed.lock().unwrap() = Some(Arc::new(told));
+    }
+
+    /// Has `told` called each time a core starts to answer after none did (the first pass that finds one included, as at the
+    /// app's start): the poll's own thread calls it, after the pass, so it must not block (start a thread). It is how something
+    /// owed to the core waits for it to be there; nothing is asked of it on a timer.
+    pub fn on_core_up(&self, told: impl Fn() + Send + Sync + 'static) {
+        *self.core_up_listener.lock().unwrap() = Some(Arc::new(told));
     }
 
     /// One pass: observe, keep the pairing, decide the state.
@@ -325,8 +361,21 @@ impl LocalHost {
             tracing::info!(state = json!(report.state).as_str().unwrap_or("?"), "the local host changed state");
         }
         inner.report = report.clone();
+        let arrived = health.is_ok() && !inner.core_up;
         inner.core_up = health.is_ok();
+        drop(inner);
+        if arrived {
+            self.told_core_up();
+        }
         report
+    }
+
+    /// Tells [`LocalHost::on_core_up`]'s listener, if there is one; a panic in it ends there.
+    fn told_core_up(&self) {
+        let told = self.core_up_listener.lock().unwrap().clone();
+        if let Some(told) = told {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| told()));
+        }
     }
 
     /// The installed Sidevoice's version: what `install.json`'s command answers to `--version --json`, kept while that
@@ -874,7 +923,19 @@ impl LocalHost {
         self.end_install(job);
         let pass = self.invalidate();
         let report = self.pass(&pass);
+        // A person's install that put the service on a computer that had none: the app's own choices are copied to it once.
+        if !job.is_background() && outcome.as_ref().is_ok_and(|answer| answer["action"] == install::INSTALLED) {
+            self.told_of_install();
+        }
         outcome.map(|_| report)
+    }
+
+    /// Tells [`LocalHost::on_installed`]'s listener, if there is one; a panic in it ends there.
+    fn told_of_install(&self) {
+        let told = self.installed.lock().unwrap().clone();
+        if let Some(told) = told {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| told()));
+        }
     }
 
     /// `pairing`: the new core paired with as on any core launch (again if the app's pairing was refused, as

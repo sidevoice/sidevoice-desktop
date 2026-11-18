@@ -955,6 +955,94 @@ fn release(seconds: &str) -> FakeRegistry {
 }
 
 #[test]
+fn the_listener_hears_a_core_that_starts_to_answer_once_per_arrival() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let world = World::new();
+    let host = world.host();
+    let heard = Arc::new(AtomicUsize::new(0));
+    let counter = heard.clone();
+    host.on_core_up(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    // No core: nothing to hear.
+    assert!(!host.poll().reachable);
+    assert_eq!(heard.load(Ordering::SeqCst), 0);
+    // A core comes: heard once, however many passes find it.
+    let core = world.core(1);
+    host.poll();
+    host.poll();
+    assert_eq!(heard.load(Ordering::SeqCst), 1);
+    // It goes, and while it is gone nothing is heard.
+    core.stop();
+    drop(core);
+    host.poll();
+    assert_eq!(heard.load(Ordering::SeqCst), 1);
+    // It comes back: heard again.
+    let _again = world.core(1);
+    host.poll();
+    assert_eq!(heard.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn the_apps_crash_switch_is_copied_to_the_core_on_its_socket_and_only_when_asked() {
+    let world = World::new();
+    let core = world.core(1);
+    let host = world.host();
+    running(&host);
+    assert_eq!(core.crash_reports(), None, "nothing is copied by itself");
+    host.set_crash_reports(false).unwrap();
+    assert_eq!(core.crash_reports(), Some(false));
+    host.set_crash_reports(true).unwrap();
+    assert_eq!(core.crash_reports(), Some(true));
+    let requests = core.requests();
+    let copies: Vec<&String> = requests.iter().filter(|line| line.contains("crash-reports")).collect();
+    assert_eq!(copies.len(), 2, "{requests:?}");
+    assert!(copies.iter().all(|line| line.as_str() == "PUT /api/local/crash-reports origin=- auth=none"), "{copies:?}");
+    // No core answers: a refusal at once, not a hang.
+    let nowhere = World::new();
+    let lonely = nowhere.host();
+    let started = std::time::Instant::now();
+    let refusal = lonely.set_crash_reports(true).unwrap_err();
+    assert_eq!(refusal.key, "core.unreachable");
+    assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+}
+
+#[test]
+fn only_a_persons_install_that_found_nothing_tells_the_listener() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (action, told) in [("installed", 1), ("reinstalled", 0), ("updated", 0)] {
+        let world = World::new();
+        let _core = world.core(1);
+        let host = world.host();
+        let heard = Arc::new(AtomicUsize::new(0));
+        let counter = heard.clone();
+        host.on_installed(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let registry = fixture::release(
+            Path::new(env!("CARGO_BIN_EXE_fake-connector")),
+            "0.8.1",
+            PLATFORM,
+            &json!({"response":{"ok":true,"action":action,"version":"0.8.1","state":"running"}}),
+        );
+        host.begin_install("job").unwrap().run(&registry, &install_options(&world)).unwrap();
+        assert_eq!(heard.load(Ordering::SeqCst), told, "{action}");
+    }
+    // An install that fails tells nobody.
+    let world = World::new();
+    let host = world.host();
+    let heard = Arc::new(AtomicUsize::new(0));
+    let counter = heard.clone();
+    host.on_installed(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    let registry = release("0");
+    registry.serve(&registry.tarball_url(), 200, b"not the tarball".to_vec());
+    assert!(host.begin_install("bad").unwrap().run(&registry, &install_options(&world)).is_err());
+    assert_eq!(heard.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn an_install_runs_alone_says_installing_meanwhile_and_ends_with_the_core_reachable() {
     let world = World::new();
     // The core the installer starts (here, already up: the stand-in installer only answers).

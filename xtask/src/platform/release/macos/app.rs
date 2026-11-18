@@ -53,7 +53,7 @@ pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
         build_signed(build)?;
         staple_app()?;
     } else {
-        unsigned(build.command()?).run()?;
+        build.run(unsigned)?;
     }
     if channel != Channel::Dev {
         update_artifact(signed)?;
@@ -72,7 +72,7 @@ fn build_signed(build: TauriBuild) -> Result<()> {
     // The bundler imports the certificate into a keychain of its own, which it adds to the search list and removes
     // when done; one it left (a build that failed half-way) is removed here.
     let before = user_keychains()?;
-    let built = build.command().and_then(|cmd| cmd.env("APPLE_API_KEY_PATH", &key).run());
+    let built = build.run(|cmd| cmd.env("APPLE_API_KEY_PATH", &key));
     for left in user_keychains()?.into_iter().filter(|k| !before.contains(k)) {
         let _ = Cmd::new("security").arg("delete-keychain").arg(&left).attempt();
     }

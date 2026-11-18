@@ -366,6 +366,8 @@
       ...(debugState && typeof debugState === "object" ? { debug: debug(debugState, headset.refresh) } : {}),
       // The pairings, in the app's private storage (mobile/tauri/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
+      // The crash reports setting, kept by the app (shared/tauri crash_reports): on by default, the page reads and sets it.
+      crashReports: members.crashReports(),
       /** The camera that scans the pairing code a machine shows (the interface choice of sidevoice-desktop#405). */
       codeScanner: codeScanner(),
       ...(textScale() ? { textScale: textScale() } : {}),

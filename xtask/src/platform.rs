@@ -1,5 +1,6 @@
 //! The only module of xtask that touches the operating system; one file per concern.
 
+pub mod debug_files;
 pub mod file_mode;
 pub mod host;
 pub mod ios_simulator;
