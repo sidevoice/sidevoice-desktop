@@ -176,6 +176,11 @@ reporting off for that run (tests: `shared/core/src/crash/tests.rs`, `shared/cor
   own, every POST has a timeout (10 s, on a thread of its own) and the pass a budget (60 s); one pass at a time.
 - **Init failures leave the app working.** A bad DSN, no data folder, an unreadable or unwritable directory, a disk error: the
   reporter is off for that run, `get`/`set` still answer the page (`set` says the choice was not kept).
+- **One reporter per process.** The apps start it through `crash::start_process_reporter`, which binds the process's hooks (the panic
+  hook's observer, the handled errors' layer) to the first reporter and answers every later call with that same reporter. The hooks are
+  the process's and bind once; the phone's `run_app` runs again when Android recreates the activity, and a second reporter over the
+  same files would hold its own copy of the setting: a "No enviar" chosen on it would leave the first sending and recording, and the
+  first, making its install id, would write `auto` back over the choice (`shared/core/tests/crash_process_reporter.rs`).
 - **A build with no DSN** (local, dev) records and sends nothing, whatever the setting says; the setting still works.
 
 ## Builds

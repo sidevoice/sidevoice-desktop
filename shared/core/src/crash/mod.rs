@@ -42,7 +42,7 @@ use std::cell::Cell;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -584,8 +584,36 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs())
 }
 
+/// The reporter of this process, started once: what the apps start through [`start_process_reporter`].
+static PROCESS: OnceLock<Arc<Reporter>> = OnceLock::new();
+
+/// Starts the reporter of this process and binds the process's hooks to it, once (call after `logging::init`): the panic hook's
+/// observer ([`report_panics`]) and the handled errors' layer ([`report_handled_errors`], with `codes`). A later call returns the
+/// same reporter and starts nothing: `config` and `codes` of a second call are not used.
+///
+/// The hooks are the process's own and bind to the first reporter only. A second reporter over the same files (the phone's app runs
+/// its setup again when Android recreates the activity) would hold its own copy of the setting while the hooks still asked the
+/// first: a "No enviar" chosen on the second would leave the first sending, and the first, writing its install id from its own
+/// copy, would put `auto` back over the choice. One reporter per process is the one owner of the setting in memory.
+pub fn start_process_reporter(config: Config, codes: impl IntoIterator<Item = &'static str>) -> Arc<Reporter> {
+    PROCESS
+        .get_or_init(|| {
+            let reporter = Reporter::start(config);
+            report_panics(reporter.clone());
+            report_handled_errors(reporter.clone(), codes);
+            reporter
+        })
+        .clone()
+}
+
+/// The reporter [`start_process_reporter`] started, if it has: for a setup that cannot start one again (no folder this time) and
+/// must not answer the page with another.
+pub fn process_reporter() -> Option<Arc<Reporter>> {
+    PROCESS.get().cloned()
+}
+
 /// Has the reporter send the handled errors of this process from now on, under its switch (call after `logging::init`, which makes
-/// the layer that sees them, and after `Reporter::start`): the `error` events of the process's own targets (never the panic's, never
+/// the layer that sees them, and after `Reporter::start`; the apps call [`start_process_reporter`], which does both): the `error` events of the process's own targets (never the panic's, never
 /// the page's) whose `error.type` is one of `codes`, which is the app's own list, built from its error enums (the codes of its own
 /// crates; a code of a dependency, or any other value however well formed, is only counted: [`unreported_errors`]). At most
 /// [`MAX_CODES`] are taken, once each. A reporter that cannot send (a build with no DSN, no place for its files) watches for nothing.
@@ -599,7 +627,8 @@ pub fn report_handled_errors(reporter: Arc<Reporter>, codes: impl IntoIterator<I
     });
 }
 
-/// Has the reporter record every panic of this process from now on, through the log's panic hook (call after `logging::init`).
+/// Has the reporter record every panic of this process from now on, through the log's panic hook (call after `logging::init`; the
+/// apps call [`start_process_reporter`]). Once per process: a second call binds nothing.
 /// Inside the hook nothing of the reporter's blocks or can abort: the frames are taken there (they are the panicking thread's),
 /// the rest on a thread of its own, so that a panic or a stall in the reporter cannot hold the process up beyond [`HOOK_WAIT`].
 pub fn report_panics(reporter: Arc<Reporter>) {

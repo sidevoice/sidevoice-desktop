@@ -40,18 +40,18 @@ fn codes() -> impl Iterator<Item = &'static str> {
     SharedError::codes().chain(crate::error::DesktopError::codes()).chain(LocalHostError::codes())
 }
 
-/// At start, right after the log: the reporter (the setting is read here; the records a previous run left are sent on a thread
-/// of its own), the panic hook's observer and the handled errors' sender. Nothing here can stop the app: with no data folder, or
-/// a reporter that cannot start, reporting is off for this run and the setting still answers the page.
+/// At start, right after the log: the process's reporter (the setting is read here; the records a previous run left are sent on a
+/// thread of its own), with the panic hook's observer and the handled errors' sender bound to it, once (`crash::start_process_reporter`:
+/// a second call, which the desktop has no reason to make, answers with the same one). Nothing here can stop the app: with no data
+/// folder, or a reporter that cannot start, reporting is off for this run and the setting still answers the page.
 pub fn setup(app: &AppHandle) {
     let resource = crate::platform::resource::current();
     let Ok(dir) = crate::data::desktop_dir(app) else {
-        app.manage(CrashReports(Reporter::unavailable(resource)));
+        app.manage(CrashReports(crash::process_reporter().unwrap_or_else(|| Reporter::unavailable(resource))));
         return;
     };
-    let reporter = Reporter::start(Config { resource, dsn: DSN.map(str::to_owned), dir, post: None });
-    crash::report_panics(reporter.clone());
-    crash::report_handled_errors(reporter.clone(), codes());
+    let reporter =
+        crash::start_process_reporter(Config { resource, dsn: DSN.map(str::to_owned), dir, post: None }, codes());
     let handle = app.clone();
     reporter.on_copy_owed(move || copy_to_core(&handle));
     app.manage(CrashReports(reporter));
