@@ -125,8 +125,13 @@ fn a_panic_leaves_a_record_and_the_next_start_sends_it_as_a_literal_or_the_marke
             names.iter().any(|name| name.contains("crash_panic")),
             "the code that panicked is in the stack: {names:?}"
         );
+        // A function is its path: Windows names carry the type arguments (`next<..sidevoice_shared::crash::handled::..>`), and a
+        // frame the debug info has no symbol for (the unwinder's `__rust_try` shim, between `catch_unwind` and its `do_call`) is
+        // named after whichever function precedes it in the image, whose arguments may name anything of ours. What must not be in
+        // the stack is the panic machinery and the hook as functions, not as a word in the arguments of some other.
+        let path = |name: &str| name.split('<').next().unwrap_or(name).to_owned();
         assert!(
-            !names.iter().any(|name| {
+            !names.iter().map(|name| path(name)).any(|name| {
                 name.contains("rust_begin_unwind")
                     || name.starts_with("core::panicking::")
                     || name.starts_with("std::panicking::rust_panic_with_hook")
