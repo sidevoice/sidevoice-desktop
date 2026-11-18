@@ -67,8 +67,9 @@ shared plugin's one command `crash_reports {action: "get" | "set" | "install_id"
 for `install_id`). `installId()` is the id the app's own reports carry (the page shows it under "Ver qué se envía"), made on first
 ask, and `null` under `never`, which forgets it. The setting is the app's and it holds to it before any page
 has loaded; the page keeps no copy. `set` rejects when the app could not keep the choice. There is no `subscribe`: nothing
-changes the setting but the page, which reads again each time Settings or the notice shows. What is sent, and what is not:
-docs/CRASH_REPORTS.md.
+changes the setting but the page, which reads again each time Settings or the notice shows. The desktop app also copies the choice,
+one way, to the core it installed on the computer (docs/CRASH_REPORTS.md → "Copied to the core the app installed"). What is sent,
+and what is not: docs/CRASH_REPORTS.md.
 
 ### Pairings and reset (`host.pairings`, `host.reset`)
 

@@ -14,3 +14,8 @@ CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
 # The whole app links the static C runtime there, so everything the cc and cmake crates compile does too.
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# Every Linux binary has a build id: Sentry matches a crash's module to the debug file of its release by it (the module's debug
+# id, shared/core/src/crash/trace.rs; xtask/src/platform/debug_files/linux.rs refuses a binary without one).
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-Wl,--build-id=sha1"]

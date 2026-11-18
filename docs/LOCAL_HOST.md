@@ -97,6 +97,15 @@ A new pairing is kept only if the node it names is the core that answered health
 hash) and that key signs a fresh nonce; otherwise it is revoked at once (`identity.mismatch`). While paired, every
 poll asks the core whether it still accepts the token: a revocation from another device shows within 2 s.
 
+## The crash report switch
+
+The core has its own switch for the crash reports it sends (the logging guideline, section 10; docs/CRASH_REPORTS.md). The app
+copies its own to the core **it installed**, one way, through `PUT /api/local/crash-reports {"send": bool}` on the core's socket
+(no token, no Origin: the core answers `/api/local` on its local channel only). It does so when its own install put the service
+on the computer (`install()` ends with the installer's `installed`, not `updated` or `reinstalled`; `LocalHost::on_installed`) and
+each time the person changes the app's switch afterwards (`LocalHost::set_crash_reports`). Never on a start, never after an
+app update, never read back; a core that cannot be reached is one warning, no retry.
+
 ## The poll and the state
 
 Every 2 s while the app runs: `node.status` on the socket `D/connector.json` names (JSON lines, 1.5 s; connecting never starts

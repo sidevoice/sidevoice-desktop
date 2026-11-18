@@ -433,18 +433,18 @@ fn the_store_is_bounded_in_count_and_age_and_keeps_the_newest() {
         record.at_ms = now_ms() - 31 * 24 * 60 * 60 * 1000;
         record
     };
-    store.record_without_waiting(&old, || true).unwrap();
+    store.record(&old, || true).unwrap();
     assert_eq!(records_in(dir.path()), 0, "past the age: gone at once");
     for n in 0..(MAX_RECORDS + 5) {
         let mut record = record(Some("fill"));
         record.at_ms = now_ms() - 1000 * (MAX_RECORDS as u64 + 5 - n as u64);
-        store.record_without_waiting(&record, || true).unwrap();
+        store.record(&record, || true).unwrap();
     }
     assert_eq!(records_in(dir.path()), MAX_RECORDS);
     let pending = store.pending().unwrap();
     assert!(pending.windows(2).all(|pair| pair[0].at_ms >= pair[1].at_ms), "newest first");
     // `wanted` false: nothing is kept.
-    store.record_without_waiting(&record(Some("no")), || false).unwrap();
+    store.record(&record(Some("no")), || false).unwrap();
     assert_eq!(records_in(dir.path()), MAX_RECORDS);
 }
 

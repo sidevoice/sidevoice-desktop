@@ -284,6 +284,26 @@ cargo xtask release checksums
 
 leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and its `dist/SHA256SUMS.txt`.
 
+## Crash reports
+
+The apps send their own crash reports to Sentry (docs/CRASH_REPORTS.md). Only the release and nightly channels can: `build.yml`
+gives `cargo xtask bundle` and `release app` the organisation's variable `SENTRY_DSN` as `SIDEVOICE_SENTRY_DSN`, which the build
+bakes in (`option_env!`); a pull request, a laptop and `cargo test` have none, and a build without a DSN records and sends
+nothing. `vars` need no passing to a called workflow, and `release-please.yml` calls `build.yml` with `secrets: inherit`, which
+carries `SENTRY_AUTH_TOKEN` (the organisation's secret; it needs only `project:releases` and `project:write`) to the upload
+steps. Those steps run after each platform's bundle: `sentry-cli` installed on its own (`npm install --global --ignore-scripts`,
+no secret in that step) and `cargo xtask sentry upload sidevoice-desktop target/debug-files` with the token in that step's
+environment alone; it creates the release `sidevoice-desktop@<version>` in the organisation `twentynine-tech-sl`, project
+`sidevoice`, uploads the debug files and finalises it. The checkouts of the jobs that upload do not persist credentials.
+
+The release profile keeps line tables and does not strip (`debug = "line-tables-only"`, `strip = "none"`: on MSVC a build that
+strips has no PDB), and `desktop/.cargo/config.toml` links Linux with `--build-id=sha1`. Every Tauri build in `xtask` is
+`tauri build --no-bundle`, then `xtask/src/platform/debug_files.rs` splits the debug files off the binary into
+`target/debug-files` (the unstripped Linux binary, checked for line tables and a build id; a `.dSYM` on macOS; the PDB on
+Windows) and strips the binary, then `tauri bundle` packs and signs it: stripping never invalidates a signature, and the
+installers never hold a debug file. The binary that ships keeps its symbol table, so its frames have function names whatever
+Sentry does.
+
 ## Legacy identifier carry-over
 
 Until `ai.sidevoice.desktop`, the app's identifier was `dev.sidevoice.desktop`. `desktop/tauri/src/legacy_identifier.rs` copies

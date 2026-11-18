@@ -59,13 +59,21 @@ impl Store {
     }
 
     /// Keeps `record` unless `wanted` says no. `wanted` is asked under the lock, so that a record that raced the erasing of a
-    /// "No enviar" (which takes the same lock) is not left behind. A lock somebody else holds means the record is dropped, never
-    /// waited for: this is called from the panic's capture, where there is nobody to tell.
-    pub fn record_without_waiting(&self, record: &CrashRecord, wanted: impl FnOnce() -> bool) -> io::Result<()> {
-        let _held = match self.lock.try_lock() {
-            Ok(held) => held,
-            Err(TryLockError::Poisoned(held)) => held.into_inner(),
-            Err(TryLockError::WouldBlock) => return Err(io::ErrorKind::WouldBlock.into()),
+    /// "No enviar" (which takes the same lock) is not left behind. This is called from the panic's capture thread, where there is
+    /// nobody to tell and a thread that panicked inside the store holds the lock for good: the lock is only tried, for half a second
+    /// at most (a pass reading the records holds it for a moment), and then the record is dropped.
+    pub fn record(&self, record: &CrashRecord, wanted: impl FnOnce() -> bool) -> io::Result<()> {
+        let mut tries = 0;
+        let _held = loop {
+            match self.lock.try_lock() {
+                Ok(held) => break held,
+                Err(TryLockError::Poisoned(held)) => break held.into_inner(),
+                Err(TryLockError::WouldBlock) if tries < 10 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(TryLockError::WouldBlock) => return Err(io::ErrorKind::WouldBlock.into()),
+            }
         };
         if !wanted() {
             return Ok(());

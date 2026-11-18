@@ -207,14 +207,15 @@ jobs:
         env:
           GH_TOKEN: ''
         run: npm install --global --ignore-scripts @sentry/cli@3.8.2
-      # The debug files of this build (dSYM, PDB, ELF, .dwp) and its release, to Sentry: so a crash's addresses become names and lines.
+      # The debug files of this build (the .dSYM, the PDB, the Linux binary with its line tables), which `cargo xtask` split off the binary
+      # before the bundler packed it (target/debug-files), and its release, to Sentry: so a crash's addresses become names and lines.
       # A release or nightly build only; the token is this step's alone.
       - name: Upload the debug files and the release to Sentry
         if: needs.changes.outputs.channel != 'dev'
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          cargo xtask sentry upload sidevoice-desktop target/aarch64-apple-darwin/release
+          cargo xtask sentry upload sidevoice-desktop target/debug-files
       - name: Check what a first open depends on
         env:
           APPLE_TEAM_ID: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_TEAM_ID || '' }}
@@ -399,14 +400,15 @@ jobs:
         env:
           GH_TOKEN: ''
         run: npm install --global --ignore-scripts @sentry/cli@3.8.2
-      # The debug files of this build (dSYM, PDB, ELF, .dwp) and its release, to Sentry: so a crash's addresses become names and lines.
+      # The debug files of this build (the .dSYM, the PDB, the Linux binary with its line tables), which `cargo xtask` split off the binary
+      # before the bundler packed it (target/debug-files), and its release, to Sentry: so a crash's addresses become names and lines.
       # A release or nightly build only; the token is this step's alone.
       - name: Upload the debug files and the release to Sentry
         if: needs.changes.outputs.channel != 'dev'
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          cargo xtask sentry upload sidevoice-desktop target/release
+          cargo xtask sentry upload sidevoice-desktop target/debug-files
       - name: Record produced bundle file lists
         run: cargo xtask packaging files target/release/bundle packaging-linux.txt
       - uses: actions/upload-artifact@v4
@@ -460,14 +462,15 @@ jobs:
         env:
           GH_TOKEN: ''
         run: npm install --global --ignore-scripts @sentry/cli@3.8.2
-      # The debug files of this build (dSYM, PDB, ELF, .dwp) and its release, to Sentry: so a crash's addresses become names and lines.
+      # The debug files of this build (the .dSYM, the PDB, the Linux binary with its line tables), which `cargo xtask` split off the binary
+      # before the bundler packed it (target/debug-files), and its release, to Sentry: so a crash's addresses become names and lines.
       # A release or nightly build only; the token is this step's alone.
       - name: Upload the debug files and the release to Sentry
         if: needs.changes.outputs.channel != 'dev'
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          cargo xtask sentry upload sidevoice-desktop target/release
+          cargo xtask sentry upload sidevoice-desktop target/debug-files
       # The Windows app starts: the bundled interface comes up in WebView2 (no settings; a throwaway runner only).
       - name: First open (no settings), the bundled interface comes up
         run: cargo xtask release first-open

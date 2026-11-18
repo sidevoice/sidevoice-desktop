@@ -99,8 +99,8 @@ fn kept(own: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// The layer, with its filter: our own targets, spans of any level (an event's span carries ids) and events at `warn` or
-/// `error`. `own` are the process's own targets (`logging::init`); `in_hook` says whether this thread is inside the panic hook.
+/// The layer, with its filter: our own targets, spans up to `debug` (an event's span carries ids; none of `trace`, which is where
+/// the hot paths are) and events at `warn` or `error`. `own` are the process's own targets (`logging::init`); `in_hook` says whether this thread is inside the panic hook.
 pub fn layer<S>(own: &[&str], in_hook: fn() -> bool) -> impl Layer<S>
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
@@ -108,7 +108,9 @@ where
     let targets = kept(own);
     let _ = TARGETS.set(targets.clone());
     let ours = move |meta: &Metadata<'_>| {
-        targets.iter().any(|own| under(meta.target(), own)) && (meta.is_span() || *meta.level() <= Level::WARN)
+        let level = *meta.level();
+        targets.iter().any(|own| under(meta.target(), own))
+            && if meta.is_span() { level <= Level::DEBUG } else { level <= Level::WARN }
     };
     Tail { in_hook }.with_filter(filter_fn(ours))
 }

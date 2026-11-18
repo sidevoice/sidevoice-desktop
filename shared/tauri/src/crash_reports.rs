@@ -18,8 +18,8 @@ fn refusal(key: &str, message: impl std::fmt::Display) -> Value {
 }
 
 /// `get`: `{mode}`, `auto` or `never`. `install_id`: `{installId}`, the id the app's own reports carry, `null` under `never` (the
-/// id is forgotten then). `set` with `mode`: keeps the choice (`never` stops sending at once, queued reports
-/// included) and answers `{mode}`; refuses `internal` when the app could not keep it.
+/// id is forgotten then). `set` with `mode`: keeps the choice (`never` stops recording and sending at once and deletes the pending records)
+/// and answers `{mode}`; refuses `internal` when the app could not keep it.
 #[tauri::command]
 pub async fn crash_reports<R: Runtime>(
     webview: Webview<R>,

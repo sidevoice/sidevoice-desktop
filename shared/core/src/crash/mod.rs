@@ -447,9 +447,9 @@ impl Reporter {
             },
             &crate::logging::home(),
         );
-        // A thread that panicked inside the store holds its lock: the record is dropped, not waited for. Nobody is told: a log
-        // line from here could wait on the writer the dying thread holds.
-        let _ = store.record_without_waiting(&record, || self.is_open());
+        // A thread that panicked inside the store holds its lock for good: the record is dropped after a short wait. Nobody is told:
+        // a log line from here could wait on the writer the dying thread holds.
+        let _ = store.record(&record, || self.is_open());
     }
 }
 

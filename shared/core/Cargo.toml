@@ -54,8 +54,6 @@ backtrace = "0.3"
 findshlibs = "0.10"
 # The install id is random (src/crash/settings.rs).
 getrandom = "0.3"
-# The times of a record (RFC 3339).
-time = { version = "0.3", default-features = false, features = ["std", "parsing", "formatting"] }
 # The blocking POST of an envelope, on a thread of its own (src/crash/report.rs); the TLS stack the app already has.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 

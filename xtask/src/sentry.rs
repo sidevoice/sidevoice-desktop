@@ -1,4 +1,4 @@
-//! Crash reports' side of a release build: the release and its debug files (dSYM, PDB, ELF, `.dwp`) to Sentry, so that a
+//! Crash reports' side of a release build: the release and its debug files (dSYM, PDB, ELF) to Sentry, so that a
 //! crash's addresses become function names and lines (docs/CRASH_REPORTS.md). `sentry-cli` does the upload; this only says
 //! what and where.
 //!
@@ -24,7 +24,10 @@ pub fn release_name(service: &str, version: &str) -> Result<String> {
 
 fn sentry() -> Result<Cmd> {
     util::required_env("SENTRY_AUTH_TOKEN")?;
-    Ok(Cmd::new("sentry-cli").env("SENTRY_URL", URL).env("SENTRY_ORG", ORG).env("SENTRY_PROJECT", PROJECT))
+    Ok(Cmd::new(crate::platform::host::npm_tool("sentry-cli"))
+        .env("SENTRY_URL", URL)
+        .env("SENTRY_ORG", ORG)
+        .env("SENTRY_PROJECT", PROJECT))
 }
 
 /// `sentry upload SERVICE PATH...`: the release `SERVICE@<version>` created, the debug files under each PATH uploaded, the

@@ -25,7 +25,9 @@
 //! - `two-users` (Linux, CI only: it adds a user with `sudo`): the local host with two users; the second gets nowhere.
 //! - `bundle [--channel C]` (Linux, Windows): this host's installers: the .deb and the AppImage, or the NSIS
 //!   installer. With `--channel release` or `nightly`, the AppImage and the installer are also signed as updates
-//!   (their `.sig`, checked).
+//!   (their `.sig`, checked). Every Tauri build here is `tauri build --no-bundle`, then the debug files split off the
+//!   binary into target/debug-files and the binary stripped of them (platform/debug_files.rs), then `tauri bundle`: the
+//!   bundler signs the stripped binary, never the other way round.
 //!
 //! The mobile app's native projects (mobile.rs):
 //!
@@ -126,7 +128,7 @@
 //! Crash reports (sentry.rs), `sentry-cli` with `SENTRY_AUTH_TOKEN`:
 //!
 //! - `sentry upload SERVICE PATH...`: the release `SERVICE@<version>` (SERVICE: `sidevoice-desktop`, `sidevoice-mobile`) and the
-//!   debug files under each PATH, to the EU project; a release or nightly build only.
+//!   debug files under each PATH (the desktop's: target/debug-files), to the EU project; a release or nightly build only.
 //!
 //! The release PR (checks.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
 //!
