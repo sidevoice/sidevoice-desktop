@@ -87,24 +87,34 @@ as it is until the person chooses. Choosing "No enviar":
 
 The desktop app copies its choice **one way** to the core it installed on this computer, through the core's local-only endpoint
 `PUT /api/local/crash-reports {"send": bool}` on the core's local socket (`LocalHost::set_crash_reports`; the core answers it
-only there, never on TCP, to a paired device or to a browser; the connector follows the core's switch). When:
+only there, never on TCP, to a paired device or to a browser; the connector follows the core's switch). The app **owes** the core
+a copy, and a copy stays owed until the core answers it with a **200**. The owed bit is kept in a file of its own
+(`crash-core-copy.json`, `shared/core/src/crash/core_copy.rs`), apart from the setting, so that a setting file that cannot be read
+never decides what is known about the core. A copy becomes owed:
 
-- **At the app's own first install** of the service: `LocalHost::on_installed` is told after a person's install whose installer
+- **At the app's own install** of the service: `LocalHost::on_installed` is told after a person's install whose installer
   answered `installed` (not `updated`, not `reinstalled`, never the app's own background update, never an app update that
-  replaces binaries). `crash_reports::core_installed` then keeps that the app installed a core (`crash-reports.json`,
-  `Reporter::local_core_installed`) and copies the switch as it is.
-- **Each time the person changes the app's switch** (a change, not a repeat), once the app installed a core: `Reporter::set_mode`
-  tells the copier (`Reporter::on_local_core_change`).
+  replaces binaries). `crash_reports::core_installed` then writes the file (which is also what says the app installed a core) and
+  the copy goes at once.
+- **Each time the person changes the app's switch** (a change, not a repeat), once the app installed a core
+  (`Reporter::set_mode`, which reads the mode it was, writes the new one and owes the copy under one hold of its lock).
 
-Never on every start, never read back: a later change made on the core (its CLI) stands until the person changes the app's
-switch again, and never changes the app. A core the person installed by hand (`npx sidevoice install`) is not the app's: nothing
-is copied to it. The app keeps no record of who installed a core other than this one marker, kept when the app's install
-succeeds; a person's install made before this version has none, so the app does not copy to it.
+While it is owed, the app **tries once each time the local host sees a core start to answer after none did**
+(`LocalHost::on_core_up`; the first pass that finds one, as at the app's start, is one): a core that was not running when the
+person chose, or an installed core too old to have the endpoint (a 404), gets the person's choice when it can take it. There is
+no timer and no loop: a failed copy is one warning (`desktop.crash-switch-not-copied`) and the next try is the next arrival.
 
-The copy runs on a thread of its own, once, with the socket's timeouts: the person's click and the install's answer never wait
-for a core. A core that cannot be reached is **one warning** (`desktop.crash-switch-not-copied`, "the crash report switch could
-not be copied to the core on this computer; the core keeps its own") and nothing more: no retry loop; the next change of the
-switch copies it again.
+Every copy goes through one path (`crash_reports::copy_to_core`): one at a time, on a thread of its own with the socket's
+timeouts (the person's click and the install's answer never wait for a core), each sending **the reporter's mode as it is when
+its turn comes** (the latest wins). A 200 settles only the owing it answered: a copy that comes back after the person changed the
+switch again does not settle the new one. Nothing is sent when nothing is owed, so a start with everything delivered copies
+nothing; and nothing is ever read back: **a change made on the core (its CLI) after a delivered copy stands** until the person
+changes the app's switch again. The one thing that is overwritten is a change made on the core *between a failed copy and its
+retry*: the app's choice, still owed, wins.
+
+A core the person installed by hand (`npx sidevoice install`) is not the app's: no file, nothing owed, nothing copied. A file
+that is there but cannot be read or understood is unknown: nothing is copied and nothing is written over it (a downgraded value
+would clear a marker that may have been there); only the app's own install, which knows what it did, replaces it.
 
 ## Never breaks the app
 
@@ -112,8 +122,10 @@ Reporting is best-effort: nothing it does may stop, slow down or crash the app, 
 reporting off for that run (tests: `shared/core/src/crash/tests.rs`, `shared/core/tests/crash_panic*.rs`).
 
 - **No panic escapes.** Every entry the app calls (`Reporter::start`, `set_mode`, `installation_id`, `local_core_installed`,
-  the pass, the capture) runs inside `catch_unwind`; a panic is logged with a fixed sentence and `error.type`
-  `shared.crash-reporter-failed` and swallowed.
+  `copy_owed`, `copy_delivered`, the pass, the capture) runs inside `catch_unwind`; a panic is logged with a fixed sentence and
+  `error.type` `shared.crash-reporter-failed` and swallowed. The threads the reporter starts, and the transport's own (it runs the
+  HTTP and TLS code on a runtime of one thread, every thread of it marked), are the reporter's: a panic on one is never
+  recorded as a crash of the app (`crash::reporter_thread`).
 - **The panic hook cannot be broken by the reporter.** A panic inside a hook aborts the process and cannot be caught, so the hook
   takes the frames and waits (3 s at most) for a thread of its own. One capture runs at a time process-wide (a panic raised by
   the reporter, or by another thread meanwhile, is not recorded: no recursion, no deadlock), a panic of the sending thread is

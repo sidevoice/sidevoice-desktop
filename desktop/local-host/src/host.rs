@@ -200,6 +200,8 @@ pub struct LocalHost {
     stopped: AtomicBool,
     /// What hears that a person's install put the service on a computer that had none ([`LocalHost::on_installed`]).
     installed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// What hears that a core answers again after none did ([`LocalHost::on_core_up`]).
+    core_up_listener: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     log: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
@@ -233,6 +235,7 @@ impl LocalHost {
             acting: AtomicUsize::new(0),
             stopped: AtomicBool::new(false),
             installed: Mutex::new(None),
+            core_up_listener: Mutex::new(None),
             log,
         }))
     }
@@ -295,6 +298,13 @@ impl LocalHost {
         *self.installed.lock().unwrap() = Some(Arc::new(told));
     }
 
+    /// Has `told` called each time a core starts to answer after none did (the first pass that finds one included, as at the
+    /// app's start): the poll's own thread calls it, after the pass, so it must not block (start a thread). It is how something
+    /// owed to the core waits for it to be there; nothing is asked of it on a timer.
+    pub fn on_core_up(&self, told: impl Fn() + Send + Sync + 'static) {
+        *self.core_up_listener.lock().unwrap() = Some(Arc::new(told));
+    }
+
     /// One pass: observe, keep the pairing, decide the state.
     pub fn poll(&self) -> Report {
         let pass = self.passes.lock().unwrap();
@@ -351,8 +361,21 @@ impl LocalHost {
             tracing::info!(state = json!(report.state).as_str().unwrap_or("?"), "the local host changed state");
         }
         inner.report = report.clone();
+        let arrived = health.is_ok() && !inner.core_up;
         inner.core_up = health.is_ok();
+        drop(inner);
+        if arrived {
+            self.told_core_up();
+        }
         report
+    }
+
+    /// Tells [`LocalHost::on_core_up`]'s listener, if there is one; a panic in it ends there.
+    fn told_core_up(&self) {
+        let told = self.core_up_listener.lock().unwrap().clone();
+        if let Some(told) = told {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| told()));
+        }
     }
 
     /// The installed Sidevoice's version: what `install.json`'s command answers to `--version --json`, kept while that

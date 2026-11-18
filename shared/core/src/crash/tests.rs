@@ -138,7 +138,14 @@ fn crashed(dir: &Path, literal: Option<&str>) -> Arc<Reporter> {
     tail::testing::own();
     let post: Arc<dyn Post> = Arc::new(Recorder::default());
     let store = Store::new(dir, home());
-    let reporter = Reporter::with(resource(), Some(post), Some(store), Settings::load(dir), vec![image("Sidevoice")]);
+    let reporter = Reporter::with(
+        resource(),
+        Some(post),
+        Some(store),
+        Settings::load(dir),
+        CoreCopy::load(dir),
+        vec![image("Sidevoice")],
+    );
     reporter.write(
         literal,
         if literal.is_some() { 0 } else { 42 },
@@ -548,40 +555,167 @@ fn only_one_pass_runs_at_a_time_and_the_one_that_ends_frees_the_next() {
 }
 
 #[test]
-fn the_switch_is_copied_to_the_core_the_app_installed_and_only_after_that_and_only_on_a_change() {
+fn a_copy_is_owed_from_the_install_and_from_each_change_and_is_settled_only_by_a_200() {
     let dir = tempfile::tempdir().unwrap();
     let post = Arc::new(Recorder::default());
     let reporter = start(dir.path(), &post);
-    let heard = Arc::new(Mutex::new(Vec::new()));
-    let sink = heard.clone();
-    reporter.on_local_core_change(move |mode| sink.lock().unwrap().push(mode));
-    // The app did not install a core (the person's own install, say): its switch is not copied anywhere.
+    let told = Arc::new(AtomicUsize::new(0));
+    let counter = told.clone();
+    reporter.on_copy_owed(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    // The app did not install a core (the person's own install, say): nothing is owed to it, and nobody is told.
     reporter.set_mode(Mode::Never).unwrap();
     reporter.set_mode(Mode::Auto).unwrap();
-    assert!(heard.lock().unwrap().is_empty());
-    // Once it did, the first copy takes the person's choice as it is now; later changes are told, repeats are not.
+    assert_eq!(told.load(Ordering::SeqCst), 0);
+    assert_eq!(reporter.copy_owed(), None);
+    assert!(!dir.path().join(core_copy::FILE).exists(), "a core the app did not install is never marked");
+
+    // The app installs one while the person had chosen "No enviar": a copy is owed, of the choice as it is at the time.
     reporter.set_mode(Mode::Never).unwrap();
-    assert_eq!(reporter.local_core_installed(), Some(Mode::Never));
-    reporter.set_mode(Mode::Never).unwrap();
-    assert!(heard.lock().unwrap().is_empty());
+    reporter.local_core_installed();
+    assert_eq!(told.load(Ordering::SeqCst), 1);
+    let first = reporter.copy_owed().unwrap();
+    assert_eq!(first.mode, Mode::Never);
+    // The core did not answer: still owed, in this run and in the next (it is tried again when the core is seen).
+    assert_eq!(reporter.copy_owed(), Some(first));
+    assert_eq!(start(dir.path(), &post).copy_owed().map(|owed| owed.mode), Some(Mode::Never));
+
+    // The person changes the switch before the answer to that copy comes back: the old answer does not settle the new owing,
+    // and what is sent is the choice as it is when the sending happens (the latest wins).
     reporter.set_mode(Mode::Auto).unwrap();
+    assert_eq!(told.load(Ordering::SeqCst), 2);
+    reporter.copy_delivered(first);
+    let second = reporter.copy_owed().expect("still owed");
+    assert_eq!(second.mode, Mode::Auto);
+    // A repeat is not a change.
     reporter.set_mode(Mode::Auto).unwrap();
+    assert_eq!(told.load(Ordering::SeqCst), 2);
+    // A 200: settled, and not sent again at the next start; a change made on the core afterwards stands.
+    reporter.copy_delivered(second);
+    assert_eq!(reporter.copy_owed(), None);
+    assert_eq!(start(dir.path(), &post).copy_owed(), None);
+    // Only the person's next change owes it again.
     reporter.set_mode(Mode::Never).unwrap();
-    assert_eq!(*heard.lock().unwrap(), [Mode::Auto, Mode::Never]);
-    // A choice that was not kept is not copied.
+    assert_eq!(told.load(Ordering::SeqCst), 3);
+    assert_eq!(reporter.copy_owed().map(|owed| owed.mode), Some(Mode::Never));
+
+    // A choice that was not kept is not owed.
     let failing = Reporter::unavailable(resource());
-    let none = Arc::new(Mutex::new(0));
+    let none = Arc::new(AtomicUsize::new(0));
     let counter = none.clone();
-    failing.on_local_core_change(move |_| *counter.lock().unwrap() += 1);
+    failing.on_copy_owed(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
     assert!(failing.set_mode(Mode::Auto).is_err());
-    assert_eq!(*none.lock().unwrap(), 0);
-    // The marker is kept: a later run of the app still copies.
-    let later = start(dir.path(), &post);
-    let again = Arc::new(Mutex::new(Vec::new()));
-    let sink = again.clone();
-    later.on_local_core_change(move |mode| sink.lock().unwrap().push(mode));
-    later.set_mode(Mode::Auto).unwrap();
-    assert_eq!(*again.lock().unwrap(), [Mode::Auto]);
+    assert_eq!(none.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_setting_file_that_cannot_be_read_neither_clears_the_marker_nor_the_owed_bit() {
+    let dir = tempfile::tempdir().unwrap();
+    let post = Arc::new(Recorder::default());
+    // The app installed a core and its copy was delivered; then the setting file was damaged.
+    {
+        let reporter = start(dir.path(), &post);
+        reporter.local_core_installed();
+        let owed = reporter.copy_owed().unwrap();
+        reporter.copy_delivered(owed);
+    }
+    std::fs::write(dir.path().join(settings::FILE), b"not json").unwrap();
+    let reporter = start(dir.path(), &post);
+    assert_eq!(reporter.mode(), Mode::Never, "never for that run");
+    assert_eq!(reporter.copy_owed(), None);
+    let told = Arc::new(AtomicUsize::new(0));
+    let counter = told.clone();
+    reporter.on_copy_owed(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    // The person chooses again: the setting file is replaced, the marker is as it was, so the change is owed to the core.
+    reporter.set_mode(Mode::Auto).unwrap();
+    assert_eq!(told.load(Ordering::SeqCst), 1);
+    assert_eq!(reporter.copy_owed().map(|owed| owed.mode), Some(Mode::Auto));
+    // And a marker file that cannot be read is not decided over: nothing is owed, nothing is written over it.
+    let marker = dir.path().join(core_copy::FILE);
+    std::fs::write(&marker, b"{broken").unwrap();
+    let reporter = start(dir.path(), &post);
+    reporter.set_mode(Mode::Never).unwrap();
+    assert_eq!(reporter.copy_owed(), None);
+    assert_eq!(std::fs::read(&marker).unwrap(), b"{broken");
+}
+
+#[test]
+fn the_post_goes_to_the_dsns_endpoint_with_its_auth_and_what_is_not_a_200_is_an_error() {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = seen.clone();
+    let server = std::thread::spawn(move || {
+        for status in ["200 OK", "429 Too Many Requests"] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut got = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut chunk).unwrap();
+                got.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&got).into_owned();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length: usize = head
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|v| v.trim().parse().ok())
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            log.lock().unwrap().push(String::from_utf8_lossy(&got).into_owned());
+            write!(stream, "HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").unwrap();
+        }
+    });
+    let dsn = report::parse_dsn(&format!("http://public@127.0.0.1:{port}/1")).unwrap();
+    let post = SentryPost::new(&dsn, "sidevoice/test");
+    assert_eq!(post.post(b"first".to_vec(), Duration::from_secs(5)), Ok(()));
+    assert_eq!(post.post(b"second".to_vec(), Duration::from_secs(5)), Err(PostError), "a rate limit is a failure");
+    server.join().unwrap();
+    let seen = seen.lock().unwrap();
+    assert!(seen[0].starts_with("POST /api/1/envelope/ "), "{}", seen[0]);
+    assert!(seen[0].to_ascii_lowercase().contains("x-sentry-auth: sentry sentry_key=public"), "{}", seen[0]);
+    assert!(seen[0].ends_with("first"));
+    // Nobody listens: an error at once, not a hang.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead = closed.local_addr().unwrap().port();
+    drop(closed);
+    let dsn = report::parse_dsn(&format!("http://public@127.0.0.1:{dead}/1")).unwrap();
+    let started = Instant::now();
+    assert_eq!(SentryPost::new(&dsn, "sidevoice/test").post(b"x".to_vec(), Duration::from_secs(5)), Err(PostError));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn a_frame_without_an_address_is_never_kept_or_sent() {
+    let mut raw = panic_with(Some("boom"), 0, Vec::new());
+    raw.frames = vec![
+        Frame { function: Some("a".into()), file: None, line: None, addr: 0x1010 },
+        Frame { function: Some("end of the stack".into()), file: None, line: None, addr: 0 },
+    ];
+    let stored = CrashRecord::from_panic(raw, &home());
+    assert_eq!(stored.backtrace.len(), 1);
+    // Nor when it is read back from a file that has one.
+    let mut json = serde_json::to_value(&stored).unwrap();
+    json["backtrace"] = serde_json::json!([{"function": "a", "addr": 0x1010}, {"function": "z", "addr": 0}]);
+    let read = CrashRecord::parse(&serde_json::to_vec(&json).unwrap(), &home()).unwrap();
+    assert_eq!(read.backtrace.len(), 1);
+    let sent = String::from_utf8(report::envelope(report::event(&read, "00")).unwrap()).unwrap();
+    assert!(!sent.contains("\"z\"") && !sent.contains("0x0\""), "{sent}");
 }
 
 #[test]
@@ -596,13 +730,18 @@ fn a_real_stack_is_recorded_with_addresses_and_only_the_modules_that_hold_a_fram
         Some(post),
         Some(Store::new(dir.path(), home())),
         Settings::load(dir.path()),
+        CoreCopy::load(dir.path()),
         vec![everything, nothing],
     );
     reporter.write(Some("real stack"), 0, "shared/core/src/crash/tests.rs", 1, backtrace::Backtrace::new_unresolved());
     let pending = Store::new(dir.path(), home()).pending().unwrap();
     let record = &pending[0];
     assert!(!record.backtrace.is_empty());
-    assert!(record.backtrace.iter().all(|frame| frame.addr != 0), "the raw instruction address of each frame");
+    assert!(
+        record.backtrace.iter().all(|frame| frame.addr != 0),
+        "the raw instruction address of each frame (the unwinder's terminal frame, address 0, is not one): {:#?}",
+        record.backtrace
+    );
     assert_eq!(record.images.iter().map(|image| image.name.as_str()).collect::<Vec<_>>(), ["holds-everything"]);
 }
 

@@ -23,6 +23,7 @@
 //! - [`trace`]: the frames and the loaded modules.
 //! - [`report`]: the event, the envelope and the POST.
 
+mod core_copy;
 pub mod record;
 pub mod report;
 pub mod settings;
@@ -35,12 +36,13 @@ mod trace;
 use std::cell::Cell;
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use core_copy::CoreCopy;
 pub use report::{Post, PostError, SentryPost};
 pub use settings::Settings;
 
@@ -114,6 +116,24 @@ thread_local! {
     static SENDING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Spawns a thread whose panics are the reporter's own: they are logged where they are caught, never recorded as a crash of the
+/// app (no loop). Every thread the reporter starts, and the ones its transport runs on, is one.
+pub fn reporter_thread<T: Send + 'static>(
+    name: &str,
+    run: impl FnOnce() -> T + Send + 'static,
+) -> io::Result<std::thread::JoinHandle<T>> {
+    std::thread::Builder::new().name(name.into()).spawn(move || {
+        mark_reporter_thread();
+        run()
+    })
+}
+
+/// The calling thread is the reporter's: see [`reporter_thread`]. For the threads a library starts for the reporter's work (a
+/// runtime's workers).
+pub(crate) fn mark_reporter_thread() {
+    SENDING.with(|flag| flag.set(true));
+}
+
 /// One capture at a time, process-wide: a panic that comes while one is under way (another thread's, or the capture's own) is
 /// not recorded.
 static CAPTURING: AtomicBool = AtomicBool::new(false);
@@ -137,8 +157,16 @@ pub struct Config {
     pub post: Option<Arc<dyn Post>>,
 }
 
-/// Told, after the person changed the switch, to copy it to the core the app installed on this computer.
-type Copier = Arc<dyn Fn(Mode) + Send + Sync>;
+/// Told when a copy of the switch becomes owed to the core the app installed.
+type Copier = Arc<dyn Fn() + Send + Sync>;
+
+/// What the core is owed: the person's choice as it is now, and which owing it answers (a copy that comes back after the person
+/// changed the switch again does not settle the new one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Owed {
+    pub mode: Mode,
+    generation: u64,
+}
 
 pub struct Reporter {
     resource: Resource,
@@ -156,6 +184,10 @@ pub struct Reporter {
     sending: AtomicBool,
     /// How many records this run made.
     recorded: AtomicUsize,
+    /// Whether the app owes the core it installed a copy of its switch (`core_copy.rs`), and how many times it came to owe one
+    /// in this run. Locked after `settings` where both are.
+    copy: Mutex<CoreCopy>,
+    owings: AtomicU64,
     copier: Mutex<Option<Copier>>,
 }
 
@@ -165,6 +197,7 @@ impl Reporter {
         post: Option<Arc<dyn Post>>,
         store: Option<Store>,
         settings: Settings,
+        copy: CoreCopy,
         images: Vec<Image>,
     ) -> Arc<Reporter> {
         let open = settings.mode() == Mode::Auto && post.is_some() && store.is_some();
@@ -177,6 +210,8 @@ impl Reporter {
             images,
             sending: AtomicBool::new(false),
             recorded: AtomicUsize::new(0),
+            copy: Mutex::new(copy),
+            owings: AtomicU64::new(0),
             copier: Mutex::new(None),
         })
     }
@@ -184,7 +219,7 @@ impl Reporter {
     /// A reporter that reports nothing and keeps nothing (`never` for this run), for when the app's directory could not be had or
     /// the reporter could not start: the app and its page work the same.
     pub fn unavailable(resource: Resource) -> Arc<Reporter> {
-        Reporter::with(resource, None, None, Settings::unavailable(), Vec::new())
+        Reporter::with(resource, None, None, Settings::unavailable(), CoreCopy::unavailable(), Vec::new())
     }
 
     /// Reads the setting and lists the loaded modules, then, on a thread of its own, sends the records a previous run left (or
@@ -200,7 +235,9 @@ impl Reporter {
                 Some(post)
             });
             let store = Store::new(&config.dir, crate::logging::home());
-            let reporter = Reporter::with(resource, post, Some(store), Settings::load(&config.dir), trace::loaded());
+            let settings = Settings::load(&config.dir);
+            let reporter =
+                Reporter::with(resource, post, Some(store), settings, CoreCopy::load(&config.dir), trace::loaded());
             reporter.begin_pass();
             reporter
         });
@@ -231,14 +268,24 @@ impl Reporter {
 
     /// The person's choice. `never` takes effect first and whatever happens after (the file may not be writable): nothing more
     /// is recorded or sent, and the pending records and the installation id are deleted; `auto` only once it is kept. An error
-    /// means the choice was not kept. A change is also told to the copier (`on_local_core_change`).
+    /// means the choice was not kept. A change, once the app installed a core, makes a copy of the switch owed to it
+    /// ([`Reporter::on_copy_owed`]).
     pub fn set_mode(&self, mode: Mode) -> io::Result<()> {
         contained("set-mode", || {
-            let previous = self.mode();
             if mode == Mode::Never {
                 self.open.store(false, Ordering::SeqCst);
             }
-            let kept = self.settings.lock().unwrap_or_else(PoisonError::into_inner).set_mode(mode);
+            // The mode it was, the write and the owing under one hold: two changes at once cannot both see the same "before".
+            let (kept, changed) = {
+                let mut settings = self.settings.lock().unwrap_or_else(PoisonError::into_inner);
+                let previous = settings.mode();
+                let kept = settings.set_mode(mode);
+                let changed = kept.is_ok() && previous != mode;
+                if changed {
+                    self.owe_copy(|copy| copy.owe());
+                }
+                (kept, changed)
+            };
             match mode {
                 Mode::Never => self.erase(),
                 Mode::Auto if kept.is_ok() => {
@@ -246,8 +293,8 @@ impl Reporter {
                 }
                 Mode::Auto => {}
             }
-            if kept.is_ok() && previous != mode {
-                self.copy(mode);
+            if changed {
+                self.tell_copier();
             }
             kept
         })
@@ -265,35 +312,72 @@ impl Reporter {
         }
     }
 
-    /// What copies the app's switch to the core the app installed on this computer, told the new mode each time the person
-    /// changes it, and only once the app has said it installed a core ([`Reporter::local_core_installed`]). It runs inside
-    /// the choice's own call: it must not block (start a thread).
-    pub fn on_local_core_change(&self, copy: impl Fn(Mode) + Send + Sync + 'static) {
+    /// What copies the app's switch to the core the app installed on this computer, told each time a copy becomes owed: when
+    /// the app installed the core ([`Reporter::local_core_installed`]) and when the person changes the switch afterwards. It
+    /// runs inside that call and must not block (start a thread); it asks [`Reporter::copy_owed`] what to send, and tells
+    /// [`Reporter::copy_delivered`] when the core answered.
+    pub fn on_copy_owed(&self, copy: impl Fn() + Send + Sync + 'static) {
         *self.copier.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(copy));
     }
 
-    /// The app installed a core on this computer (its first install, by the person's own action): from now on the person's
-    /// changes of the switch are told to the copier. Answers the mode as it is now, for the first copy; the person's choice,
-    /// not the copier's, is always the source.
-    pub fn local_core_installed(&self) -> Option<Mode> {
+    /// The app installed a core on this computer (a person's install, the first of a computer that had none): from now on a
+    /// copy of the switch is owed to it, until the core answers one with a 200, and the person's changes of the switch owe it
+    /// again. The copier is told.
+    pub fn local_core_installed(&self) {
         contained("local-core", || {
-            let mut settings = self.settings.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Err(error) = settings.set_local_core() {
-                tracing::warn!(
-                    error.type = SharedError::CrashSettingsNotKept.code(),
-                    kind = ?error.kind(),
-                    "the app could not keep that it installed the core; the core's crash report switch will not follow later changes"
-                );
-            }
-            settings.mode()
-        })
+            self.owe_copy(|copy| copy.installed());
+            self.tell_copier();
+        });
     }
 
-    fn copy(&self, mode: Mode) {
-        let follows = self.settings.lock().unwrap_or_else(PoisonError::into_inner).local_core();
+    /// A copy of the switch is owed to the core the app installed: the person's choice as it is now (what is sent is always the
+    /// reporter's mode at the time of sending: the latest wins), or `None` when nothing is owed, the app did not install the
+    /// core, or what is known of it could not be read.
+    pub fn copy_owed(&self) -> Option<Owed> {
+        contained("copy-owed", || {
+            let settings = self.settings.lock().unwrap_or_else(PoisonError::into_inner);
+            let copy = self.copy.lock().unwrap_or_else(PoisonError::into_inner);
+            copy.owed().then(|| Owed { mode: settings.mode(), generation: self.owings.load(Ordering::SeqCst) })
+        })
+        .flatten()
+    }
+
+    /// The core answered the copy of `owed` with a 200: nothing is owed any more, unless the person changed the switch since
+    /// (that owes it again, and is not settled by this).
+    pub fn copy_delivered(&self, owed: Owed) {
+        contained("copy-delivered", || {
+            let mut copy = self.copy.lock().unwrap_or_else(PoisonError::into_inner);
+            if owed.generation == self.owings.load(Ordering::SeqCst) {
+                if let Err(error) = copy.delivered() {
+                    tracing::warn!(
+                        error.type = SharedError::CrashSettingsNotKept.code(),
+                        kind = ?error.kind(),
+                        "the app could not keep that the core has its crash report switch; it will be sent once more when the core is next seen"
+                    );
+                }
+            }
+        });
+    }
+
+    /// Makes a copy owed (`how`), counted, and says so in the log when it could not be kept (it is owed in this run all the same).
+    fn owe_copy(&self, how: impl FnOnce(&mut CoreCopy) -> io::Result<()>) {
+        let mut copy = self.copy.lock().unwrap_or_else(PoisonError::into_inner);
+        self.owings.fetch_add(1, Ordering::SeqCst);
+        if let Err(error) = how(&mut copy) {
+            tracing::warn!(
+                error.type = SharedError::CrashSettingsNotKept.code(),
+                kind = ?error.kind(),
+                "the app could not keep that the core is owed a copy of its crash report switch; it is owed in this run only"
+            );
+        }
+    }
+
+    /// Tells the copier, if a copy is owed.
+    fn tell_copier(&self) {
+        let owed = self.copy.lock().unwrap_or_else(PoisonError::into_inner).owed();
         let copier = self.copier.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        if let (true, Some(copier)) = (follows, copier) {
-            copier(mode);
+        if let (true, Some(copier)) = (owed, copier) {
+            copier();
         }
     }
 
@@ -316,8 +400,7 @@ impl Reporter {
             return;
         }
         let reporter = self.clone();
-        let spawned = std::thread::Builder::new().name("crash-send".into()).spawn(move || {
-            SENDING.with(|flag| flag.set(true));
+        let spawned = reporter_thread("crash-send", move || {
             contained("send", || reporter.pass());
             reporter.sending.store(false, Ordering::SeqCst);
         });

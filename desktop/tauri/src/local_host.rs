@@ -234,12 +234,16 @@ pub fn setup(app: &AppHandle) {
     let config = Config { dirs, app_dir, name: SystemComputerName::read(), pinned_minor };
     match LocalHost::start(config, crate::debug) {
         Ok(host) => {
-            host.watch();
-            keep_current(app, &host);
-            // The app's crash report switch is copied once to a core this app installs (`crash_reports::core_installed`).
+            // A core this app installs is owed a copy of the app's crash report switch (`crash_reports::core_installed`), and
+            // what the core is still owed goes once each time one answers after none did (`crash_reports::core_up`). Both are
+            // in place, and the host managed (the copy asks for it), before the poll starts: its first pass may find the core.
             let handle = app.clone();
             host.on_installed(move || crate::crash_reports::core_installed(&handle));
-            app.manage(Hosted(host));
+            let handle = app.clone();
+            host.on_core_up(move || crate::crash_reports::core_up(&handle));
+            app.manage(Hosted(host.clone()));
+            host.watch();
+            keep_current(app, &host);
         }
         Err(e) => crate::debug(&format!("local-host off: the proxy could not start: {e}")),
     }

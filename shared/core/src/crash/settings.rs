@@ -31,9 +31,6 @@ struct Stored {
     mode: Mode,
     #[serde(default)]
     install: Option<Install>,
-    /// Whether the app installed a core on this computer, whose switch is then a copy of this one (`Settings::local_core`).
-    #[serde(default)]
-    local_core: bool,
 }
 
 pub struct Settings {
@@ -52,8 +49,8 @@ fn plain_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The file: `Ok(None)` only when it does not exist.
-fn read(path: &Path) -> Result<Option<Stored>, std::io::ErrorKind> {
+/// The bytes of a small file of the app's own (at most [`LIMIT`]): `Ok(None)` only when it does not exist.
+pub(super) fn read_small(path: &Path) -> Result<Option<Vec<u8>>, std::io::ErrorKind> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         // Windows reports a path through a regular file as `NotFound` too, where Unix says `NotADirectory`: a parent
@@ -68,6 +65,26 @@ fn read(path: &Path) -> Result<Option<Stored>, std::io::ErrorKind> {
     if bytes.len() as u64 > LIMIT {
         return Err(std::io::ErrorKind::InvalidData);
     }
+    Ok(Some(bytes))
+}
+
+/// Atomically: a temporary file beside `path`, then a rename.
+pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if path.as_os_str().is_empty() {
+        return Err(std::io::Error::other("no place to keep the file"));
+    }
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let temporary = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    std::fs::rename(&temporary, path)
+}
+
+/// The file: `Ok(None)` only when it does not exist.
+fn read(path: &Path) -> Result<Option<Stored>, std::io::ErrorKind> {
+    let Some(bytes) = read_small(path)? else { return Ok(None) };
     let mut stored = serde_json::from_slice::<Stored>(&bytes).map_err(|_| std::io::ErrorKind::InvalidData)?;
     if stored.install.as_ref().is_some_and(|install| !plain_id(&install.id)) {
         stored.install = None;
@@ -89,7 +106,7 @@ impl Settings {
                     error.kind = ?kind,
                     "the crash report setting could not be read; nothing is sent in this run"
                 );
-                Stored { mode: Mode::Never, install: None, local_core: false }
+                Stored { mode: Mode::Never, install: None }
             }
         };
         Settings { path, stored }
@@ -97,26 +114,11 @@ impl Settings {
 
     /// No place to keep anything (the app's directory could not be had): `never` for this run, and nothing can be written.
     pub fn unavailable() -> Settings {
-        Settings { path: PathBuf::new(), stored: Stored { mode: Mode::Never, install: None, local_core: false } }
+        Settings { path: PathBuf::new(), stored: Stored { mode: Mode::Never, install: None } }
     }
 
     pub fn mode(&self) -> Mode {
         self.stored.mode
-    }
-
-    /// Whether the app installed the core on this computer: only then is its switch a copy of this one.
-    pub fn local_core(&self) -> bool {
-        self.stored.local_core
-    }
-
-    /// Keeps that the app installed the core on this computer (and so copies its switch to it). Nothing changes when the file
-    /// cannot be written.
-    pub fn set_local_core(&mut self) -> std::io::Result<()> {
-        let mut next = self.stored.clone();
-        next.local_core = true;
-        self.write(&next)?;
-        self.stored = next;
-        Ok(())
     }
 
     /// Keeps `mode`. `never` also forgets the installation id. Nothing changes when the file cannot be written.
@@ -148,18 +150,8 @@ impl Settings {
         Ok(id)
     }
 
-    /// Atomically: a temporary file beside it, then a rename.
     fn write(&self, stored: &Stored) -> std::io::Result<()> {
-        if self.path.as_os_str().is_empty() {
-            return Err(std::io::Error::other("no place to keep the setting"));
-        }
-        let dir = self.path.parent().unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(dir)?;
-        let temporary = self.path.with_extension("json.tmp");
-        let mut file = std::fs::File::create(&temporary)?;
-        file.write_all(&serde_json::to_vec(stored).map_err(std::io::Error::other)?)?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, &self.path)
+        write_atomic(&self.path, &serde_json::to_vec(stored).map_err(std::io::Error::other)?)
     }
 }
 

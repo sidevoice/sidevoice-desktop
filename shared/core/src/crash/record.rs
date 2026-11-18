@@ -171,7 +171,7 @@ impl CrashRecord {
             self.exception.len = None;
         }
         self.location.file = relative(&self.location.file);
-        self.backtrace = self.backtrace.iter().take(MAX_FRAMES).map(frame).collect();
+        self.backtrace = self.backtrace.iter().filter(|frame| frame.addr != 0).take(MAX_FRAMES).map(frame).collect();
         self.images = self.images.iter().filter_map(image).take(MAX_IMAGES).collect();
         let lines: Vec<String> =
             self.log_tail.iter().map(|line| clean(line, MAX_LINE)).filter(|line| tail::is_tail_line(line)).collect();

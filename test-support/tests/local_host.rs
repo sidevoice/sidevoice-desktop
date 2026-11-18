@@ -955,6 +955,35 @@ fn release(seconds: &str) -> FakeRegistry {
 }
 
 #[test]
+fn the_listener_hears_a_core_that_starts_to_answer_once_per_arrival() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let world = World::new();
+    let host = world.host();
+    let heard = Arc::new(AtomicUsize::new(0));
+    let counter = heard.clone();
+    host.on_core_up(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    // No core: nothing to hear.
+    assert!(!host.poll().reachable);
+    assert_eq!(heard.load(Ordering::SeqCst), 0);
+    // A core comes: heard once, however many passes find it.
+    let core = world.core(1);
+    host.poll();
+    host.poll();
+    assert_eq!(heard.load(Ordering::SeqCst), 1);
+    // It goes, and while it is gone nothing is heard.
+    core.stop();
+    drop(core);
+    host.poll();
+    assert_eq!(heard.load(Ordering::SeqCst), 1);
+    // It comes back: heard again.
+    let _again = world.core(1);
+    host.poll();
+    assert_eq!(heard.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn the_apps_crash_switch_is_copied_to_the_core_on_its_socket_and_only_when_asked() {
     let world = World::new();
     let core = world.core(1);

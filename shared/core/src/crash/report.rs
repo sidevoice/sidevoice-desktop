@@ -135,31 +135,42 @@ impl SentryPost {
 }
 
 impl Post for SentryPost {
-    /// On a thread of its own: the blocking client runs a runtime, which must not start inside an async worker.
+    /// On a thread of its own, one of the reporter's ([`super::reporter_thread`]): a panic in the HTTP or TLS code is never
+    /// recorded as a crash of the app.
     fn post(&self, envelope: Vec<u8>, budget: Duration) -> Result<(), PostError> {
         let (url, auth) = (self.url.clone(), self.auth.clone());
         let (tell, hear) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .name("crash-post".into())
-            .spawn(move || {
-                let sent = reqwest::blocking::Client::builder()
-                    .timeout(budget)
-                    .build()
-                    .and_then(|client| {
-                        client
-                            .post(url)
-                            .header("X-Sentry-Auth", auth)
-                            .header("Content-Type", "application/x-sentry-envelope")
-                            .body(envelope)
-                            .send()
-                    })
-                    .is_ok_and(|answer| answer.status().is_success());
-                let _ = tell.send(sent);
-            })
-            .map_err(|_| PostError)?;
+        super::reporter_thread("crash-post", move || {
+            let _ = tell.send(send(&url, &auth, envelope, budget));
+        })
+        .map_err(|_| PostError)?;
         match hear.recv_timeout(budget + Duration::from_millis(500)) {
             Ok(true) => Ok(()),
             _ => Err(PostError),
         }
     }
+}
+
+/// The request, on a runtime that has no thread but this one's and the pool it blocks DNS on, every one of them marked as the
+/// reporter's (`reqwest`'s blocking client would run its own thread, which the panic hook could not tell from the app's).
+fn send(url: &str, auth: &str, envelope: Vec<u8>, budget: Duration) -> bool {
+    let Ok(runtime) =
+        tokio::runtime::Builder::new_current_thread().enable_all().on_thread_start(super::mark_reporter_thread).build()
+    else {
+        return false;
+    };
+    runtime
+        .block_on(async {
+            let client = reqwest::Client::builder().timeout(budget).build().ok()?;
+            let answer = client
+                .post(url)
+                .header("X-Sentry-Auth", auth)
+                .header("Content-Type", "application/x-sentry-envelope")
+                .body(envelope)
+                .send()
+                .await
+                .ok()?;
+            answer.status().is_success().then_some(())
+        })
+        .is_some()
 }

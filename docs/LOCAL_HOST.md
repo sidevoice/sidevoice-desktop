@@ -103,8 +103,10 @@ The core has its own switch for the crash reports it sends (the logging guidelin
 copies its own to the core **it installed**, one way, through `PUT /api/local/crash-reports {"send": bool}` on the core's socket
 (no token, no Origin: the core answers `/api/local` on its local channel only). It does so when its own install put the service
 on the computer (`install()` ends with the installer's `installed`, not `updated` or `reinstalled`; `LocalHost::on_installed`) and
-each time the person changes the app's switch afterwards (`LocalHost::set_crash_reports`). Never on a start, never after an
-app update, never read back; a core that cannot be reached is one warning, no retry.
+each time the person changes the app's switch afterwards (`LocalHost::set_crash_reports`). The copy is owed until the core answers
+it with a 200; while it is owed, the host tells the app each time a core starts to answer after none did (`LocalHost::on_core_up`,
+the poll's own pass: the app's start with the core running is one), and the app tries once. No timer, no loop; never after an app
+update, never read back, and nothing sent when nothing is owed.
 
 ## The poll and the state
 

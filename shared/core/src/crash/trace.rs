@@ -18,6 +18,11 @@ pub(super) fn frames(trace: &Backtrace) -> Vec<Frame> {
     let mut frames = Vec::new();
     for frame in trace.frames() {
         let addr = frame.ip() as usize as u64;
+        // libgcc's unwinder (the system's, where Linux links against it) reports one last frame whose address is 0, the end of the
+        // stack; a frame without an address names nothing and Sentry cannot use it.
+        if addr == 0 {
+            continue;
+        }
         if frame.symbols().is_empty() {
             frames.push(Frame { function: None, file: None, line: None, addr });
         }
@@ -129,6 +134,17 @@ mod tests {
         ]);
         assert_eq!(names(trimmed), ["app::run", "main"]);
         assert_eq!(names(trim(vec![frame("app::run")])), ["app::run"], "no machinery: as it was");
+    }
+
+    #[test]
+    fn a_real_backtrace_has_an_address_for_every_frame_and_names_for_some() {
+        // The unwinder's terminal frame (libgcc reports one with address 0 at the end of the stack) is not a frame.
+        let mut here = Backtrace::new();
+        here.resolve();
+        let frames = frames(&here);
+        assert!(!frames.is_empty());
+        assert!(frames.iter().all(|frame| frame.addr != 0), "{frames:#?}");
+        assert!(frames.iter().any(|frame| frame.function.is_some()), "{frames:#?}");
     }
 
     #[test]
