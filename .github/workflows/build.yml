@@ -155,6 +155,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.release-tag }}
       # The Rust build cache it shares with `macos-native`, which builds the same dependencies and more (the local
       # host's CI tool) and so is the one that writes it.
@@ -177,6 +178,8 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          # Crash reports (docs/CRASH_REPORTS.md): a release or nightly build sends them; a dev build has no DSN and sends nothing.
+          SIDEVOICE_SENTRY_DSN: ${{ needs.changes.outputs.channel != 'dev' && vars.SENTRY_DSN || '' }}
         run: cargo xtask release app --channel ${{ needs.changes.outputs.channel }}
       # Tauri's bundler imports the certificate into a keychain of its own, signs every binary with the hardened runtime
       # and the entitlements (desktop/tauri/packaging/macos/Entitlements.plist), then notarizes the app with the API key (the .p8 as a file
@@ -195,7 +198,24 @@ jobs:
           # build (a manual `sign` run) makes none.
           TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel != 'dev' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel != 'dev' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          # Crash reports (docs/CRASH_REPORTS.md): a release or nightly build sends them; a dev build has no DSN and sends nothing.
+          SIDEVOICE_SENTRY_DSN: ${{ needs.changes.outputs.channel != 'dev' && vars.SENTRY_DSN || '' }}
         run: cargo xtask release app --signed --channel ${{ needs.changes.outputs.channel }}
+      # sentry-cli on its own: no secret in this step's environment and no install script (the pinned platform package carries the binary).
+      - name: Install sentry-cli
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          GH_TOKEN: ''
+        run: npm install --global --ignore-scripts @sentry/cli@3.8.2
+      # The debug files of this build (the .dSYM, the PDB, the Linux binary with its line tables), which `cargo xtask` split off the binary
+      # before the bundler packed it (target/debug-files), and its release, to Sentry: so a crash's addresses become names and lines.
+      # A release or nightly build only; the token is this step's alone.
+      - name: Upload the debug files and the release to Sentry
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          cargo xtask sentry upload sidevoice-desktop target/debug-files
       - name: Check what a first open depends on
         env:
           APPLE_TEAM_ID: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_TEAM_ID || '' }}
@@ -350,6 +370,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.release-tag }}
       - run: |
           sudo apt-get update
@@ -370,7 +391,24 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          # Crash reports (docs/CRASH_REPORTS.md): a release or nightly build sends them; a dev build has no DSN and sends nothing.
+          SIDEVOICE_SENTRY_DSN: ${{ needs.changes.outputs.channel != 'dev' && vars.SENTRY_DSN || '' }}
         run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
+      # sentry-cli on its own: no secret in this step's environment and no install script (the pinned platform package carries the binary).
+      - name: Install sentry-cli
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          GH_TOKEN: ''
+        run: npm install --global --ignore-scripts @sentry/cli@3.8.2
+      # The debug files of this build (the .dSYM, the PDB, the Linux binary with its line tables), which `cargo xtask` split off the binary
+      # before the bundler packed it (target/debug-files), and its release, to Sentry: so a crash's addresses become names and lines.
+      # A release or nightly build only; the token is this step's alone.
+      - name: Upload the debug files and the release to Sentry
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          cargo xtask sentry upload sidevoice-desktop target/debug-files
       - name: Record produced bundle file lists
         run: cargo xtask packaging files target/release/bundle packaging-linux.txt
       - uses: actions/upload-artifact@v4
@@ -394,6 +432,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           ref: ${{ inputs.release-tag }}
       - uses: ./.github/actions/setup-rust
         id: rust
@@ -414,7 +453,24 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          # Crash reports (docs/CRASH_REPORTS.md): a release or nightly build sends them; a dev build has no DSN and sends nothing.
+          SIDEVOICE_SENTRY_DSN: ${{ needs.changes.outputs.channel != 'dev' && vars.SENTRY_DSN || '' }}
         run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
+      # sentry-cli on its own: no secret in this step's environment and no install script (the pinned platform package carries the binary).
+      - name: Install sentry-cli
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          GH_TOKEN: ''
+        run: npm install --global --ignore-scripts @sentry/cli@3.8.2
+      # The debug files of this build (the .dSYM, the PDB, the Linux binary with its line tables), which `cargo xtask` split off the binary
+      # before the bundler packed it (target/debug-files), and its release, to Sentry: so a crash's addresses become names and lines.
+      # A release or nightly build only; the token is this step's alone.
+      - name: Upload the debug files and the release to Sentry
+        if: needs.changes.outputs.channel != 'dev'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          cargo xtask sentry upload sidevoice-desktop target/debug-files
       # The Windows app starts: the bundled interface comes up in WebView2 (no settings; a throwaway runner only).
       - name: First open (no settings), the bundled interface comes up
         run: cargo xtask release first-open

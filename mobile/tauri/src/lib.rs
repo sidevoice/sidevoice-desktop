@@ -12,6 +12,7 @@ mod acl_tests;
 mod bridge;
 use bridge::headset;
 mod call;
+mod crash_reports;
 mod developer_options;
 mod downloads;
 mod hold;
@@ -537,6 +538,8 @@ fn run_app() {
             // The log's file (and its folder): the lines written before it are in it first, and the start event.
             open_log_file(&handle);
             sidevoice_shared::logging::announce(platform::resource::current());
+            // A panic from here on may be reported, under the person's setting (`crash_reports`).
+            crash_reports::setup(&handle);
             // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
             // and on the room's call's thread, in order with its reports and interruptions (`call::RoomCall`).
             let media_app = handle.clone();
@@ -697,7 +700,7 @@ fn run_app() {
         });
 }
 
-/// The app log's file, in the platform's log folder (`app_log_dir`; `panics` keeps its file beside it): rotated at
+/// The app log's file, in the platform's log folder (`app_log_dir`;): rotated at
 /// [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
 const LOG_MAX_BYTES: u128 = 2_000_000;
 const LOG_KEPT: usize = 5;

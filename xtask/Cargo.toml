@@ -28,6 +28,8 @@ syn = { version = "2", default-features = false, features = ["full", "parsing", 
 # their steps) as data, not as text.
 toml = "1"
 serde_yaml_ng = "0.10"
+# The Linux debug file and the shipped binary, read for their line tables and build id (platform/debug_files/linux.rs).
+object = { version = "0.40", default-features = false, features = ["read_core", "elf", "std"] }
 
 # Shared child lifetime, private files and release-target facts; no core application dependency.
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.16.1" }

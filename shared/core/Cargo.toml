@@ -43,6 +43,21 @@ serde_json = "1"
 # (src/voice/models.rs).
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
 
+# Crash reports (src/crash): the maintained SDK's protocol types only (the event, the envelope, the DSN, the debug ids): no
+# client, integration or transport of the SDK exists in the process. The report is built from a record's closed field list
+# (src/crash/report.rs) and posted by our own code, at the next start.
+sentry-types = "0.49"
+# The frames of a panic with their instruction addresses (taken in the hook, resolved off the dying thread) and the modules
+# loaded at start, which Sentry matches to the debug files of the release (src/crash/trace.rs): what the SDK's own
+# integrations are made of, without the integrations.
+backtrace = "0.3"
+findshlibs = "0.10"
+# The install id is random (src/crash/settings.rs).
+getrandom = "0.3"
+# The POST of an envelope, on a runtime of a thread of its own (src/crash/report.rs: nothing it runs on is a thread the app's
+# panic hook would count as the app's); the TLS stack the app already has.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+
 # Provider keys in the OS credential store (platform/credentials; docs/CREDENTIALS.md).
 keyring-core = "1.0.1"
 
@@ -71,6 +86,7 @@ regex = "1"
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 
 [dev-dependencies]
+tempfile = "3"
 # The canary test sends a line through the `log` bridge.
 log = "0.4"
 keyring-core = { version = "1.0.1", features = ["sample"] }

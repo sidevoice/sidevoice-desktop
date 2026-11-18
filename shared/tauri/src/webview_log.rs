@@ -20,7 +20,7 @@ use crate::Callers;
 /// The target of every line this module writes. Only our own targets may reach the crash ring buffer, the mobile system log
 /// and the handled-error events, and each of those must exclude or include this one by name: a line of the page's, even a
 /// checked one, must not be written under any other (a test keeps every call here to it).
-const TARGET: &str = "webview";
+const TARGET: &str = sidevoice_shared::logging::WEBVIEW_TARGET;
 const MAX_ITEMS: usize = 16;
 /// The most a rendered detail holds, in bytes; the rest is cut and marked.
 const MAX_DETAIL: usize = 1024;

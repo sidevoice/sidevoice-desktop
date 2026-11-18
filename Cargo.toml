@@ -16,4 +16,10 @@ default-members = ["shared/core", "shared/i18n", "shared/headset", "shared/tauri
 codegen-units = 1
 lto = true
 opt-level = "s"
-strip = true
+# Crash reports (docs/CRASH_REPORTS.md): line tables, so that Sentry can name a crash's frames with file and line, and no stripping
+# here (`strip = "none"`; on MSVC a build that strips links without a PDB). `cargo xtask` splits the debug files off the app's
+# binary before the bundler packs it (xtask/src/platform/debug_files.rs: the symbol table stays in the shipped binary, so its
+# frames have names with or without Sentry) and leaves them in target/debug-files for the upload; a plain `cargo build --release`
+# keeps them in the binary.
+debug = "line-tables-only"
+strip = "none"

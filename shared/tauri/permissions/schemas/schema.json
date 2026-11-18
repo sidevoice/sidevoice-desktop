@@ -319,6 +319,18 @@
           "markdownDescription": "Denies the bridge_playback command without any pre-configured scope."
         },
         {
+          "description": "Enables the crash_reports command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-crash-reports",
+          "markdownDescription": "Enables the crash_reports command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the crash_reports command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-crash-reports",
+          "markdownDescription": "Denies the crash_reports command without any pre-configured scope."
+        },
+        {
           "description": "Enables the engine_cancel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-engine-cancel",

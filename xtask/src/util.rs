@@ -592,7 +592,9 @@ pub fn head_commit() -> Result<(String, String)> {
     Ok((commit.to_owned(), date.to_owned()))
 }
 
-/// A `tauri build` (the Tauri CLI package.json pins).
+/// A Tauri build (the Tauri CLI package.json pins): `tauri build --no-bundle` for the binary, the debug files split off it
+/// ([`crate::platform::debug_files`]), then `tauri bundle` for the installers, which the bundler signs after the binary was
+/// stripped.
 #[derive(Debug, Default, PartialEq)]
 pub struct TauriBuild<'a> {
     /// `--target`: none for the host's own.
@@ -608,25 +610,57 @@ pub struct TauriBuild<'a> {
 }
 
 impl TauriBuild<'_> {
-    pub fn args(&self) -> Vec<String> {
-        let mut args = vec!["build".to_owned()];
+    /// `tauri build --no-bundle`: the app's binary, and the web interface it is built with (`beforeBuildCommand`), no installer.
+    pub fn build_args(&self) -> Vec<String> {
+        let mut args = vec!["build".to_owned(), "--no-bundle".to_owned()];
+        args.extend(self.shared_args());
+        args
+    }
+
+    /// `tauri bundle`: the installers, from the binary [`TauriBuild::build_args`] left (and the debug files split off).
+    pub fn bundle_args(&self) -> Vec<String> {
+        let mut args = vec!["bundle".to_owned(), "--bundles".to_owned(), self.bundles.to_owned()];
+        args.extend(self.shared_args());
+        args
+    }
+
+    /// What both steps are told: the target, the features and the config, which must be the same for the bundler to find the
+    /// binary and name what it makes.
+    fn shared_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
         if let Some(target) = self.target {
-            args.extend(["--target".into(), target.into()]);
+            args.extend(["--target".to_owned(), target.to_owned()]);
         }
-        args.extend(["--bundles".into(), self.bundles.into()]);
         if let Some(features) = self.features {
-            args.extend(["--features".into(), features.into()]);
+            args.extend(["--features".to_owned(), features.to_owned()]);
         }
         if let Some(config) = self.config {
-            args.extend(["--config".into(), config.into()]);
+            args.extend(["--config".to_owned(), config.to_owned()]);
         }
         args
     }
 
+    /// Where cargo leaves the app's binary: `target/<triple>/release`, or `target/release` for the host's own.
+    pub fn release_dir(&self) -> PathBuf {
+        let mut dir = repo().join("target");
+        if let Some(target) = self.target {
+            dir.push(target);
+        }
+        dir.join("release")
+    }
+
+    /// The build, the split of the debug files off its binary, then the bundle. `decorate` adds what a step's command needs
+    /// (the signing environment, a flag of the host's), for both.
+    pub fn run(&self, decorate: impl Fn(Cmd) -> Cmd) -> Result<()> {
+        decorate(self.command(self.build_args())?).run()?;
+        crate::platform::debug_files::split(&self.release_dir())?;
+        decorate(self.command(self.bundle_args())?).run()
+    }
+
     /// The command: the CLI's script run by Node (what `npx tauri` runs), for its channel; only a release or a nightly
     /// sees the updater's key, and the app's build script is told the channel (and a nightly's commit and date).
-    pub fn command(&self) -> Result<Cmd> {
-        let mut cmd = Cmd::new("node").arg(repo().join("node_modules/@tauri-apps/cli/tauri.js")).args(self.args());
+    fn command(&self, args: Vec<String>) -> Result<Cmd> {
+        let mut cmd = Cmd::new("node").arg(repo().join("node_modules/@tauri-apps/cli/tauri.js")).args(args);
         if self.channel == Channel::Dev {
             cmd = cmd.env_remove("TAURI_SIGNING_PRIVATE_KEY").env_remove("TAURI_SIGNING_PRIVATE_KEY_PASSWORD");
         }
@@ -879,11 +913,25 @@ mod tests {
     #[test]
     fn a_tauri_build_is_its_arguments_in_order() {
         let build = TauriBuild { target: Some("aarch64-apple-darwin"), bundles: "app", ..TauriBuild::default() };
-        assert_eq!(build.args(), ["build", "--target", "aarch64-apple-darwin", "--bundles", "app"]);
+        assert_eq!(build.build_args(), ["build", "--no-bundle", "--target", "aarch64-apple-darwin"]);
+        assert_eq!(build.bundle_args(), ["bundle", "--bundles", "app", "--target", "aarch64-apple-darwin"]);
         let probe = TauriBuild { features: Some("probe"), ..build };
-        assert_eq!(probe.args().join(" "), "build --target aarch64-apple-darwin --bundles app --features probe");
+        assert_eq!(probe.build_args().join(" "), "build --no-bundle --target aarch64-apple-darwin --features probe");
+        assert_eq!(
+            probe.bundle_args().join(" "),
+            "bundle --bundles app --target aarch64-apple-darwin --features probe"
+        );
         let host = TauriBuild { bundles: "deb,appimage", config: Some("{}"), ..TauriBuild::default() };
-        assert_eq!(host.args().join(" "), "build --bundles deb,appimage --config {}");
+        assert_eq!(host.build_args().join(" "), "build --no-bundle --config {}");
+        assert_eq!(host.bundle_args().join(" "), "bundle --bundles deb,appimage --config {}");
+    }
+
+    #[test]
+    fn the_binary_is_where_cargo_leaves_it_for_the_target() {
+        let host = TauriBuild::default();
+        assert_eq!(host.release_dir(), repo().join("target/release"));
+        let mac = TauriBuild { target: Some("aarch64-apple-darwin"), ..TauriBuild::default() };
+        assert_eq!(mac.release_dir(), repo().join("target/aarch64-apple-darwin/release"));
     }
 
     #[test]

@@ -234,9 +234,16 @@ pub fn setup(app: &AppHandle) {
     let config = Config { dirs, app_dir, name: SystemComputerName::read(), pinned_minor };
     match LocalHost::start(config, crate::debug) {
         Ok(host) => {
+            // A core this app installs is owed a copy of the app's crash report switch (`crash_reports::core_installed`), and
+            // what the core is still owed goes once each time one answers after none did (`crash_reports::core_up`). Both are
+            // in place, and the host managed (the copy asks for it), before the poll starts: its first pass may find the core.
+            let handle = app.clone();
+            host.on_installed(move || crate::crash_reports::core_installed(&handle));
+            let handle = app.clone();
+            host.on_core_up(move || crate::crash_reports::core_up(&handle));
+            app.manage(Hosted(host.clone()));
             host.watch();
             keep_current(app, &host);
-            app.manage(Hosted(host));
         }
         Err(e) => crate::debug(&format!("local-host off: the proxy could not start: {e}")),
     }
@@ -265,6 +272,12 @@ fn keep_current(app: &AppHandle, host: &Arc<LocalHost>) {
             "the local host's background updates could not start"
         );
     }
+}
+
+/// The running local host, for whoever needs it off the page's path (the copy of the crash report switch to the core); `None`
+/// before it started or where there is none.
+pub fn running(app: &AppHandle) -> Option<Arc<LocalHost>> {
+    hosted(app).ok()
 }
 
 /// As the app quits: the poll and the proxy stop, every tunnel closes.

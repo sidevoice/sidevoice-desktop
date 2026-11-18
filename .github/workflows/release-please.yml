@@ -54,5 +54,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       release-tag: ${{ needs.release-please.outputs.tag_name }}
-    # The macOS signing and notarization secrets (build.yml signs a release's app and .dmg).
+    # The macOS signing and notarization secrets (build.yml signs a release's app and .dmg) and `SENTRY_AUTH_TOKEN` (the debug files
+    # of the release go to Sentry with it): `inherit` hands the called workflow every secret, so the upload steps of build.yml
+    # see the token here as they do on a push to main.
     secrets: inherit

@@ -53,6 +53,9 @@ pub const GONE: &str = "update.not-installed";
 pub fn is_held(key: &str) -> bool {
     matches!(key, WAITING_CALL | STOPPED | GONE)
 }
+/// What the installer's answer says (`action`) of an install that found nothing of Sidevoice on the computer; `updated` and
+/// `reinstalled` are the other two. Only this one is a first install.
+pub const INSTALLED: &str = "installed";
 /// The installer inside the package, where the installer itself expects to be (`<package>/bin/`), named as this OS
 /// names a program (`bin/sidevoice-connector.exe` on Windows).
 pub fn bundled_installer() -> String {

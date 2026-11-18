@@ -16,6 +16,7 @@ mod acl;
 mod app_hooks;
 mod app_log;
 mod call_controls;
+mod crash_reports;
 mod data;
 mod debug_options;
 mod error;
@@ -572,6 +573,8 @@ pub fn run() {
             let handle = app.handle().clone();
             open_log_file(&handle);
             sidevoice_shared::logging::announce(platform::resource::current());
+            // Right after the log: a panic from here on may be reported, under the person's setting.
+            crash_reports::setup(&handle);
             carried.log();
             application::prepare(&handle)?;
             shortcuts::setup(&handle);

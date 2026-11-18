@@ -15,6 +15,7 @@
 //! grants them to) cannot know which room window is the current one (ACL.md).
 
 mod acl;
+mod crash_reports;
 mod engine;
 pub mod headset;
 pub mod js;
@@ -33,6 +34,7 @@ use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime, Webview};
 
 pub use acl::{inventory, Entry};
+pub use crash_reports::CrashReports;
 pub use observers::{CallObserver, Observers};
 pub use pages::Pages;
 pub use pairings::{PairingStore, Pairings};
@@ -93,6 +95,7 @@ pub fn init<R: Runtime>(
             voice::voice_audio_devices,
             voice::voice_set_audio_devices,
             microphone::microphone,
+            crash_reports::crash_reports,
             observers::bridge_level,
             observers::bridge_playback,
             pairings::pairings_read,
@@ -166,6 +169,7 @@ mod tests {
             lf(include_str!("engine.rs")),
             lf(include_str!("voice.rs")),
             lf(include_str!("microphone.rs")),
+            lf(include_str!("crash_reports.rs")),
             lf(include_str!("observers.rs")),
             lf(include_str!("pairings.rs")),
             lf(include_str!("webview_log.rs")),

@@ -23,7 +23,16 @@ pub fn npm() -> &'static str {
     }
 }
 
-/// The installer formats `tauri build --bundles` makes on this host, if it makes any in `bundle` (macOS has its own
+/// The launcher npm makes for the program `name` it installed globally (`sentry-cli`): a `.cmd` on Windows.
+pub fn npm_tool(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.cmd")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// The installer formats `tauri bundle --bundles` makes on this host, if it makes any in `bundle` (macOS has its own
 /// commands).
 pub fn installer_bundles() -> Option<&'static str> {
     match name() {

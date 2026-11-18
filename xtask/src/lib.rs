@@ -9,6 +9,7 @@ pub mod packaging;
 pub mod platform;
 pub mod platform_guard;
 pub mod publish;
+pub mod sentry;
 pub mod util;
 
 pub type Result<T> = std::result::Result<T, String>;

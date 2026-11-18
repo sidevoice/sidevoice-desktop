@@ -136,6 +136,16 @@ test("the pairings are read and written whole", async () => {
   assert.deepEqual(calls, [["pairings_read", undefined], ["pairings_write", { value: { pairings: [] } }]]);
 });
 
+test("the crash reports setting is read and set through the app", async () => {
+  const { transport, calls } = fakeTransport((command, args) => (args.action === "get" ? { mode: "never" } : args.action === "install_id" ? { installId: null } : { mode: args.mode }));
+  const reports = makeMembers(fakeWindow().win, transport).crashReports();
+  assert.equal(await reports.get(), "never");
+  assert.equal(await reports.set("auto"), undefined);
+  assert.equal(await reports.installId(), null, "no id under never");
+  assert.equal(reports.subscribe, undefined, "nothing changes it but the page");
+  assert.deepEqual(calls, [["crash_reports", { action: "get" }], ["crash_reports", { action: "set", mode: "auto" }], ["crash_reports", { action: "install_id" }]]);
+});
+
 // --- The room's call state and its commands ---
 
 function fakeStore(initial) {

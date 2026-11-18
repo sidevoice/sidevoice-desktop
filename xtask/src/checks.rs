@@ -180,12 +180,14 @@ pub fn bundle(channel: crate::util::Channel) -> Result<()> {
         let os = host::name();
         return Err(format!("`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask release`"));
     };
-    let mut command = crate::util::TauriBuild { bundles, channel, ..Default::default() }.command()?;
-    if host::installers_for_any_cpu() {
-        // Installers must run on other CPUs too, including when bundled on a laptop.
-        command = command.env("GGML_NATIVE", "OFF");
-    }
-    command.run()
+    // Installers must run on other CPUs too, including when bundled on a laptop.
+    crate::util::TauriBuild { bundles, channel, ..Default::default() }.run(|command| {
+        if host::installers_for_any_cpu() {
+            command.env("GGML_NATIVE", "OFF")
+        } else {
+            command
+        }
+    })
 }
 
 /// `release-pr-title [BRANCH]`: the title of the release PR on BRANCH (default `GITHUB_REF_NAME`, the branch a
