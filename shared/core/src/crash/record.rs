@@ -211,8 +211,8 @@ pub(super) fn bare(path: &str) -> Option<String> {
 
 /// A source path as the compiler gave it, kept only as a short relative path: ours (`shared/core/src/x.rs`) as it is, a
 /// dependency's from the registry as `<crate>-<version>/src/x.rs` (what follows `registry/src/<index>/`); anything else, an
-/// absolute path or one that is not a plain path, is `unknown`.
-fn relative(path: &str) -> String {
+/// absolute path or one that is not a plain path, is `unknown`. A panic's place and a handled error's alike.
+pub(super) fn relative(path: &str) -> String {
     let path = clean(path, MAX_TEXT).replace('\\', "/");
     let parts: Vec<&str> = path.split('/').collect();
     let tail = parts

@@ -22,7 +22,7 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-use super::TAIL_LINES;
+use super::{NOT_REPORTED, TAIL_LINES};
 
 const MAX_FIELDS: usize = 16;
 const MAX_SPANS: usize = 8;
@@ -83,19 +83,14 @@ impl Visit for Fields {
 }
 
 /// Whether `target` is `own` or below it (`own::x`): the prefix rule the log's filters use.
-fn under(target: &str, own: &str) -> bool {
+pub(super) fn under(target: &str, own: &str) -> bool {
     target.strip_prefix(own).is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
 }
 
-/// The targets of `own` the tail keeps: not the panic's two, not the page's.
-fn kept(own: &[&str]) -> Vec<String> {
-    own.iter()
-        .filter(|target| {
-            ![crate::logging::PANIC_TARGET, crate::logging::BACKTRACE_TARGET, crate::logging::WEBVIEW_TARGET]
-                .contains(target)
-        })
-        .map(|target| (*target).to_owned())
-        .collect()
+/// The targets of `own` a report takes lines from (the tail, and the handled errors): not [`NOT_REPORTED`], the panic's two and
+/// the page's.
+pub(super) fn kept(own: &[&str]) -> Vec<String> {
+    own.iter().filter(|target| !NOT_REPORTED.contains(target)).map(|target| (*target).to_owned()).collect()
 }
 
 /// The layer, with its filter: our own targets, spans up to `debug` (an event's span carries ids; none of `trace`, which is where

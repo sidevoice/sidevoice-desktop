@@ -22,7 +22,7 @@ pub enum SharedError {
 }
 
 impl SharedError {
-    /// Every variant, for the test that holds the codes unique and well formed.
+    /// Every variant: what [`SharedError::codes`] lists and the tests that hold the codes unique and well formed.
     pub const ALL: [SharedError; 8] = [
         SharedError::InvalidLogFilter,
         SharedError::NativeEngineFailed,
@@ -33,6 +33,12 @@ impl SharedError {
         SharedError::CrashSettingsUnreadable,
         SharedError::CrashReporterFailed,
     ];
+
+    /// Every code this enum can give: the closed list of what the shared crate calls an error. A handled error is reported only
+    /// under an `error.type` that an app's list holds (`crash::report_handled_errors`).
+    pub fn codes() -> impl Iterator<Item = &'static str> {
+        Self::ALL.iter().map(SharedError::code)
+    }
 
     /// The stable code, `error.type` in the log.
     pub fn code(&self) -> &'static str {
@@ -65,5 +71,24 @@ mod tests {
                 "{code}"
             );
         }
+    }
+
+    /// `ALL` is written by hand beside the enum, and what telemetry may send is what it lists: a variant that is added and not
+    /// listed would be logged and never reported. The enum's own source is read, so adding one fails here until it is listed
+    /// (a variant listed twice fails the test above).
+    #[test]
+    fn the_list_of_variants_holds_every_variant_of_the_enum() {
+        // A checkout on Windows has CRLF line ends.
+        let source = include_str!("error.rs").replace("\r\n", "\n");
+        let body = source
+            .split("pub enum SharedError {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("the enum is in this file");
+        let declared =
+            body.lines().map(str::trim).filter(|line| line.starts_with(|c: char| c.is_ascii_uppercase())).count();
+        assert!(declared > 5, "the enum was not read");
+        assert_eq!(SharedError::ALL.len(), declared, "a variant is not in ALL");
+        assert_eq!(SharedError::codes().count(), declared);
     }
 }

@@ -240,9 +240,13 @@ where
     // The last warnings and errors of our own targets, in memory, for the record of a crash (`crash::tail`): a layer of its own,
     // whatever `SIDEVOICE_LOG` says.
     let tail = crate::crash::tail::layer(own, in_panic_hook);
+    // The `error` events of our own targets that the crash reporter sends as handled errors once the app starts it
+    // (`crash::report_handled_errors`); until then it queues nothing. Whatever `SIDEVOICE_LOG` says.
+    let handled = crate::crash::handled_layer(own, in_panic_hook);
     let installed = tracing_subscriber::registry()
         .with(extra)
         .with(tail)
+        .with(handled)
         .with(file.and_then(stderr).with_filter(filter))
         .try_init()
         .is_ok();

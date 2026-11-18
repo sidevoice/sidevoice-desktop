@@ -6,6 +6,10 @@
 //! build has none and records and sends nothing, whatever the setting says. The app reports its own panics only: it reads,
 //! relays and acknowledges nothing of the core's or the connector's (each piece sends its own).
 //!
+//! The app also reports its **handled errors** under the same switch: the `error` events of its own log targets whose `error.type`
+//! is one of the codes of its own error enums ([`codes`]: the desktop app's, the shared crate's and the local host's), one a day per
+//! code, with nothing of the event but that code and the place that logged it (sidevoice-shared `crash::handled`).
+//!
 //! The switch goes one way, from the app to the core it installed (the logging guideline, section 10), through the core's
 //! local-only endpoint on its socket. A copy is **owed** (`Reporter::copy_owed`, kept in a file of its own) from the app's own
 //! install of the core and from each change of the switch the person makes afterwards, and stays owed until the core answers a
@@ -16,7 +20,9 @@
 
 use std::sync::Mutex;
 
+use sidevoice_local_host::error::LocalHostError;
 use sidevoice_shared::crash::{self, Config, Mode, Reporter};
+use sidevoice_shared::error::SharedError;
 use sidevoice_shared::logging;
 use sidevoice_shared_tauri::CrashReports;
 use tauri::{AppHandle, Manager};
@@ -27,9 +33,16 @@ const DSN: Option<&str> = option_env!("SIDEVOICE_SENTRY_DSN");
 /// The one way a copy is sent: one at a time, each sending the reporter's mode as it is when its turn comes (the latest wins).
 static COPYING: Mutex<()> = Mutex::new(());
 
+/// The app's own error codes: the closed list of what this app calls an error, from the enums of the crates it is made of. A handled
+/// error is reported only under one of them; a code of a dependency (the engine's, the voice crate's), or any other value, is only
+/// counted. The shared enum is in the list because the desktop app logs its codes as well as the phone does.
+fn codes() -> impl Iterator<Item = &'static str> {
+    SharedError::codes().chain(crate::error::DesktopError::codes()).chain(LocalHostError::codes())
+}
+
 /// At start, right after the log: the reporter (the setting is read here; the records a previous run left are sent on a thread
-/// of its own) and the panic hook's observer. Nothing here can stop the app: with no data folder, or a reporter that cannot
-/// start, reporting is off for this run and the setting still answers the page.
+/// of its own), the panic hook's observer and the handled errors' sender. Nothing here can stop the app: with no data folder, or
+/// a reporter that cannot start, reporting is off for this run and the setting still answers the page.
 pub fn setup(app: &AppHandle) {
     let resource = crate::platform::resource::current();
     let Ok(dir) = crate::data::desktop_dir(app) else {
@@ -38,6 +51,7 @@ pub fn setup(app: &AppHandle) {
     };
     let reporter = Reporter::start(Config { resource, dsn: DSN.map(str::to_owned), dir, post: None });
     crash::report_panics(reporter.clone());
+    crash::report_handled_errors(reporter.clone(), codes());
     let handle = app.clone();
     reporter.on_copy_owed(move || copy_to_core(&handle));
     app.manage(CrashReports(reporter));
@@ -87,5 +101,30 @@ fn copy_to_core(app: &AppHandle) {
             kind = ?error.kind(),
             "the crash report switch could not be copied to the core on this computer; it is tried again when a core next answers"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a handled error may be reported under is the closed list of the app's own enums: every one of them, once, within the
+    /// most a day may send (`crash::MAX_CODES`: the day's sends and its file are bounded by it).
+    #[test]
+    fn the_codes_a_handled_error_may_carry_are_the_apps_own_enums_once_each_within_the_cap() {
+        let codes: Vec<&str> = codes().collect();
+        let unique: std::collections::HashSet<&str> = codes.iter().copied().collect();
+        assert_eq!(codes.len(), unique.len(), "a code listed twice");
+        assert_eq!(
+            codes.len(),
+            SharedError::ALL.len() + crate::error::DesktopError::ALL.len() + LocalHostError::ALL.len()
+        );
+        assert!(codes.len() <= crash::MAX_CODES, "{} codes, at most {}", codes.len(), crash::MAX_CODES);
+        for prefix in ["shared.", "desktop.", "local-host."] {
+            assert!(codes.iter().any(|code| code.starts_with(prefix)), "no {prefix} code");
+        }
+        assert!(codes.contains(&crate::error::DesktopError::CrashSwitchNotCopied.code()));
+        // Not the engine's, nor a made-up one.
+        assert!(!codes.contains(&"engine.provider-unreachable") && !codes.contains(&"desktop.not-one-of-ours"));
     }
 }

@@ -8,8 +8,14 @@
 //! signal, an abort that leaves no panic) is not captured: that needs the platform SDKs and a decision about memory capture.
 //! The guideline's mobile exception (a hook that cannot log re-emits the record at the next launch) is not made here: the
 //! shared hook logs inside the hook, as on the desktop.
+//!
+//! The phone also reports its **handled errors** under the same switch (sidevoice-shared `crash::handled`, the same code as the
+//! desktop's): the `error` events of its own log targets whose `error.type` is one of the codes of its own error enums, one a day
+//! per code, with only that code and the place that logged it. The phone has no error enum of its own yet, so for now these are the
+//! shared crate's (`SharedError`); an enum added here joins the list below.
 
 use sidevoice_shared::crash::{self, Config, Reporter};
+use sidevoice_shared::error::SharedError;
 use sidevoice_shared_tauri::CrashReports;
 use tauri::{AppHandle, Manager};
 
@@ -17,8 +23,8 @@ use tauri::{AppHandle, Manager};
 const DSN: Option<&str> = option_env!("SIDEVOICE_SENTRY_DSN");
 
 /// At start, right after the log: the reporter (the setting is read here; the records a previous run left are sent on a thread of its
-/// own) and the observer the panic hook tells. With no files folder, or a reporter that cannot start, reporting is off for this run and
-/// the setting still answers the page.
+/// own), the observer the panic hook tells and the handled errors' sender. With no files folder, or a reporter that cannot start,
+/// reporting is off for this run and the setting still answers the page.
 pub fn setup(app: &AppHandle) {
     let resource = crate::platform::resource::current();
     let Ok(dir) = crate::own_files(app) else {
@@ -32,5 +38,7 @@ pub fn setup(app: &AppHandle) {
         post: None,
     });
     crash::report_panics(reporter.clone());
+    // The phone's own codes: the closed list a handled error is reported under.
+    crash::report_handled_errors(reporter.clone(), SharedError::codes());
     app.manage(CrashReports(reporter));
 }

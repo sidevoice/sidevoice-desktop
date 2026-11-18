@@ -31,7 +31,7 @@ pub enum LocalHostError {
 }
 
 impl LocalHostError {
-    /// Every variant, for the test that holds the codes unique and well formed.
+    /// Every variant: what [`LocalHostError::codes`] lists and the tests that hold the codes unique and well formed.
     pub const ALL: [LocalHostError; 11] = [
         LocalHostError::CoreAbsent,
         LocalHostError::CoreUnsafe,
@@ -45,6 +45,12 @@ impl LocalHostError {
         LocalHostError::InstallFailed,
         LocalHostError::InstallNotStarted,
     ];
+
+    /// Every code this enum can give: the closed list of what the local host calls an error, which the app adds to the codes a
+    /// handled error may be reported under.
+    pub fn codes() -> impl Iterator<Item = &'static str> {
+        Self::ALL.iter().map(LocalHostError::code)
+    }
 
     /// The stable code, `error.type` in the log.
     pub fn code(&self) -> &'static str {
@@ -91,6 +97,25 @@ mod tests {
             );
         }
         assert_eq!(seen.len(), LocalHostError::ALL.len());
+    }
+
+    /// `ALL` is written by hand beside the enum, and what telemetry may send is what it lists: a variant that is added and not
+    /// listed would be logged and never reported. The enum's own source is read, so adding one fails here until it is listed
+    /// (a variant listed twice fails the test above).
+    #[test]
+    fn the_list_of_variants_holds_every_variant_of_the_enum() {
+        // A checkout on Windows has CRLF line ends.
+        let source = include_str!("error.rs").replace("\r\n", "\n");
+        let body = source
+            .split("pub enum LocalHostError {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("the enum is in this file");
+        let declared =
+            body.lines().map(str::trim).filter(|line| line.starts_with(|c: char| c.is_ascii_uppercase())).count();
+        assert!(declared > 5, "the enum was not read");
+        assert_eq!(LocalHostError::ALL.len(), declared, "a variant is not in ALL");
+        assert_eq!(LocalHostError::codes().count(), declared);
     }
 
     #[test]

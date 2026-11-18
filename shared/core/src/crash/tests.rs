@@ -10,6 +10,8 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 
+mod handled;
+
 const HOME: &str = "/home/canary-user-7f3a";
 
 #[derive(Default)]
@@ -145,6 +147,7 @@ fn crashed(dir: &Path, literal: Option<&str>) -> Arc<Reporter> {
         Settings::load(dir),
         CoreCopy::load(dir),
         vec![image("Sidevoice")],
+        dir.to_owned(),
     );
     reporter.write(
         literal,
@@ -772,6 +775,7 @@ fn a_real_stack_is_recorded_with_addresses_and_only_the_modules_that_hold_a_fram
         Settings::load(dir.path()),
         CoreCopy::load(dir.path()),
         vec![everything, nothing],
+        dir.path().to_owned(),
     );
     reporter.write(Some("real stack"), 0, "shared/core/src/crash/tests.rs", 1, backtrace::Backtrace::new_unresolved());
     let pending = Store::new(dir.path(), home()).pending().unwrap();
