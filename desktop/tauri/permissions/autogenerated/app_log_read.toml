@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-log-read"
+description = "Enables the app_log_read command without any pre-configured scope."
+commands.allow = ["app_log_read"]
+
+[[permission]]
+identifier = "deny-app-log-read"
+description = "Denies the app_log_read command without any pre-configured scope."
+commands.deny = ["app_log_read"]

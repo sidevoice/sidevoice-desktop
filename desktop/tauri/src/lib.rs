@@ -14,6 +14,7 @@
 #[cfg(test)]
 mod acl;
 mod app_hooks;
+mod app_log;
 mod call_controls;
 mod crash_reports;
 mod data;
@@ -522,7 +523,8 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         call_controls::call_controls_settings,
         screen_locked,
         updater::updater,
-        debug_options::debug_options
+        debug_options::debug_options,
+        app_log::app_log_read
     ]
 }
 

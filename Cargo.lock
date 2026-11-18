@@ -5168,8 +5168,11 @@ dependencies = [
  "global-hotkey",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "sidevoice-platform",
  "sidevoice-shared-headset",
  "sidevoice-shared-i18n",
+ "tempfile",
  "tracing",
  "url",
 ]

@@ -8,6 +8,10 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
+# Reading the app log in pages (src/app_log.rs): a cursor names a generation by the hash of its first line, and a log file is
+# opened through the platform crate, which refuses a link. Both already in the tree.
+sha2 = "0.10.9"
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.16.1" }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # The loader of the app's texts (src/i18n.rs): serde_json only, no Tauri.
 sidevoice-shared-i18n = { path = "../../shared/i18n" }
@@ -17,6 +21,8 @@ serde_json = "1"
 url = "2.5"
 
 [dev-dependencies]
+# The folders the app log tests rotate files in.
+tempfile = "3"
 # The parser the app registers shortcuts with (tauri-plugin-global-shortcut): the tests check what the web sends
 # against it.
 global-hotkey = "0.8"
