@@ -5,7 +5,7 @@
 //!
 //! Allowed: the level (`warn`, `error`), the source (`console`, `uncaught`, `rejection`), at most [`MAX_ITEMS`] items, each a
 //! string (as `[string]`, never its text), a number, a boolean, null or undefined, or an object's `name`, `code` and `key`
-//! (each `[A-Za-z0-9._-]{1,64}`, else `invalid`) and first stack frame (file name of the same grammar, line, column).
+//! (`name` as `...Error` or `...Exception`, `code` and `key` as a dotted code such as `voice.failure.model`, else `invalid`) and first stack frame (file name `[A-Za-z0-9._-]{1,64}`, line, column).
 //! No other field, no free text. At most [`MAX_PER_WINDOW`] entries per [`WINDOW`]; the rest are counted.
 
 use std::sync::Mutex;
@@ -17,7 +17,13 @@ use tauri::{Runtime, State, Webview};
 
 use crate::Callers;
 
+/// The target of every line this module writes. Only our own targets may reach the crash ring buffer, the mobile system log
+/// and the handled-error events, and each of those must exclude or include this one by name: a line of the page's, even a
+/// checked one, must not be written under any other (a test keeps every call here to it).
+const TARGET: &str = "webview";
 const MAX_ITEMS: usize = 16;
+/// The most a rendered detail holds, in bytes; the rest is cut and marked.
+const MAX_DETAIL: usize = 1024;
 const MAX_PER_WINDOW: u32 = 50;
 const WINDOW: Duration = Duration::from_secs(10);
 
@@ -73,13 +79,52 @@ pub(crate) struct Line {
     pub detail: String,
 }
 
-/// `[A-Za-z0-9._-]{1,64}`, else `invalid`.
+/// `[A-Za-z0-9._-]{1,64}`, else `invalid`: a file name.
 fn token(value: &str) -> &str {
     let ok = (1..=64).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
     if ok {
         value
     } else {
         "invalid"
+    }
+}
+
+/// `[A-Za-z]{1,40}(Error|Exception)`, else `invalid`.
+fn name(value: &str) -> &str {
+    let stem = value.strip_suffix("Error").or_else(|| value.strip_suffix("Exception"));
+    let ok = stem.is_some_and(|stem| (1..=40).contains(&stem.len()) && stem.bytes().all(|b| b.is_ascii_alphabetic()));
+    if ok {
+        value
+    } else {
+        "invalid"
+    }
+}
+
+/// A dotted code, as the page's script allows (else `invalid`): `voice.failure.model` (a lowercase word of up to 32
+/// characters, then two to four parts), or one of ours under `voice`, `core`, `engine`, `app` or `call` (one to four
+/// parts after it). Parts are `[a-z0-9_]{1,32}`.
+fn code(value: &str) -> &str {
+    let part = |p: &str| {
+        (1..=32).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    };
+    let mut parts = value.split('.');
+    let first = parts.next().unwrap_or_default();
+    let rest: Vec<&str> = parts.collect();
+    let dotted = first.starts_with(|c: char| c.is_ascii_lowercase()) && part(first) && (2..=4).contains(&rest.len());
+    let ours = ["voice", "core", "engine", "app", "call"].contains(&first) && (1..=4).contains(&rest.len());
+    if (dotted || ours) && rest.iter().all(|p| part(p)) {
+        value
+    } else {
+        "invalid"
+    }
+}
+
+/// A number as compactly as it reads: an integer below 1e15 as it is, anything else in exponent form.
+fn number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        value.to_string()
+    } else {
+        format!("{value:e}")
     }
 }
 
@@ -91,16 +136,16 @@ fn frame(at: &Frame) -> String {
 fn item(item: &Item) -> String {
     match item {
         Item::String {} => "[string]".into(),
-        Item::Number { value } => value.to_string(),
+        Item::Number { value } => number(*value),
         Item::Bool { value } => value.to_string(),
         Item::Null {} => "null".into(),
         Item::Undefined {} => "undefined".into(),
         Item::Other {} => "[other]".into(),
-        Item::Object { name, code, key, at } => {
+        Item::Object { name: n, code: c, key: k, at } => {
             let mut parts = Vec::new();
-            for (field, value) in [("name", name), ("code", code), ("key", key)] {
+            for (field, value, valid) in [("name", n, name as fn(&str) -> &str), ("code", c, code), ("key", k, code)] {
                 if let Some(value) = value {
-                    parts.push(format!("{field}={}", token(value)));
+                    parts.push(format!("{field}={}", valid(value)));
                 }
             }
             if let Some(at) = at {
@@ -124,6 +169,11 @@ fn render(entry: Value) -> Option<Line> {
     let mut detail = entry.items.iter().map(item).collect::<Vec<_>>().join(" ");
     if let Some(at) = &entry.at {
         detail.push_str(&format!(" at {}", frame(at)));
+    }
+    if detail.len() > MAX_DETAIL {
+        // Every part is ASCII, so any index is a character boundary.
+        detail.truncate(MAX_DETAIL);
+        detail.push_str("[truncated]");
     }
     let source = match entry.source {
         Source::Console => "console",
@@ -176,13 +226,13 @@ pub fn webview_log<R: Runtime>(
     callers.check(&webview)?;
     let outcome = limiter.handle(Instant::now(), entry);
     if outcome.lost > 0 {
-        tracing::warn!(target: "webview", dropped = outcome.lost, "the page's log entries were dropped (refused or too many)");
+        tracing::warn!(target: TARGET, dropped = outcome.lost, "the page's log entries were dropped (refused or too many)");
     }
     if let Some(Line { error, source, detail }) = outcome.line {
         if error {
-            tracing::error!(target: "webview", source, detail = %detail, "the page reported a problem");
+            tracing::error!(target: TARGET, source, detail = %detail, "the page reported a problem");
         } else {
-            tracing::warn!(target: "webview", source, detail = %detail, "the page reported a problem");
+            tracing::warn!(target: TARGET, source, detail = %detail, "the page reported a problem");
         }
     }
     Ok(())
@@ -240,6 +290,54 @@ mod tests {
         let written = line(entry).unwrap();
         assert_eq!(written, "warn uncaught {name=invalid code=invalid key=invalid} at invalid:1");
         assert!(!written.contains("canary"));
+    }
+
+    #[test]
+    fn a_code_key_or_name_that_is_not_the_pages_grammar_is_invalid() {
+        let entry = |field: &str, value: &str| json!({ "level": "warn", "source": "console", "items": [{ "kind": "object", field: value }] });
+        for (field, value) in [
+            ("code", "K7Q2-9XPD"),
+            ("key", "KeyA"),
+            ("code", "a.b"),
+            ("name", "Error"),
+            ("name", "NotAnError "),
+            ("name", "T1Error"),
+        ] {
+            assert_eq!(
+                line(entry(field, value)).unwrap(),
+                format!("warn console {{{field}=invalid}}"),
+                "{field} {value}"
+            );
+        }
+        assert_eq!(line(entry("code", "core.refused")).unwrap(), "warn console {code=core.refused}");
+        assert_eq!(line(entry("name", "AbortError")).unwrap(), "warn console {name=AbortError}");
+    }
+
+    #[test]
+    fn a_detail_is_capped_and_numbers_are_compact() {
+        let items = vec![json!({ "kind": "number", "value": 1e308 }); MAX_ITEMS];
+        let written = render(json!({ "level": "warn", "source": "console", "items": items })).unwrap().detail;
+        assert!(written.starts_with("1e308 1e308"), "{written}");
+        assert!(written.len() < MAX_DETAIL);
+        assert_eq!(number(3.0), "3");
+        assert_eq!(number(0.1), "1e-1");
+        let many = vec![
+            json!({ "kind": "object", "name": "a".repeat(40) + "Exception", "code": "voice.failure.model" });
+            MAX_ITEMS
+        ];
+        let cut = render(json!({ "level": "warn", "source": "console", "items": many })).unwrap().detail;
+        assert_eq!(cut.len(), MAX_DETAIL + "[truncated]".len());
+        assert!(cut.ends_with("[truncated]"));
+    }
+
+    #[test]
+    fn every_line_this_module_writes_has_the_webview_target() {
+        let source = include_str!("webview_log.rs").replace("\r\n", "\n");
+        let code = source.split("#[cfg(test)]").next().unwrap();
+        let calls = code.matches("tracing::").count();
+        assert!(calls >= 3);
+        assert_eq!(code.matches("target: TARGET").count(), calls, "a tracing call without the webview target");
+        assert_eq!(TARGET, "webview");
     }
 
     #[test]
