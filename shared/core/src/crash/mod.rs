@@ -12,9 +12,12 @@
 //! - **At the next start** a thread of its own sends each record ([`Reporter::start`]) as an event built from the record's
 //!   closed field list ([`report`]) and deletes it once Sentry took it, so it is sent once. Under "never" the pending records
 //!   are discarded instead.
+//! - **Handled errors** ([`report_handled_errors`], `handled.rs`) go out under the same switch: the `error` events of our own
+//!   targets whose `error.type` is one of the app's own codes, one event per code per day, each with its code and the place that
+//!   logged it and the closed tags, never a message or a field value.
 //!
-//! What leaves is the closed list of `report.rs`; nothing that is not on it is sent. Formatted panic messages are never sent,
-//! only a literal or the fixed marker.
+//! What leaves is the closed list of `report.rs` (and, for a handled error, of `handled.rs`); nothing that is not on it is sent.
+//! Formatted panic messages are never sent, only a literal or the fixed marker.
 //!
 //! - [`settings`]: the mode and the random installation id (pseudonymous, rotated yearly), in one small local file.
 //! - [`record`]: the record and the checks it passes before it is kept or sent.
@@ -22,8 +25,10 @@
 //! - [`tail`]: the last 20 warnings and errors of our targets, in memory.
 //! - [`trace`]: the frames and the loaded modules.
 //! - [`report`]: the event, the envelope and the POST.
+//! - [`handled`]: the handled errors, sent under the same switch.
 
 mod core_copy;
+mod handled;
 pub mod record;
 pub mod report;
 pub mod settings;
@@ -37,12 +42,13 @@ use std::cell::Cell;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use core_copy::CoreCopy;
+pub use handled::{layer as handled_layer, unreported as unreported_errors, MAX_CODES};
 pub use report::{Post, PostError, SentryPost};
 pub use settings::Settings;
 
@@ -65,6 +71,12 @@ const HOOK_WAIT: Duration = Duration::from_secs(3);
 /// How long one POST may take, and a whole pass: what is left waits for the next start.
 const POST_BUDGET: Duration = Duration::from_secs(10);
 const PASS_BUDGET: Duration = Duration::from_secs(60);
+
+/// The log targets whose lines are never taken from the log for a report, a crash record's tail or a handled error: the panic's two
+/// (the record says what the panic was, and a handled error is never one of those) and the page's (what a page says is not ours to
+/// send). Written out, not left to omission: filters match targets by prefix.
+pub(crate) const NOT_REPORTED: [&str; 3] =
+    [crate::logging::PANIC_TARGET, crate::logging::BACKTRACE_TARGET, crate::logging::WEBVIEW_TARGET];
 
 /// What happens when the app panics (Settings → Crash reports).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +201,9 @@ pub struct Reporter {
     copy: Mutex<CoreCopy>,
     owings: AtomicU64,
     copier: Mutex<Option<Copier>>,
+    /// The handled error types sent today (`handled.rs`), in memory and in a file beside the setting. Locked on its own: nothing else
+    /// is held while it is.
+    handled: Mutex<handled::Cap>,
 }
 
 impl Reporter {
@@ -199,6 +214,7 @@ impl Reporter {
         settings: Settings,
         copy: CoreCopy,
         images: Vec<Image>,
+        dir: PathBuf,
     ) -> Arc<Reporter> {
         let open = settings.mode() == Mode::Auto && post.is_some() && store.is_some();
         Arc::new(Reporter {
@@ -213,13 +229,22 @@ impl Reporter {
             copy: Mutex::new(copy),
             owings: AtomicU64::new(0),
             copier: Mutex::new(None),
+            handled: Mutex::new(handled::Cap::at(dir)),
         })
     }
 
     /// A reporter that reports nothing and keeps nothing (`never` for this run), for when the app's directory could not be had or
     /// the reporter could not start: the app and its page work the same.
     pub fn unavailable(resource: Resource) -> Arc<Reporter> {
-        Reporter::with(resource, None, None, Settings::unavailable(), CoreCopy::unavailable(), Vec::new())
+        Reporter::with(
+            resource,
+            None,
+            None,
+            Settings::unavailable(),
+            CoreCopy::unavailable(),
+            Vec::new(),
+            PathBuf::new(),
+        )
     }
 
     /// Reads the setting and lists the loaded modules, then, on a thread of its own, sends the records a previous run left (or
@@ -236,8 +261,15 @@ impl Reporter {
             });
             let store = Store::new(&config.dir, crate::logging::home());
             let settings = Settings::load(&config.dir);
-            let reporter =
-                Reporter::with(resource, post, Some(store), settings, CoreCopy::load(&config.dir), trace::loaded());
+            let reporter = Reporter::with(
+                resource,
+                post,
+                Some(store),
+                settings,
+                CoreCopy::load(&config.dir),
+                trace::loaded(),
+                config.dir.clone(),
+            );
             reporter.begin_pass();
             reporter
         });
@@ -303,13 +335,21 @@ impl Reporter {
         .unwrap_or_else(|| Err(io::Error::other("the crash reporter failed")))
     }
 
-    /// The pending records deleted. A failure is reported and the switch stays off: the next start erases again.
+    /// The pending records and the day's list of handled errors deleted. A failure is reported and the switch stays off: the next
+    /// start erases again.
     fn erase(&self) {
         if let Some(Err(error)) = self.store.as_ref().map(Store::erase) {
             tracing::warn!(
                 error.type = SharedError::CrashRecordsUnavailable.code(),
                 kind = ?error.kind(),
                 "the crash records of an app set not to send could not be deleted"
+            );
+        }
+        if let Err(error) = self.handled.lock().unwrap_or_else(PoisonError::into_inner).erase() {
+            tracing::warn!(
+                error.type = SharedError::CrashRecordsUnavailable.code(),
+                kind = ?error.kind(),
+                "the day's list of reported errors of an app set not to send could not be deleted"
             );
         }
     }
@@ -544,7 +584,51 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs())
 }
 
-/// Has the reporter record every panic of this process from now on, through the log's panic hook (call after `logging::init`).
+/// The reporter of this process, started once: what the apps start through [`start_process_reporter`].
+static PROCESS: OnceLock<Arc<Reporter>> = OnceLock::new();
+
+/// Starts the reporter of this process and binds the process's hooks to it, once (call after `logging::init`): the panic hook's
+/// observer ([`report_panics`]) and the handled errors' layer ([`report_handled_errors`], with `codes`). A later call returns the
+/// same reporter and starts nothing: `config` and `codes` of a second call are not used.
+///
+/// The hooks are the process's own and bind to the first reporter only. A second reporter over the same files (the phone's app runs
+/// its setup again when Android recreates the activity) would hold its own copy of the setting while the hooks still asked the
+/// first: a "No enviar" chosen on the second would leave the first sending, and the first, writing its install id from its own
+/// copy, would put `auto` back over the choice. One reporter per process is the one owner of the setting in memory.
+pub fn start_process_reporter(config: Config, codes: impl IntoIterator<Item = &'static str>) -> Arc<Reporter> {
+    PROCESS
+        .get_or_init(|| {
+            let reporter = Reporter::start(config);
+            report_panics(reporter.clone());
+            report_handled_errors(reporter.clone(), codes);
+            reporter
+        })
+        .clone()
+}
+
+/// The reporter [`start_process_reporter`] started, if it has: for a setup that cannot start one again (no folder this time) and
+/// must not answer the page with another.
+pub fn process_reporter() -> Option<Arc<Reporter>> {
+    PROCESS.get().cloned()
+}
+
+/// Has the reporter send the handled errors of this process from now on, under its switch (call after `logging::init`, which makes
+/// the layer that sees them, and after `Reporter::start`; the apps call [`start_process_reporter`], which does both): the `error` events of the process's own targets (never the panic's, never
+/// the page's) whose `error.type` is one of `codes`, which is the app's own list, built from its error enums (the codes of its own
+/// crates; a code of a dependency, or any other value however well formed, is only counted: [`unreported_errors`]). At most
+/// [`MAX_CODES`] are taken, once each. A reporter that cannot send (a build with no DSN, no place for its files) watches for nothing.
+/// Never blocks, never panics.
+pub fn report_handled_errors(reporter: Arc<Reporter>, codes: impl IntoIterator<Item = &'static str>) {
+    let codes: Vec<&'static str> = codes.into_iter().collect();
+    let _ = contained("handled-errors", || {
+        if let Some(intake) = handled::intake() {
+            handled::start(intake, reporter, codes);
+        }
+    });
+}
+
+/// Has the reporter record every panic of this process from now on, through the log's panic hook (call after `logging::init`; the
+/// apps call [`start_process_reporter`]). Once per process: a second call binds nothing.
 /// Inside the hook nothing of the reporter's blocks or can abort: the frames are taken there (they are the panicking thread's),
 /// the rest on a thread of its own, so that a panic or a stall in the reporter cannot hold the process up beyond [`HOOK_WAIT`].
 pub fn report_panics(reporter: Arc<Reporter>) {

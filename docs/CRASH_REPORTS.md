@@ -1,6 +1,6 @@
 # Crash reports
 
-The apps send their own crash reports to Sentry, **on by default and never asked**. One setting, owned by the app, turns them off:
+The apps send their own crash reports and their handled errors to Sentry, **on by default and never asked**. One setting, owned by the app, turns both off:
 Settings → Crash reports, "Enviar automáticamente" (the default) or "No enviar" (`host.crashReports`, docs/BRIDGE.md).
 Decided with the operator (sidevoice-desktop#523) and written down in the shared
 [logging guideline](https://github.com/sidevoice/.github-private/blob/main/docs/logging.md), sections 9 and 10, which this follows.
@@ -41,8 +41,7 @@ breadcrumbs, modules, a user, an SDK name) can be in it. `server_name` is unset.
 | `event_id`, `timestamp`, `level` (`fatal`), `platform` (`native`) | the record's id (a random UUID made at the crash), the crash's time, constants |
 
 Not sent: the other resource attributes of the log's start event (accelerator, launch id), the thread name, the user, the IP,
-the environment, the process's arguments, handled errors as events (the guideline sends them too, under the same switch; not
-done here, see below).
+the environment, the process's arguments. Handled errors are events of their own, with a shorter list ("Handled errors" below).
 
 ### The ring of log lines
 
@@ -65,6 +64,46 @@ file is a short relative path, a frame a symbol and a bare file name, an image a
 ours. At most 20 records, 1 MiB together, none older than 30 days (the oldest go first); a file that is not a record is deleted,
 a file that is not named like one is left alone.
 
+## Handled errors
+
+The app also reports **which** of its own errors it handled, not what they were about (the guideline, section 10), under the same
+switch and with the same random id. Code: `shared/core/src/crash/handled.rs`, on the desktop and the phone alike; the desktop's list
+of codes is in `desktop/tauri/src/crash_reports.rs`, the phone's in `mobile/tauri/src/crash_reports.rs`.
+
+| Field | Content |
+|---|---|
+| `service.name`, `os.type`, `os.name`, `host.arch`, `installation.id` (tags) | as in a crash report |
+| `release` | `<service.name>@<service.version>` |
+| `exception.type` | the `error.type` of the event: one of the app's own codes, below |
+| the place (one frame: `filename`, `lineno`) | the callsite's own file and line (`code.file.path`, `code.line.number`) as a short relative path, or `unknown`; never a field's claim |
+| `event_id`, `timestamp`, `platform` | a random UUID per event, the time, `native` |
+
+No message, no field value, no extra data, no log tail, no breadcrumb, no backtrace, no loaded modules; `level` is Sentry's
+default (`error`). `sentry-tracing` and the SDK's other integrations are not used.
+
+- **Which events.** `error` level, from a target of the process's own list (`logging::init`'s), never `panic`, `crash_backtrace`
+  or the page's `webview` (`crash::NOT_REPORTED`, written out and checked as well as the list: a line the page wrote must never
+  trigger a send), never a dependency's. There is no "mobile re-emit" here (the phone's record is not re-emitted at the next
+  launch), so nothing of that kind exists to exclude.
+- **Only the app's own codes.** `error.type` must be one of the codes of the app's own error enums, a list built at start
+  (`codes()` of the desktop adapter: `DesktopError`, `SharedError` and the local host's `LocalHostError`; the phone's: `SharedError`).
+  The layer reads that one field of an event, only as a string, and keeps the list's own `&'static str`, never a byte of the
+  event. Any other value, well formed or not (an address, a host name, a word somebody typed, the engine's or the voice crate's
+  codes), and an event with none, is only counted in memory (`crash::unreported_errors`). Each enum lists its variants by hand
+  next to the enum (`ALL`), and a test reads the enum's source and fails when a variant is missing.
+- **How often.** One event per code per day (UTC) per install. The day's list is `handled-errors.json` beside the setting in the app's
+  folder (read at start, written after a send; only codes of the app's list are read back; a different day, a clock that went back
+  or a file that cannot be read all mean a new day). The list of codes is closed and at most `crash::MAX_CODES` (64), so that is
+  also the most a day sends, and the file stays readable.
+- **Under the switch.** "No enviar", a setting that could not be read (`never` for that run), a build with no DSN and an app that has
+  no folder queue nothing and send nothing: the layer asks the reporter's own gate (`Reporter::is_open`, an atomic: no file is read
+  on the logging thread), the sender asks it again when it takes an event and once more just before the POST. Choosing "No enviar", and every start
+  under it, deletes the day's list with the records and the id.
+- **Never breaks the app.** The layer does no network and never waits: it `try_send`s into a queue of 16 and drops what does not
+  fit. A thread of the reporter's own sends them one at a time (10 s each), inside `catch_unwind`, and after a failed send (or an install id that cannot be written) leaves
+  it alone for ten minutes. That thread, and the panic hook, are never a source (no loop). Until the reporter has started
+  the sender (right after it, at start) nothing is queued: an error logged before that is not reported.
+
 ## The random id
 
 One per install of the app, **128 random bits from the OS** (never derived from hardware or an account), kept in
@@ -81,7 +120,7 @@ as it is until the person chooses. Choosing "No enviar":
 
 1. closes the reporter first (nothing more is recorded or sent, whatever happens after: the file may not be writable);
 2. keeps the choice (an error means it was not kept, and the page is told);
-3. deletes the pending records and the id.
+3. deletes the pending records, the day's list of handled errors and the id.
 
 ### Copied to the core the app installed
 
@@ -137,6 +176,11 @@ reporting off for that run (tests: `shared/core/src/crash/tests.rs`, `shared/cor
   own, every POST has a timeout (10 s, on a thread of its own) and the pass a budget (60 s); one pass at a time.
 - **Init failures leave the app working.** A bad DSN, no data folder, an unreadable or unwritable directory, a disk error: the
   reporter is off for that run, `get`/`set` still answer the page (`set` says the choice was not kept).
+- **One reporter per process.** The apps start it through `crash::start_process_reporter`, which binds the process's hooks (the panic
+  hook's observer, the handled errors' layer) to the first reporter and answers every later call with that same reporter. The hooks are
+  the process's and bind once; the phone's `run_app` runs again when Android recreates the activity, and a second reporter over the
+  same files would hold its own copy of the setting: a "No enviar" chosen on it would leave the first sending and recording, and the
+  first, making its install id, would write `auto` back over the choice (`shared/core/tests/crash_process_reporter.rs`).
 - **A build with no DSN** (local, dev) records and sends nothing, whatever the setting says; the setting still works.
 
 ## Builds
@@ -165,11 +209,13 @@ reporting off for that run (tests: `shared/core/src/crash/tests.rs`, `shared/cor
 
 ## Not done here
 
-- **Handled errors as events.** The guideline sends `error` events of our own targets under the same switch (error type, code
-  location, version, OS, id; a daily cap per `error.type`). Not built: the app reports crashes only.
+- **Handled errors of the app's dependencies.** Only the app's own codes are reported (`Handled errors` above). The engine's and the
+  voice crate's errors carry codes of their own (`engine.*`), which are not in the app's list: they are counted, not sent. And the
+  phone has no error enum yet, so it reports `shared.*` codes only.
 - **Native crashes** (signals, aborts that leave no panic, OOM) are not captured: that needs the platform SDKs and a decision
   about memory capture.
 - **The phone's re-emit** (guideline section 9, "Mobile exception"): the shared hook logs inside the hook on both apps; the phone
   does not re-emit the record at the next launch.
-- **The page's preview** ("Ver qué se envía", sidevoice-web) still describes the earlier design; see the PR's follow-up list.
+- **The page's preview** ("Ver qué se envía", sidevoice-web) still describes the earlier design, and does not yet say that the error
+  codes of handled errors are sent as well (follow-up in sidevoice-web).
 - The logs viewer (`LogSource`) has no source in the app yet.

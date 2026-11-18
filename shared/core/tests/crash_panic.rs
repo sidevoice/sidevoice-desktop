@@ -118,12 +118,20 @@ fn a_panic_leaves_a_record_and_the_next_start_sends_it_as_a_literal_or_the_marke
         let frames = event["exception"]["values"][0]["stacktrace"]["frames"].as_array().unwrap();
         assert!(!frames.is_empty() && frames.iter().all(|frame| frame["instruction_addr"].is_string()));
         let names: Vec<&str> = frames.iter().filter_map(|frame| frame["function"].as_str()).collect();
+        // The panic hook swallows an assertion's message, so a stack that is refused would say nothing: say it here (a failed test's
+        // output is printed).
+        println!("the frames of the event for {:?}: {names:#?}", value(event));
         assert!(
             names.iter().any(|name| name.contains("crash_panic")),
             "the code that panicked is in the stack: {names:?}"
         );
+        // A function is its path: Windows names carry the type arguments (`next<..sidevoice_shared::crash::handled::..>`), and a
+        // frame the debug info has no symbol for (the unwinder's `__rust_try` shim, between `catch_unwind` and its `do_call`) is
+        // named after whichever function precedes it in the image, whose arguments may name anything of ours. What must not be in
+        // the stack is the panic machinery and the hook as functions, not as a word in the arguments of some other.
+        let path = |name: &str| name.split('<').next().unwrap_or(name).to_owned();
         assert!(
-            !names.iter().any(|name| {
+            !names.iter().map(|name| path(name)).any(|name| {
                 name.contains("rust_begin_unwind")
                     || name.starts_with("core::panicking::")
                     || name.starts_with("std::panicking::rust_panic_with_hook")

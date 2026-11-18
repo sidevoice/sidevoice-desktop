@@ -34,19 +34,35 @@ pub const TAGS: [&str; 5] = ["service.name", "os.type", "os.name", "host.arch", 
 /// The `extra` entries an event may carry.
 pub const EXTRAS: [&str; 3] = ["location", "log_tail", "len"];
 
-/// The event of a record, from its closed field list: the Sentry `event_id` is the record's id, the release the version that
-/// crashed, and `installation.id` the app's random id.
-pub fn event(record: &CrashRecord, installation_id: &str) -> Event<'static> {
-    let tags: Map<String, String> = [
-        ("service.name", record.service.as_str()),
-        ("os.type", record.os_type.as_str()),
-        ("os.name", record.os_name.as_str()),
-        ("host.arch", record.arch.as_str()),
+/// The tags of an event, [`TAGS`] and nothing else: a crash report's and a handled error's alike.
+pub(super) fn tags(
+    service: &str,
+    os_type: &str,
+    os_name: &str,
+    arch: &str,
+    installation_id: &str,
+) -> Map<String, String> {
+    [
+        ("service.name", service),
+        ("os.type", os_type),
+        ("os.name", os_name),
+        ("host.arch", arch),
         ("installation.id", installation_id),
     ]
     .into_iter()
     .map(|(name, value)| (name.to_owned(), value.to_owned()))
-    .collect();
+    .collect()
+}
+
+/// The release of an event, as the debug files of the build are filed: `<service.name>@<service.version>`.
+pub(super) fn release(service: &str, version: &str) -> Cow<'static, str> {
+    Cow::Owned(format!("{service}@{version}"))
+}
+
+/// The event of a record, from its closed field list: the Sentry `event_id` is the record's id, the release the version that
+/// crashed, and `installation.id` the app's random id.
+pub fn event(record: &CrashRecord, installation_id: &str) -> Event<'static> {
+    let tags = tags(&record.service, &record.os_type, &record.os_name, &record.arch, installation_id);
     let frames: Vec<Frame> = record
         .backtrace
         .iter()
@@ -87,7 +103,7 @@ pub fn event(record: &CrashRecord, installation_id: &str) -> Event<'static> {
         // Never the host name: an SDK client would fill it in, and no client exists here; still said, not assumed.
         server_name: None,
         timestamp: UNIX_EPOCH + Duration::from_millis(record.at_ms),
-        release: Some(Cow::Owned(format!("{}@{}", record.service, record.version))),
+        release: Some(release(&record.service, &record.version)),
         tags,
         extra,
         exception: Values::from(vec![Exception {
