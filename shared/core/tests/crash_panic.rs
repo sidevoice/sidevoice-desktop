@@ -118,6 +118,9 @@ fn a_panic_leaves_a_record_and_the_next_start_sends_it_as_a_literal_or_the_marke
         let frames = event["exception"]["values"][0]["stacktrace"]["frames"].as_array().unwrap();
         assert!(!frames.is_empty() && frames.iter().all(|frame| frame["instruction_addr"].is_string()));
         let names: Vec<&str> = frames.iter().filter_map(|frame| frame["function"].as_str()).collect();
+        // The panic hook swallows an assertion's message, so a stack that is refused would say nothing: say it here (a failed test's
+        // output is printed).
+        println!("the frames of the event for {:?}: {names:#?}", value(event));
         assert!(
             names.iter().any(|name| name.contains("crash_panic")),
             "the code that panicked is in the stack: {names:?}"
