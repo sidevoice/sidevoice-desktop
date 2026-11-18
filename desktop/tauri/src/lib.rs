@@ -231,12 +231,6 @@ pub(crate) fn app_log_file(app: &AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_log_dir().ok().map(|dir| dir.join(format!("{LOG_FILE}.log")))
 }
 
-/// The webview's `log` command only (its lines have target `webview`): the plugin installs no logger. Its records reach the
-/// subscriber through `log`'s bridge, so one filter and one writer serve every line.
-fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    tauri_plugin_log::Builder::new().skip_logger().build()
-}
-
 /// The file logger of the app log, held once `setup` knows the log folder (`app_log_dir` needs the app). The subscriber's
 /// file layer hands it each finished line.
 static LOG_SINK: std::sync::OnceLock<Box<dyn log::Log>> = std::sync::OnceLock::new();
@@ -563,7 +557,7 @@ pub fn run() {
     // Where the call's events go: over the channel the room page opens (the shared plugin's `voice_events`).
     let pages = sidevoice_shared_tauri::Pages::default();
     let events = pages.clone();
-    let builder = tauri::Builder::default().plugin(log_plugin());
+    let builder = tauri::Builder::default();
     // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
     let builder = <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::configure(builder);
     application::configure(builder)

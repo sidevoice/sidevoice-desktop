@@ -513,9 +513,6 @@ fn run_app() {
     let pages = Pages::default();
     let events = pages.clone();
     tauri::Builder::default()
-        // The page's `log` command only (its lines have target `webview`): the plugin installs no logger, and its records reach
-        // the subscriber through `log`'s bridge, so one filter and one writer serve every line.
-        .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
         .plugin(sidevoice_mobile_plugin::init())
         // The camera that scans the pairing code (`host.codeScanner`): the page asks for its permission and a scan through
         // the plugin's own commands, which the window is granted one by one (capabilities/main.json).

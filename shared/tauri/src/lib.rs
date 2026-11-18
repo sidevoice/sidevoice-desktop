@@ -25,6 +25,7 @@ mod pages;
 mod pairings;
 pub mod platform;
 mod voice;
+mod webview_log;
 
 use std::sync::Arc;
 
@@ -96,10 +97,12 @@ pub fn init<R: Runtime>(
             observers::bridge_playback,
             pairings::pairings_read,
             pairings::pairings_write,
+            webview_log::webview_log,
         ])
         .setup(move |app, api| {
             app.manage(Callers::<R>(Arc::new(caller)));
             app.manage(pages);
+            app.manage(webview_log::Limiter::default());
             platform::microphone::setup(api)
         })
         .build()
@@ -165,6 +168,7 @@ mod tests {
             lf(include_str!("microphone.rs")),
             lf(include_str!("observers.rs")),
             lf(include_str!("pairings.rs")),
+            lf(include_str!("webview_log.rs")),
         ];
         for command in COMMANDS {
             let source = sources.iter().find(|source| source.contains(&format!("fn {command}<"))).expect(command);
