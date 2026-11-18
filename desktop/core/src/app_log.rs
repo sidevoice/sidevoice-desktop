@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sidevoice_platform::fs::{Files, Fs};
+use sidevoice_platform::user::{User, UserId};
 
 const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 1000;
@@ -84,11 +85,13 @@ fn read(active: &Path, after: Option<&str>, limit: usize) -> Result<Page, Refuse
 }
 
 /// The files that exist, newest first: `active` is opened before the folder is listed, so a rotation in between shows
-/// it again under its dated name (told apart by its first line) and hides nothing. A link is refused.
+/// it again under its dated name (told apart by its first line) and hides nothing. A link is refused, and so is what is
+/// not a regular file of this user's.
 fn open(active: &Path) -> io::Result<Vec<File>> {
     let mut files = Vec::new();
     let mut take = |path: &Path| match Files::open_read(path) {
         Ok(file) => {
+            check_ours(&file)?;
             files.push(file);
             Ok(())
         }
@@ -100,6 +103,18 @@ fn open(active: &Path) -> io::Result<Vec<File>> {
         take(&path)?;
     }
     Ok(files)
+}
+
+/// That `file` is a regular file of this user's: the log folder holds whatever else can write there, and a file another
+/// user put in it is not read. Not `Fs::check_private`, which also wants it closed to everybody else and with one name:
+/// tauri-plugin-log makes the log with the process's umask (`0644`; on Windows, the folder's access), so that check
+/// would refuse every real log.
+fn check_ours(file: &File) -> io::Result<()> {
+    if file.metadata()?.is_file() && UserId::current().owns_file(file)? {
+        Ok(())
+    } else {
+        Err(io::ErrorKind::PermissionDenied.into())
+    }
 }
 
 /// The dated files beside `active`, newest first: `<stem>_<YYYY-MM-DD_HH-MM-SS>.log`, which sorts by date.

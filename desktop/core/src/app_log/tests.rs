@@ -409,3 +409,17 @@ fn a_request_outside_the_bounds_is_invalid_whatever_it_waits_for() {
     assert_eq!(read_waiting(&log, None, Some(1000), Duration::ZERO).unwrap().lines.len(), 3);
     assert_eq!(read_waiting(&log, None, None, Duration::ZERO).unwrap().lines.len(), 3);
 }
+
+// --- What a log file must be -----------------------------------------------------------------------
+
+#[test]
+fn a_log_the_plugin_made_is_read_though_it_is_not_private_and_what_is_not_a_file_is_not() {
+    let (temp, log) = log();
+    // As tauri-plugin-log makes it: the process's umask, no access narrowed. A file of this user's is all it must be.
+    append(&log, &numbered(0, 2));
+    assert_eq!(texts(&read(&log, None, 10).unwrap()), ["line 0", "line 1"]);
+    // A dated name that is a folder, not a file, makes the log unreadable rather than quietly shorter.
+    fs::create_dir(temp.path().join(format!("{NAME}_2026-11-18_09-00-00.log"))).unwrap();
+    assert_eq!(read(&log, None, 10).err(), Some(Refused::Unreadable));
+    assert_eq!(read_waiting(&log, None, None, Duration::ZERO).err(), Some(Refused::Unreadable));
+}
