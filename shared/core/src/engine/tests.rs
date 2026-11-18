@@ -798,6 +798,19 @@ fn openai_view(engines: &NativeEngines) -> CatalogView {
     engines.catalogs().unwrap().into_iter().find(|view| view.id == "openai").unwrap()
 }
 
+/// The view once the first listing has landed: a read never waits for the provider (the first one answers
+/// `provider-unreachable` while the listing is in flight), so ask again until it shows.
+fn listed_view(engines: &NativeEngines) -> CatalogView {
+    let asked = std::time::Instant::now();
+    loop {
+        let view = openai_view(engines);
+        if view.status.reason.is_none() || asked.elapsed() > Duration::from_secs(10) {
+            return view;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn code(refused: Option<CredentialRefusal>) -> Option<String> {
     refused.map(|refused| refused.reason.code)
 }
@@ -808,7 +821,7 @@ fn code(refused: Option<CredentialRefusal>) -> Option<String> {
 fn a_key_tried_is_asked_of_the_provider_and_kept_nowhere() {
     let (test, openai, _) = with_provider("trial", Some("good"));
     let engines = &test.engines;
-    let before = openai_view(engines);
+    let before = listed_view(engines);
     assert!(before.status.reason.is_none() && !before.models.is_empty(), "{before:?}");
     assert_eq!(openai.listed_with(), ["good"]);
 
@@ -933,7 +946,7 @@ fn a_listing_while_a_key_is_tried_is_the_kept_keys() {
 fn refresh_asks_the_provider_again_past_the_kept_listing() {
     let (test, openai, kept) = with_provider("refresh", Some("good"));
     let engines = &test.engines;
-    openai_view(engines);
+    listed_view(engines);
     openai_view(engines);
     assert_eq!(openai.listed_with(), ["good"], "a listing is kept");
     engines.refresh("openai").unwrap();
