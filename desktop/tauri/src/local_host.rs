@@ -236,6 +236,9 @@ pub fn setup(app: &AppHandle) {
         Ok(host) => {
             host.watch();
             keep_current(app, &host);
+            // The app's crash report switch is copied once to a core this app installs (`crash_reports::core_installed`).
+            let handle = app.clone();
+            host.on_installed(move || crate::crash_reports::core_installed(&handle));
             app.manage(Hosted(host));
         }
         Err(e) => crate::debug(&format!("local-host off: the proxy could not start: {e}")),
@@ -267,8 +270,8 @@ fn keep_current(app: &AppHandle, host: &Arc<LocalHost>) {
     }
 }
 
-/// The running local host, for whoever needs it off the page's path (the crash records' pass); `None` before it started or
-/// where there is none.
+/// The running local host, for whoever needs it off the page's path (the copy of the crash report switch to the core); `None`
+/// before it started or where there is none.
 pub fn running(app: &AppHandle) -> Option<Arc<LocalHost>> {
     hosted(app).ok()
 }

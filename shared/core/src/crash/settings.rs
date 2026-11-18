@@ -31,6 +31,9 @@ struct Stored {
     mode: Mode,
     #[serde(default)]
     install: Option<Install>,
+    /// Whether the app installed a core on this computer, whose switch is then a copy of this one (`Settings::local_core`).
+    #[serde(default)]
+    local_core: bool,
 }
 
 pub struct Settings {
@@ -86,7 +89,7 @@ impl Settings {
                     error.kind = ?kind,
                     "the crash report setting could not be read; nothing is sent in this run"
                 );
-                Stored { mode: Mode::Never, install: None }
+                Stored { mode: Mode::Never, install: None, local_core: false }
             }
         };
         Settings { path, stored }
@@ -94,11 +97,26 @@ impl Settings {
 
     /// No place to keep anything (the app's directory could not be had): `never` for this run, and nothing can be written.
     pub fn unavailable() -> Settings {
-        Settings { path: PathBuf::new(), stored: Stored { mode: Mode::Never, install: None } }
+        Settings { path: PathBuf::new(), stored: Stored { mode: Mode::Never, install: None, local_core: false } }
     }
 
     pub fn mode(&self) -> Mode {
         self.stored.mode
+    }
+
+    /// Whether the app installed the core on this computer: only then is its switch a copy of this one.
+    pub fn local_core(&self) -> bool {
+        self.stored.local_core
+    }
+
+    /// Keeps that the app installed the core on this computer (and so copies its switch to it). Nothing changes when the file
+    /// cannot be written.
+    pub fn set_local_core(&mut self) -> std::io::Result<()> {
+        let mut next = self.stored.clone();
+        next.local_core = true;
+        self.write(&next)?;
+        self.stored = next;
+        Ok(())
     }
 
     /// Keeps `mode`. `never` also forgets the installation id. Nothing changes when the file cannot be written.

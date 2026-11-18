@@ -1,69 +1,72 @@
-//! Crash reports on the desktop (sidevoice-shared `crash`): the reporter, the panic hook that feeds it, and the pass that
-//! sends this computer's own core's crash records.
+//! Crash reports on the desktop (sidevoice-shared `crash`): the reporter, the panic hook that feeds it, and the copy of the app's
+//! switch to the core this app installed on this computer.
 //!
-//! The setting is the person's (Settings → Crash reports, `host.crashReports`), kept in the app's data folder and held to
-//! before any page has loaded. The DSN is baked in by a release or nightly build (`SIDEVOICE_SENTRY_DSN`, set by CI); a
-//! local or dev build has none and sends nothing, whatever the setting says.
+//! The setting is the person's (Settings → Crash reports, `host.crashReports`), kept in the app's data folder and held to before
+//! any page has loaded. The DSN is baked in by a release or nightly build (`SIDEVOICE_SENTRY_DSN`, set by CI); a local or dev
+//! build has none and records and sends nothing, whatever the setting says. The app reports its own panics only: it reads,
+//! relays and acknowledges nothing of the core's or the connector's (each piece sends its own).
 //!
-//! The records of this computer's core are read with the local device's token and acknowledged only after Sentry took
-//! them (`machine::sync`). Under "never" the pass does not call the core at all. The machines the room page reaches
-//! over the network are not read here yet.
+//! The switch goes one way, from the app to the core it installed (the logging guideline, section 10): once when the app's own
+//! install puts a core on this computer ([`core_installed`]) and each time the person changes the app's switch, through the
+//! core's local-only endpoint on its socket. Never on a start, never when an update replaces the binaries, never read back. A
+//! core the person installed by hand is not touched; its switch is its own.
 
-use std::sync::Arc;
-use std::time::Duration;
-
-use serde_json::Value;
-use sidevoice_local_host::host::LocalHost;
-use sidevoice_shared::crash::{self, Config, Machine, MachineError, Reporter};
+use sidevoice_shared::crash::{self, Config, Mode, Reporter};
+use sidevoice_shared::logging;
 use sidevoice_shared_tauri::CrashReports;
 use tauri::{AppHandle, Manager};
 
 /// The DSN of a release or nightly build; empty or absent otherwise.
 const DSN: Option<&str> = option_env!("SIDEVOICE_SENTRY_DSN");
 
-/// How often the core's records are looked for, once the first pass (a little after launch) has run.
-const EVERY: Duration = Duration::from_secs(5 * 60);
-const FIRST: Duration = Duration::from_secs(45);
-
-/// This computer's core, as a machine whose records the app sends.
-struct LocalCore(Arc<LocalHost>);
-
-impl Machine for LocalCore {
-    fn list(&self) -> Result<Vec<Value>, MachineError> {
-        self.0.crash_records().map_err(|_| MachineError::Unavailable)
-    }
-
-    fn acknowledge(&self, id: &str) -> Result<(), MachineError> {
-        self.0.acknowledge_crash(id).map_err(|_| MachineError::Unavailable)
-    }
-}
-
-/// At start, right after the log: the reporter (the setting is read here; the client is made on a thread of its own), the
-/// panic hook's observer, and the pass over the core's records on a thread of its own. Nothing here can stop the app: with no
-/// data folder, or a reporter that cannot start, reporting is off for this run and the setting still answers the page.
+/// At start, right after the log: the reporter (the setting is read here; the records a previous run left are sent on a thread
+/// of its own) and the panic hook's observer. Nothing here can stop the app: with no data folder, or a reporter that cannot
+/// start, reporting is off for this run and the setting still answers the page.
 pub fn setup(app: &AppHandle) {
     let resource = crate::platform::resource::current();
     let Ok(dir) = crate::data::desktop_dir(app) else {
         app.manage(CrashReports(Reporter::unavailable(resource)));
         return;
     };
-    let reporter = Reporter::start_in_background(Config { resource, dsn: DSN.map(str::to_owned), dir, post: None });
+    let reporter = Reporter::start(Config { resource, dsn: DSN.map(str::to_owned), dir, post: None });
     crash::report_panics(reporter.clone());
-    app.manage(CrashReports(reporter.clone()));
+    let handle = app.clone();
+    reporter.on_local_core_change(move |mode| copy_to_core(&handle, mode));
+    app.manage(CrashReports(reporter));
+}
+
+/// The app's own install has just put a core on this computer (its first: `LocalHost::on_installed`): from now on the person's
+/// changes of the switch follow to it, and the switch as it is now goes there once.
+pub fn core_installed(app: &AppHandle) {
+    let Some(reports) = app.try_state::<CrashReports>() else { return };
+    if let Some(mode) = reports.0.local_core_installed() {
+        copy_to_core(app, mode);
+    }
+}
+
+/// Copies the app's switch (`auto` is "send") to the core on this computer, on a thread of its own: the person's click and the
+/// install's answer never wait for a core. One try; a core that cannot be reached is a warning and nothing more: the core keeps
+/// its own switch until the person changes the app's again.
+fn copy_to_core(app: &AppHandle, mode: Mode) {
     let app = app.clone();
-    let started = std::thread::Builder::new().name("crash-records".into()).spawn(move || {
-        // A pass that panics is contained and the next one comes after a longer wait: the loop does not end.
-        crash::machine::poll_forever(&reporter, FIRST, EVERY, |reporter| {
-            if let Some(host) = crate::local_host::running(&app) {
-                crash::machine::sync(reporter, &LocalCore(host));
-            }
-        });
+    let started = std::thread::Builder::new().name("crash-switch".into()).spawn(move || {
+        let outcome = match crate::local_host::running(&app) {
+            Some(host) => host.set_crash_reports(mode == Mode::Auto).map_err(|refusal| refusal.key),
+            None => Err("local-host.off".to_owned()),
+        };
+        if let Err(reason) = outcome {
+            tracing::warn!(
+                error.type = crate::error::DesktopError::CrashSwitchNotCopied.code(),
+                reason = logging::checked_code(&reason),
+                "the crash report switch could not be copied to the core on this computer; the core keeps its own"
+            );
+        }
     });
     if let Err(error) = started {
         tracing::warn!(
-            error.type = crate::error::DesktopError::CrashRecordsNotStarted.code(),
+            error.type = crate::error::DesktopError::CrashSwitchNotCopied.code(),
             kind = ?error.kind(),
-            "the pass over the core's crash records could not start"
+            "the crash report switch could not be copied to the core on this computer; the core keeps its own"
         );
     }
 }

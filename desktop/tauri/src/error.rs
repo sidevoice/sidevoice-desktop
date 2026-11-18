@@ -13,8 +13,8 @@ pub enum DesktopError {
     LocalHostUpdateNotStarted,
     #[error("the local host's background updates could not start")]
     LocalHostUpdatesNotStarted,
-    #[error("the pass over the core's crash records could not start")]
-    CrashRecordsNotStarted,
+    #[error("the crash report switch could not be copied to the core on this computer")]
+    CrashSwitchNotCopied,
     #[error("the logs could not be shown")]
     RevealFailed,
     #[error("the webview's diagnostic switches could not be applied")]
@@ -48,7 +48,7 @@ impl DesktopError {
         DesktopError::UpdateInstallFailed,
         DesktopError::LocalHostUpdateNotStarted,
         DesktopError::LocalHostUpdatesNotStarted,
-        DesktopError::CrashRecordsNotStarted,
+        DesktopError::CrashSwitchNotCopied,
         DesktopError::RevealFailed,
         DesktopError::WebviewSwitchesFailed,
         DesktopError::TrayUnavailable,
@@ -70,7 +70,7 @@ impl DesktopError {
             DesktopError::UpdateInstallFailed => "desktop.update-install-failed",
             DesktopError::LocalHostUpdateNotStarted => "desktop.local-host-update-not-started",
             DesktopError::LocalHostUpdatesNotStarted => "desktop.local-host-updates-not-started",
-            DesktopError::CrashRecordsNotStarted => "desktop.crash-records-not-started",
+            DesktopError::CrashSwitchNotCopied => "desktop.crash-switch-not-copied",
             DesktopError::RevealFailed => "desktop.reveal-failed",
             DesktopError::WebviewSwitchesFailed => "desktop.webview-switches-failed",
             DesktopError::TrayUnavailable => "desktop.tray-unavailable",

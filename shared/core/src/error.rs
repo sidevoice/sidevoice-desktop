@@ -11,8 +11,8 @@ pub enum SharedError {
     VoiceModelsHeld,
     #[error("a crash report could not be sent")]
     CrashReportNotSent,
-    #[error("a machine did not take the acknowledgement of a crash record")]
-    CrashRecordNotAcknowledged,
+    #[error("the crash records could not be read or deleted")]
+    CrashRecordsUnavailable,
     #[error("the crash report settings could not be kept")]
     CrashSettingsNotKept,
     #[error("the crash report settings could not be read")]
@@ -28,7 +28,7 @@ impl SharedError {
         SharedError::NativeEngineFailed,
         SharedError::VoiceModelsHeld,
         SharedError::CrashReportNotSent,
-        SharedError::CrashRecordNotAcknowledged,
+        SharedError::CrashRecordsUnavailable,
         SharedError::CrashSettingsNotKept,
         SharedError::CrashSettingsUnreadable,
         SharedError::CrashReporterFailed,
@@ -41,7 +41,7 @@ impl SharedError {
             SharedError::NativeEngineFailed => "shared.native-engine-failed",
             SharedError::VoiceModelsHeld => "shared.voice-models-held",
             SharedError::CrashReportNotSent => "shared.crash-report-not-sent",
-            SharedError::CrashRecordNotAcknowledged => "shared.crash-record-not-acknowledged",
+            SharedError::CrashRecordsUnavailable => "shared.crash-records-unavailable",
             SharedError::CrashSettingsNotKept => "shared.crash-settings-not-kept",
             SharedError::CrashSettingsUnreadable => "shared.crash-settings-unreadable",
             SharedError::CrashReporterFailed => "shared.crash-reporter-failed",

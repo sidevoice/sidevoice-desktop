@@ -198,6 +198,8 @@ pub struct LocalHost {
     /// its installer, while there is one.
     acting: AtomicUsize,
     stopped: AtomicBool,
+    /// What hears that a person's install put the service on a computer that had none ([`LocalHost::on_installed`]).
+    installed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     log: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
@@ -230,6 +232,7 @@ impl LocalHost {
             install: Mutex::new(None),
             acting: AtomicUsize::new(0),
             stopped: AtomicBool::new(false),
+            installed: Mutex::new(None),
             log,
         }))
     }
@@ -277,30 +280,19 @@ impl LocalHost {
         }))
     }
 
-    /// This computer's crash records, read with the local device's token (the core lists them on the device surface only).
-    /// Refused when no core answers or the pairing does not work.
-    pub fn crash_records(&self) -> Result<Vec<Value>, Refusal> {
-        let token = self.token()?;
-        #[allow(clippy::disallowed_methods, reason = "the bearer of one authenticated call on the core's socket")]
-        self.core.crashes(token.expose_secret()).map_err(refused)
+    /// Copies the app's crash report switch to this computer's core (`PUT /api/local/crash-reports`, the local channel the
+    /// core answers on its socket only): `send` is the app's choice. One way, app to core: nothing is read back. Refused when no
+    /// core answers; a caller does not retry in a loop.
+    pub fn set_crash_reports(&self, send: bool) -> Result<(), Refusal> {
+        self.core.set_crash_reports(send).map_err(refused)
     }
 
-    /// Tells this computer's core that the crash record `id` was handled (it deletes it).
-    pub fn acknowledge_crash(&self, id: &str) -> Result<(), Refusal> {
-        let token = self.token()?;
-        #[allow(clippy::disallowed_methods, reason = "the bearer of one authenticated call on the core's socket")]
-        self.core.acknowledge_crash(token.expose_secret(), id).map_err(refused)
-    }
-
-    /// The device token while a core answers and the pairing works.
-    fn token(&self) -> Result<secrecy::SecretString, Refusal> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .pairing
-            .as_ref()
-            .filter(|_| inner.report.reachable)
-            .map(|pairing| pairing.token.clone())
-            .ok_or_else(|| Refusal::new("core.unreachable", "No core answers, or the pairing does not work."))
+    /// Has `told` called each time a person's install of the service ends having put it on a computer that had none (the
+    /// installer's answer `installed`; not an update, not a reinstall, not the app's own background update), once the new core is
+    /// paired with or the wait for it is over. It runs on the install's thread after the install's answer is ready: it must not
+    /// block (start a thread).
+    pub fn on_installed(&self, told: impl Fn() + Send + Sync + 'static) {
+        *self.installed.lock().unwrap() = Some(Arc::new(told));
     }
 
     /// One pass: observe, keep the pairing, decide the state.
@@ -908,7 +900,19 @@ impl LocalHost {
         self.end_install(job);
         let pass = self.invalidate();
         let report = self.pass(&pass);
+        // A person's install that put the service on a computer that had none: the app's own choices are copied to it once.
+        if !job.is_background() && outcome.as_ref().is_ok_and(|answer| answer["action"] == install::INSTALLED) {
+            self.told_of_install();
+        }
         outcome.map(|_| report)
+    }
+
+    /// Tells [`LocalHost::on_installed`]'s listener, if there is one; a panic in it ends there.
+    fn told_of_install(&self) {
+        let told = self.installed.lock().unwrap().clone();
+        if let Some(told) = told {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| told()));
+        }
     }
 
     /// `pairing`: the new core paired with as on any core launch (again if the app's pairing was refused, as

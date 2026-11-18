@@ -46,6 +46,8 @@ struct State {
     sockets: HashMap<String, Vec<watch::Sender<bool>>>,
     /// Health does not say how many calls are on (a core that predates the count).
     calls_hidden: bool,
+    /// The crash report switch the app copied to it (`PUT /api/local/crash-reports`); `None` until it did.
+    crash_reports: Option<bool>,
 }
 
 pub struct FakeCore {
@@ -144,6 +146,11 @@ impl FakeCore {
     /// The local device's id, if one is paired.
     pub fn local_device(&self) -> Option<String> {
         self.state.lock().unwrap().local.clone()
+    }
+
+    /// The crash report switch the app copied to this core, if it did.
+    pub fn crash_reports(&self) -> Option<bool> {
+        self.state.lock().unwrap().crash_reports
     }
 
     pub fn set_api(&self, api: i64) {
@@ -313,6 +320,18 @@ impl FakeCore {
                     revoked
                 };
                 reply(&mut stream, &origin, 200, json!({"ok": true, "revoked": revoked.is_some()})).await
+            }
+            ("PUT", "/api/local/crash-reports") => {
+                let send = serde_json::from_slice::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| value.get("send")?.as_bool());
+                match send {
+                    Some(send) => {
+                        self.state.lock().unwrap().crash_reports = Some(send);
+                        reply(&mut stream, &origin, 200, json!({"send": send})).await
+                    }
+                    None => reply(&mut stream, &origin, 400, json!({"detail": "settings.crash_reports_invalid"})).await,
+                }
             }
             (_, p) if p.starts_with("/api/connectors/link") => {
                 reply(&mut stream, &origin, 200, json!({"link": true})).await

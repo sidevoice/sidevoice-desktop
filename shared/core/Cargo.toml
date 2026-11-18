@@ -43,18 +43,20 @@ serde_json = "1"
 # (src/voice/models.rs).
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
 
-# Crash reports (src/crash): the maintained `sentry` SDK's client, event and envelope types only: no default features, so
-# no panic, contexts or release-health integration, no transport and no log or metric capture; the events are built from
-# a closed field list (src/crash/event.rs) and handed to our own transport (src/crash/transport.rs). `backtrace` and
-# `debug-images` give an own panic's frames with their addresses and the loaded modules, which Sentry symbolicates with
-# the debug files the release uploads.
-sentry = { version = "0.49", default-features = false, features = ["backtrace", "debug-images"] }
-# The event ids are the records' own UUIDs, and the install id is a random one (src/crash).
-uuid = "1"
+# Crash reports (src/crash): the maintained SDK's protocol types only (the event, the envelope, the DSN, the debug ids): no
+# client, integration or transport of the SDK exists in the process. The report is built from a record's closed field list
+# (src/crash/report.rs) and posted by our own code, at the next start.
+sentry-types = "0.49"
+# The frames of a panic with their instruction addresses (taken in the hook, resolved off the dying thread) and the modules
+# loaded at start, which Sentry matches to the debug files of the release (src/crash/trace.rs): what the SDK's own
+# integrations are made of, without the integrations.
+backtrace = "0.3"
+findshlibs = "0.10"
+# The install id is random (src/crash/settings.rs).
 getrandom = "0.3"
-# The times of a machine's crash records (RFC 3339).
+# The times of a record (RFC 3339).
 time = { version = "0.3", default-features = false, features = ["std", "parsing", "formatting"] }
-# The blocking POST of an envelope, on a thread of its own (src/crash/transport.rs); the TLS stack the app already has.
+# The blocking POST of an envelope, on a thread of its own (src/crash/report.rs); the TLS stack the app already has.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 
 # Provider keys in the OS credential store (platform/credentials; docs/CREDENTIALS.md).

@@ -5,7 +5,8 @@
 //! - `GET /api/device/identity?nonce=` → the core signs a fresh nonce; checked against the pinned key.
 //! - `POST /api/device/local/pair {name}` → a device token for this app (the core revokes the previous local one).
 //! - `DELETE /api/device/local` → this app's local device revoked.
-//! - `GET /api/device/crashes`, `DELETE /api/device/crashes/{id}` → the machine's crash records and their acknowledgement.
+//! - `PUT /api/local/crash-reports {"send"}` → the core's own crash report switch, set from the app's (local channel only: the core
+//!   answers it on its socket, never on TCP or to a browser; one way, the app never reads it back).
 //! - Any authenticated route with the token, to tell whether the core still accepts it.
 
 use crate::checks::{self, Check};
@@ -158,34 +159,14 @@ impl CoreSocket {
         Ok(())
     }
 
-    /// The machine's crash records (`GET /api/device/crashes`, the device surface: `token` is required): JSON objects, not yet
-    /// trusted. The app checks each against the closed field list before it sends one anywhere.
-    pub fn crashes(&self, token: &str) -> Result<Vec<serde_json::Value>, CoreError> {
-        let bearer = format!("Bearer {token}");
-        let answer = self.call("GET", "/api/device/crashes", &[("authorization", &bearer)], None, CALL_TIMEOUT)?;
-        if answer.status != 200 {
-            return Err(failed(format!("GET /api/device/crashes answered {}", answer.status)));
-        }
-        let body: serde_json::Value = answer.json().map_err(|e| failed(format!("GET /api/device/crashes: {e}")))?;
-        body.get("crashes")
-            .and_then(|rows| rows.as_array())
-            .cloned()
-            .ok_or_else(|| failed("GET /api/device/crashes: no list"))
-    }
-
-    /// Tells the core the record `id` was handled, which deletes it (`DELETE /api/device/crashes/{id}`). A record already gone
-    /// (404) is done. Only a canonical UUID is put in the path.
-    pub fn acknowledge_crash(&self, token: &str, id: &str) -> Result<(), CoreError> {
-        let canonical = id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
-        if !canonical {
-            return Err(failed("not a crash record id"));
-        }
-        let bearer = format!("Bearer {token}");
-        let target = format!("/api/device/crashes/{id}");
-        let answer = self.call("DELETE", &target, &[("authorization", &bearer)], None, CALL_TIMEOUT)?;
+    /// Sets the core's crash report switch to `send` (`PUT /api/local/crash-reports`, the local channel: no token). The core
+    /// keeps it, and erases its pending crash records and its id when it is `false`; its answer is not read back.
+    pub fn set_crash_reports(&self, send: bool) -> Result<(), CoreError> {
+        let body = serde_json::json!({ "send": send }).to_string();
+        let answer = self.call("PUT", "/api/local/crash-reports", &[], Some(body.as_bytes()), CALL_TIMEOUT)?;
         match answer.status {
-            200 | 404 => Ok(()),
-            status => Err(failed(format!("DELETE /api/device/crashes answered {status}"))),
+            200 => Ok(()),
+            status => Err(failed(format!("PUT /api/local/crash-reports answered {status}"))),
         }
     }
 
