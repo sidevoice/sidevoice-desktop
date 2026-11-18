@@ -61,3 +61,4 @@ card's window none, no other window any).
 | `bridge_playback` | `sidevoice-shared-tauri:allow-bridge-playback` | room | room page | `level`, `threadId?` | nothing (the app's `CallObserver` is told the voice's output level and whose reply it is) | no |
 | `pairings_read` | `sidevoice-shared-tauri:allow-pairings-read` | room | room page | none | nothing (the pairings, from the app's `PairingStore`) | no |
 | `pairings_write` | `sidevoice-shared-tauri:allow-pairings-write` | room | room page | `value` | nothing (the pairings, kept by the app's `PairingStore`) | no |
+| `webview_log` | `sidevoice-shared-tauri:allow-webview-log` | room | room page | `entry` (`level`, `source`, `items`, `at?`: only the listed shapes, no free text) | nothing (a line of ours with target `webview`; anything else is dropped and counted) | no |

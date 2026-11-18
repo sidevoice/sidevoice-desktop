@@ -713,6 +713,18 @@
           "type": "string",
           "const": "deny-voice-update",
           "markdownDescription": "Denies the voice_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the webview_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-webview-log",
+          "markdownDescription": "Enables the webview_log command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the webview_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-webview-log",
+          "markdownDescription": "Denies the webview_log command without any pre-configured scope."
         }
       ]
     }

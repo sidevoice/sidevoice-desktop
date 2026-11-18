@@ -49,11 +49,10 @@ fn the_window_is_granted_every_shared_command_it_uses_once_and_nothing_else() {
             "barcode-scanner:allow-check-permissions",
             "barcode-scanner:allow-open-app-settings",
             "barcode-scanner:allow-request-permissions",
-            "barcode-scanner:allow-scan",
-            "log:allow-log"
+            "barcode-scanner:allow-scan"
         ],
         "the app's own: its page's number, its report of the call, the stills of its surfaces, the player of its cues, the system's output picker, its developer options, its headset's presses, whether the screen is locked, the \
-         scanner's camera permission, settings link and scan (not its vibration), and the page's problems into the log"
+         scanner's camera permission, settings link and scan (not its vibration)"
     );
     let unique: BTreeSet<&String> = granted.iter().collect();
     assert_eq!(

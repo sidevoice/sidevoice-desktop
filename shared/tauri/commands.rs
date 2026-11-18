@@ -36,4 +36,5 @@ pub const COMMANDS: &[&str] = &[
     "bridge_playback",
     "pairings_read",
     "pairings_write",
+    "webview_log",
 ];

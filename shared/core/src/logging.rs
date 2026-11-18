@@ -18,6 +18,9 @@ pub const PANIC_TARGET: &str = "panic";
 /// The backtrace of a panic, a second event for the app file only: never stderr, never a system log. It shares no prefix
 /// with another of our targets (filters match targets by prefix), so no directive reaches it by accident.
 pub const BACKTRACE_TARGET: &str = "crash_backtrace";
+/// The page's console lines, checked and rendered by the shared plugin's `webview_log` (the one place that names it). Our own
+/// target, but the page's words: the crash report's ring of log lines leaves it out (`crash::tail`), as the phone's system log does.
+pub const WEBVIEW_TARGET: &str = "webview";
 /// What a panic's message is replaced by when the payload is not a literal: a formatted message carries values.
 pub const FORMATTED_MARKER: &str = "<formatted panic message omitted>";
 const NON_TEXT_MARKER: &str = "<non-text panic payload omitted>";

@@ -27,8 +27,6 @@ use super::TAIL_LINES;
 const MAX_FIELDS: usize = 16;
 const MAX_SPANS: usize = 8;
 const MAX_TEXT: usize = 200;
-/// The page's console lines: narrowed by the forwarder, but still the page's words.
-const WEBVIEW_TARGET: &str = "webview";
 
 /// An event of ours at `warn` or `error`, as it was logged.
 struct Entry {
@@ -93,7 +91,8 @@ fn under(target: &str, own: &str) -> bool {
 fn kept(own: &[&str]) -> Vec<String> {
     own.iter()
         .filter(|target| {
-            ![crate::logging::PANIC_TARGET, crate::logging::BACKTRACE_TARGET, WEBVIEW_TARGET].contains(target)
+            ![crate::logging::PANIC_TARGET, crate::logging::BACKTRACE_TARGET, crate::logging::WEBVIEW_TARGET]
+                .contains(target)
         })
         .map(|target| (*target).to_owned())
         .collect()
