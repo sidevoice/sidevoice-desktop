@@ -15,8 +15,8 @@ fn main() {
     // The app's own commands, declared so capabilities can grant them per window/origin: the room window's `bridge_state`
     // (+ `debug_log`), the local host (`local_host_*`), the data reset (`data_*`), the global shortcuts and the call controls
     // settings (`global_shortcuts`, `call_controls_settings`), whether the screen is locked (`screen_locked`), the app's updates
-    // (`updater`) and the developer options
-    // (`debug_options`); the call controls card its own six. What the apps share is the plugin's (sidevoice-shared-tauri;
+    // (`updater`), the developer options (`debug_options`) and the app's own log (`app_log_read`); the call controls card its own
+    // six. What the apps share is the plugin's (sidevoice-shared-tauri;
     // its permissions are `sidevoice-shared-tauri:allow-<command>`): the voice call, the engine, the microphone permission,
     // the levels of the call and the pairings.
     tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows).app_manifest(
@@ -46,6 +46,7 @@ fn main() {
             "screen_locked",
             "updater",
             "debug_options",
+            "app_log_read",
         ]),
     ))
     .expect("failed to run tauri-build");
