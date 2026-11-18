@@ -36,6 +36,9 @@ struct Stored {
 pub struct Settings {
     path: PathBuf,
     stored: Stored,
+    /// The file could not be read (or there is no place for one): what is in `stored` is `never` as a precaution, not what the
+    /// person chose, until the person makes a choice that is saved.
+    unknown: bool,
 }
 
 /// 128 random bits as 32 hex digits, from the OS.
@@ -97,10 +100,12 @@ impl Settings {
     /// this run (never written back: the person's next choice replaces it).
     pub fn load(dir: &Path) -> Settings {
         let path = dir.join(FILE);
+        let mut unknown = false;
         let stored = match read(&path) {
             Ok(Some(stored)) => stored,
             Ok(None) => Stored::default(),
             Err(kind) => {
+                unknown = true;
                 tracing::warn!(
                     error.type = SharedError::CrashSettingsUnreadable.code(),
                     error.kind = ?kind,
@@ -109,12 +114,19 @@ impl Settings {
                 Stored { mode: Mode::Never, install: None }
             }
         };
-        Settings { path, stored }
+        Settings { path, stored, unknown }
     }
 
     /// No place to keep anything (the app's directory could not be had): `never` for this run, and nothing can be written.
     pub fn unavailable() -> Settings {
-        Settings { path: PathBuf::new(), stored: Stored { mode: Mode::Never, install: None } }
+        Settings { path: PathBuf::new(), stored: Stored { mode: Mode::Never, install: None }, unknown: true }
+    }
+
+    /// Whether what the person chose is not known: the file could not be read (or there is none to read from), so the mode is
+    /// `never` for this run as a precaution. Nothing that depends on the person's choice (a copy of it to the core) is done
+    /// while this holds; a choice that is saved ends it.
+    pub fn unknown(&self) -> bool {
+        self.unknown
     }
 
     pub fn mode(&self) -> Mode {
@@ -130,6 +142,7 @@ impl Settings {
         }
         self.write(&next)?;
         self.stored = next;
+        self.unknown = false;
         Ok(())
     }
 
@@ -163,10 +176,12 @@ mod tests {
     fn no_file_is_auto_and_a_file_that_cannot_be_understood_is_never_for_that_run() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(Settings::load(dir.path()).mode(), Mode::Auto, "no file: the default");
+        assert!(!Settings::load(dir.path()).unknown(), "no file is a known default");
         let file = dir.path().join(FILE);
         for broken in [b"not json".to_vec(), vec![b' '; 5000], br#"{"mode":"sometimes"}"#.to_vec()] {
             std::fs::write(&file, &broken).unwrap();
             assert_eq!(Settings::load(dir.path()).mode(), Mode::Never, "never silently re-enabled");
+            assert!(Settings::load(dir.path()).unknown(), "and that is a precaution, not the person's choice");
             assert_eq!(std::fs::read(&file).unwrap(), broken, "the file is left as it is");
         }
         // A directory where the file should be cannot be read either (not "not found").
@@ -177,7 +192,9 @@ mod tests {
         std::fs::remove_dir(&file).unwrap();
         std::fs::write(&file, b"not json").unwrap();
         let mut settings = Settings::load(dir.path());
+        assert!(settings.unknown());
         settings.set_mode(Mode::Auto).unwrap();
+        assert!(!settings.unknown(), "a saved choice ends it");
         assert_eq!(Settings::load(dir.path()).mode(), Mode::Auto);
     }
 

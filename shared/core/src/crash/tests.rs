@@ -645,6 +645,46 @@ fn a_setting_file_that_cannot_be_read_neither_clears_the_marker_nor_the_owed_bit
 }
 
 #[test]
+fn nothing_is_copied_while_the_setting_cannot_be_read_and_the_owed_bit_stays_until_a_choice_is_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let post = Arc::new(Recorder::default());
+    // The app installed a core, and the copy of the person's choice is owed (it never got through).
+    {
+        let reporter = start(dir.path(), &post);
+        reporter.local_core_installed();
+        assert!(reporter.copy_owed().is_some());
+    }
+    let marker = dir.path().join(core_copy::FILE);
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), r#"{"owed":true}"#);
+    // The setting file is damaged: the mode is "never" for the run as a precaution, which is not what the person chose.
+    std::fs::write(dir.path().join(settings::FILE), b"not json").unwrap();
+    let reporter = start(dir.path(), &post);
+    assert_eq!(reporter.mode(), Mode::Never);
+    let told = Arc::new(AtomicUsize::new(0));
+    let counter = told.clone();
+    reporter.on_copy_owed(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    });
+    // So nothing is to be sent to the core (a `{\"send\": false}` that settles the owed bit would be the app's guess, not the
+    // person's choice), however many times a core is seen, and the bit is as it was.
+    for _ in 0..3 {
+        assert_eq!(reporter.copy_owed(), None);
+    }
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), r#"{"owed":true}"#);
+    assert_eq!(told.load(Ordering::SeqCst), 0);
+    // The person chooses, and the choice is saved: what was held back can go, with that choice, and is told once.
+    reporter.set_mode(Mode::Auto).unwrap();
+    assert_eq!(told.load(Ordering::SeqCst), 1);
+    assert_eq!(reporter.copy_owed().map(|owed| owed.mode), Some(Mode::Auto));
+    // Choosing what the run already had (the "never" the damaged file loaded as) is a saved choice too.
+    std::fs::write(dir.path().join(settings::FILE), b"not json").unwrap();
+    let again = start(dir.path(), &post);
+    assert_eq!(again.copy_owed(), None);
+    again.set_mode(Mode::Never).unwrap();
+    assert_eq!(again.copy_owed().map(|owed| owed.mode), Some(Mode::Never));
+}
+
+#[test]
 fn the_post_goes_to_the_dsns_endpoint_with_its_auth_and_what_is_not_a_200_is_an_error() {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

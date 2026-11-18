@@ -276,15 +276,17 @@ impl Reporter {
                 self.open.store(false, Ordering::SeqCst);
             }
             // The mode it was, the write and the owing under one hold: two changes at once cannot both see the same "before".
-            let (kept, changed) = {
+            let (kept, changed, resolved) = {
                 let mut settings = self.settings.lock().unwrap_or_else(PoisonError::into_inner);
-                let previous = settings.mode();
+                let (previous, unknown) = (settings.mode(), settings.unknown());
                 let kept = settings.set_mode(mode);
                 let changed = kept.is_ok() && previous != mode;
                 if changed {
                     self.owe_copy(|copy| copy.owe());
                 }
-                (kept, changed)
+                // A choice saved over a setting that could not be read: what was owed and held back can go now.
+                let resolved = kept.is_ok() && unknown;
+                (kept, changed, resolved)
             };
             match mode {
                 Mode::Never => self.erase(),
@@ -293,7 +295,7 @@ impl Reporter {
                 }
                 Mode::Auto => {}
             }
-            if changed {
+            if changed || resolved {
                 self.tell_copier();
             }
             kept
@@ -332,12 +334,14 @@ impl Reporter {
 
     /// A copy of the switch is owed to the core the app installed: the person's choice as it is now (what is sent is always the
     /// reporter's mode at the time of sending: the latest wins), or `None` when nothing is owed, the app did not install the
-    /// core, or what is known of it could not be read.
+    /// core, what is known of it could not be read, or **the setting could not be read**: then the mode is `never` only as a
+    /// precaution, not the person's choice, so nothing is sent and the owed bit stays until a choice is saved.
     pub fn copy_owed(&self) -> Option<Owed> {
         contained("copy-owed", || {
             let settings = self.settings.lock().unwrap_or_else(PoisonError::into_inner);
             let copy = self.copy.lock().unwrap_or_else(PoisonError::into_inner);
-            copy.owed().then(|| Owed { mode: settings.mode(), generation: self.owings.load(Ordering::SeqCst) })
+            (copy.owed() && !settings.unknown())
+                .then(|| Owed { mode: settings.mode(), generation: self.owings.load(Ordering::SeqCst) })
         })
         .flatten()
     }

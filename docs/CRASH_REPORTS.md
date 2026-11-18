@@ -114,7 +114,10 @@ retry*: the app's choice, still owed, wins.
 
 A core the person installed by hand (`npx sidevoice install`) is not the app's: no file, nothing owed, nothing copied. A file
 that is there but cannot be read or understood is unknown: nothing is copied and nothing is written over it (a downgraded value
-would clear a marker that may have been there); only the app's own install, which knows what it did, replaces it.
+would clear a marker that may have been there); only the app's own install, which knows what it did, replaces it. And while the
+**setting** cannot be read (the mode is "never" for the run only as a precaution, not the person's choice: `Settings::unknown`),
+`Reporter::copy_owed` answers nothing: no `{"send": false}` is sent that a 200 would settle, and the owed bit stays as it was
+until the person makes a choice that is saved, which tells the copier and sends that choice.
 
 ## Never breaks the app
 
