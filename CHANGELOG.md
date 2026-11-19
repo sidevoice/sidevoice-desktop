@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.6.0...v0.6.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **call:** log page loads, hang-ups and web view termination; no meters to a hidden page ([#543](https://github.com/sidevoice/sidevoice-desktop/issues/543)) ([85c26a3](https://github.com/sidevoice/sidevoice-desktop/commit/85c26a39e8db4ca450eba0655182fdfe5a4932a2))
+
 ## [0.6.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.5.1...v0.6.0) (2026-11-19)
 
 
