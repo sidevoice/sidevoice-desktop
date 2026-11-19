@@ -1,5 +1,4 @@
 //! The only place the mobile app tells one OS from another.
-#[cfg(target_os = "ios")]
 pub mod app_activity;
 pub mod app_files;
 pub mod audio_input;

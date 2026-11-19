@@ -514,13 +514,8 @@ fn run_app() {
     let pages = Pages::default();
     let events = pages.clone();
     let builder = tauri::Builder::default();
-    // iOS ends the web view's own process (memory pressure, a crash) while the app lives on: the page is blank or reloads,
-    // and a reload ends the call (`call::RoomCall::page_changed`). The system says so here, and nowhere else; only logged
-    // (sidevoice-desktop#541).
-    #[cfg(target_os = "ios")]
-    let builder = builder.on_web_content_process_terminate(|_webview| {
-        tracing::warn!("the web view's content process was terminated by the system");
-    });
+    // The system ending the web view's own process is logged where it says so (`platform::webview`).
+    let builder = platform::webview::watch_termination(builder);
     builder
         .plugin(sidevoice_mobile_plugin::init())
         // The camera that scans the pairing code (`host.codeScanner`): the page asks for its permission and a scan through
@@ -616,16 +611,8 @@ fn run_app() {
             // The system taking the audio away (a phone call, an alarm) pauses it; iOS tells the app here, Android through the
             // call's service.
             call::watch_interruptions(&handle, phone);
-            // iOS: the page draws while the app is active (Control Center, Siri and alerts resign it without leaving the foreground).
-            #[cfg(target_os = "ios")]
-            {
-                let active_app = handle.clone();
-                platform::app_activity::observe(Arc::new(move |active| {
-                    if let Some(host) = active_app.try_state::<AppHost>() {
-                        host.set_page_shown(active);
-                    }
-                }));
-            }
+            // The page draws while the app is active (Control Center, Siri and alerts resign it without leaving the foreground).
+            platform::app_activity::observe(&handle);
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
                 // The page's console warnings and errors, uncaught errors and unhandled rejections, into the app's log (as
@@ -705,22 +692,8 @@ fn run_app() {
                     }
                 }
             }
-            // The page can draw only while the activity is in the foreground: Android pauses it (the window's `Suspended`, the
-            // activity's onPause) and resumes it (`Resumed`, onResume), and the call's meters handed to a paused one would queue
-            // in the app (`AppHost::set_page_shown`). Never the window's focus: it is lost to split screen, the notification
-            // shade and a permission dialog while the page is on screen. iOS says it by the application's own notifications
-            // (`platform::app_activity`, set up with the app), not by these events.
-            #[cfg(target_os = "android")]
-            if let tauri::RunEvent::WindowEvent { event, .. } = &event {
-                let shown = match event {
-                    tauri::WindowEvent::Suspended => Some(false),
-                    tauri::WindowEvent::Resumed => Some(true),
-                    _ => None,
-                };
-                if let (Some(shown), Some(host)) = (shown, app.try_state::<AppHost>()) {
-                    host.set_page_shown(shown);
-                }
-            }
+            // The page draws only while the app is active, where the system says so by the run events.
+            platform::app_activity::follow(app, &event);
             // Quitting: the calls stop and every model and audio device is let go, bounded.
             if let tauri::RunEvent::Exit = event {
                 let deadline = std::time::Instant::now() + RELEASE_LIMIT;
