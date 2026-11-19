@@ -404,6 +404,22 @@
     });
   }
 
+  /** The app's own log, read in pages: sidevoice-web's `AppLogBridge`, onto the `app_log_read` command (docs/BRIDGE.md -> "The app
+   *  log"). `read({after?, limit?, wait?})` answers `{lines, cursor, more}`; it rejects `{key, message}` (`log.request_invalid`,
+   *  `log.cursor_expired`, `log.unreadable`). Only the options the page gave are sent: the app has the defaults. */
+  function appLog() {
+    return Object.freeze({
+      read: (options) => {
+        const { after, limit, wait } = options && typeof options === "object" ? options : {};
+        return call("app_log_read", {
+          ...(after !== undefined ? { after } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+          ...(wait !== undefined ? { wait } : {}),
+        });
+      },
+    });
+  }
+
   /** The floating card's settings the app keeps: sidevoice-web's `CallControlsBridge`, onto the `call_controls_settings`
    *  command (docs/BRIDGE.md → "The call controls settings"). */
   function callControls() {
@@ -577,6 +593,8 @@
        *  hidden behind the floating card is not. `false` where the system tells the app nothing. */
       screen: Object.freeze({ locked: () => call("screen_locked").then((locked) => locked === true) }),
       callControls: callControls(),
+      // The app's own log, for the page's log viewer (`app_log_read`, granted to the room window alone).
+      appLog: appLog(),
       // Only in a nightly or a dev build: the developer options (docs/BRIDGE.md -> "The developer options").
       ...(debugOptions ? { debug: debugOptions } : {}),
       // Only in a release or a nightly that can update itself.

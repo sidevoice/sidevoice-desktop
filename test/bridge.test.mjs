@@ -1408,11 +1408,11 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "crashReports", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset", "screen", "shortcuts"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["appLog", "build", "callControls", "crashReports", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset", "screen", "shortcuts"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, true, true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "crashReports", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "screen", "shortcuts", "updater", "voice"]);
+  assert.deepEqual(Object.keys(api.host).sort(), ["appLog", "build", "callControls", "crashReports", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "screen", "shortcuts", "updater", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
@@ -1975,4 +1975,25 @@ test("host.debug.set goes to the debug_options command and each switch follows w
   win.__TAURI_INTERNALS__.invoke = () => Promise.resolve({ available: all.available, inspectable: false, compositingBorders: false, repaintCounters: false });
   await debug.set("compositingBorders", true);
   assert.equal(debug.compositingBorders, false);
+});
+
+test("host.appLog.read goes to app_log_read with only the options the page gave, and passes the page and the refusals through", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const page = { lines: [{ id: "1", text: "a" }], cursor: "c1", more: false };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, plain(args)]);
+    return args && args.after === "gone" ? Promise.reject({ key: "log.cursor_expired", message: "m" }) : Promise.resolve(page);
+  };
+  const appLog = install(win, ORIGIN, null, false, false, false, { channel: "dev", version: "0.4.0" }).host.appLog;
+  assert.ok(Object.isFrozen(appLog));
+  assert.deepEqual(await appLog.read({ limit: 100 }), page);
+  assert.deepEqual(await appLog.read({ after: "c1", limit: 1000, wait: 5 }), page);
+  assert.deepEqual(await appLog.read(), page);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "app_log_read").map(([, args]) => args), [
+    { limit: 100 },
+    { after: "c1", limit: 1000, wait: 5 },
+    {},
+  ]);
+  await assert.rejects(appLog.read({ after: "gone" }), (e) => e.key === "log.cursor_expired");
 });
