@@ -596,6 +596,15 @@ impl RoomCall {
     /// in order with what the new page reports after it.
     pub fn page_changed(&self, page: u64) {
         self.then(move |room| {
+            // A call live on the page before ends here without a word of the person's: say it, with the page's numbers.
+            if room.state.joined || room.holding.is_some() {
+                tracing::warn!(
+                    reason = "page_load",
+                    from_page = room.page,
+                    to_page = page,
+                    "a page load started during a live call; the call ends"
+                );
+            }
             room.page = page;
             room.state = CallState::default();
             room.mic_disabled = false;
@@ -1280,7 +1289,7 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             if !mine(room) {
                 return; // an older service's end: the call it was for is over already
             }
-            tracing::info!(?reason, "the call was hung up by the service");
+            tracing::warn!(?reason, page, "the call was hung up by the service");
             // The page first, so that it has the hang-up before what the stopped calls tell it.
             run_on_page(
                 &room.app,

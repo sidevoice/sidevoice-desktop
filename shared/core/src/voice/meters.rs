@@ -6,6 +6,10 @@
 //! - the level, when its percent changes (the page draws it in whole percents: `--mic-fill`, the card's wave);
 //! - the output level, unless it is silence again: the first 0 closes the mouth, the next ones change nothing. A level
 //!   that sounds goes every time, so the page's "no sample for 300 ms is silence" still holds while a reply plays.
+//!
+//! None goes while the page is hidden (the app in the background, the screen locked): the system suspends the page then,
+//! and a script handed to a suspended web view can only queue in the app (sidevoice-desktop#541). The first level after
+//! the page is shown again goes whatever it is, so what it draws is the current one.
 
 #[cfg(test)]
 mod tests;
@@ -18,14 +22,23 @@ pub struct Meters {
 }
 
 impl Meters {
-    /// Whether the microphone's level `value` goes to the page: its percent is not the last one sent.
-    pub fn level(&mut self, value: f32) -> bool {
+    /// Whether the microphone's level `value` goes to the page: it is shown, and its percent is not the last one sent.
+    pub fn level(&mut self, value: f32, shown: bool) -> bool {
+        if !shown {
+            self.level = None;
+            return false;
+        }
         let percent = (value.clamp(0.0, 1.0) * 100.0).round() as u8;
         self.level.replace(percent) != Some(percent)
     }
 
-    /// Whether the reply's output level `value` goes to the page: anything but a silence that follows a silence.
-    pub fn playback(&mut self, value: f32) -> bool {
+    /// Whether the reply's output level `value` goes to the page: it is shown, and it is anything but a silence that follows
+    /// a silence.
+    pub fn playback(&mut self, value: f32, shown: bool) -> bool {
+        if !shown {
+            self.playback_silent = false;
+            return false;
+        }
         let silent = value.is_nan() || value <= 0.0;
         let was = std::mem::replace(&mut self.playback_silent, silent);
         !(silent && was)

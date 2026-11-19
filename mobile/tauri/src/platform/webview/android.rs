@@ -10,4 +10,8 @@ impl Os for Native {
     fn layout(_webview: &PlatformWebview) -> Option<String> {
         None
     }
+
+    fn watch_termination(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+        builder
+    }
 }

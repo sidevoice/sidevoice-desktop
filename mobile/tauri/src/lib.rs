@@ -513,7 +513,10 @@ fn run_app() {
     // Where the call's events go: over the channel the page opens (the shared plugin's `voice_events`).
     let pages = Pages::default();
     let events = pages.clone();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // The system ending the web view's own process is logged where it says so (`platform::webview`).
+    let builder = platform::webview::watch_termination(builder);
+    builder
         .plugin(sidevoice_mobile_plugin::init())
         // The camera that scans the pairing code (`host.codeScanner`): the page asks for its permission and a scan through
         // the plugin's own commands, which the window is granted one by one (capabilities/main.json).
@@ -608,6 +611,8 @@ fn run_app() {
             // The system taking the audio away (a phone call, an alarm) pauses it; iOS tells the app here, Android through the
             // call's service.
             call::watch_interruptions(&handle, phone);
+            // The page draws while the app is active (Control Center, Siri and alerts resign it without leaving the foreground).
+            platform::app_activity::observe(&handle);
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
                 // The page's console warnings and errors, uncaught errors and unhandled rejections, into the app's log (as
@@ -652,6 +657,8 @@ fn run_app() {
                         });
                     }
                     if payload.event() == PageLoadEvent::Started {
+                        // The call's own line (`RoomCall::page_changed`) says whether one was live.
+                        tracing::info!("a page load started");
                         if let Some(host) = page_app.try_state::<AppHost>() {
                             // A page that loads anew is in no call until it says so: the room's call of the one before
                             // ends, queued now, before anything the new page reports (`call::RoomCall`).
@@ -685,6 +692,8 @@ fn run_app() {
                     }
                 }
             }
+            // The page draws only while the app is active, where the system says so by the run events.
+            platform::app_activity::follow(app, &event);
             // Quitting: the calls stop and every model and audio device is let go, bounded.
             if let tauri::RunEvent::Exit = event {
                 let deadline = std::time::Instant::now() + RELEASE_LIMIT;

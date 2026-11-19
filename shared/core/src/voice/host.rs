@@ -159,6 +159,9 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     pub active: Arc<ActiveCalls>,
     /// What the calls play, held back while the system has the audio taken away (`pause_playback`).
     pause: pause::PlaybackPause,
+    /// Whether the page can draw the meters now: false while the app is in the background or its screen is locked, when the
+    /// system has suspended the page and a level handed to it would only queue (`set_page_shown`).
+    page_shown: Arc<AtomicBool>,
 }
 
 pub struct CallLane<P> {
@@ -244,6 +247,7 @@ impl<A: LaneAudio> VoiceState<A> {
             closing: AtomicBool::new(false),
             active: Arc::default(),
             pause: pause::PlaybackPause::default(),
+            page_shown: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -425,7 +429,15 @@ impl<A: LaneAudio> VoiceState<A> {
         };
         let (call, events) = VoiceCall::new(io, setup);
         call.mute(lane.muted.load(Ordering::SeqCst));
-        forward(page, key.to_owned(), events, Arc::clone(&lane.lifecycle), Arc::clone(&lane.released), ended);
+        forward(
+            page,
+            key.to_owned(),
+            events,
+            Arc::clone(&lane.lifecycle),
+            Arc::clone(&lane.released),
+            ended,
+            Arc::clone(&self.page_shown),
+        );
         call.start(StartOptions { take });
         *running = Some(Running { call, applied });
         Ok(())
@@ -541,6 +553,14 @@ impl<A: LaneAudio> VoiceState<A> {
     pub fn pause_playback(&self, paused: bool) {
         self.devices.hold(paused);
         self.pause.set(paused);
+    }
+
+    /// Whether the page can draw: the meters' levels go to it only while it can, and the call goes on either way. Hidden
+    /// (backgrounded, screen locked) the levels are dropped, not queued; shown again, the next one goes whatever it is.
+    pub fn set_page_shown(&self, shown: bool) {
+        if self.page_shown.swap(shown, Ordering::SeqCst) != shown {
+            tracing::info!(shown, "the page's meters were switched");
+        }
     }
 
     /// Kept for the call from the lane's creation on, and applied to it once it exists.
@@ -902,6 +922,7 @@ fn forward(
     lifecycle: Arc<Mutex<Lifecycle>>,
     released: Arc<Mutex<bool>>,
     ended: Ended,
+    page_shown: Arc<AtomicBool>,
 ) {
     spawn_in_span(async move {
         let mut meters = Meters::default();
@@ -909,8 +930,8 @@ fn forward(
         let mut first_idle = true;
         while let Some(event) = events.next().await {
             let wanted = match &event {
-                VoiceEvent::Level(level) => meters.level(*level),
-                VoiceEvent::PlaybackLevel(level) => meters.playback(*level),
+                VoiceEvent::Level(level) => meters.level(*level, page_shown.load(Ordering::SeqCst)),
+                VoiceEvent::PlaybackLevel(level) => meters.playback(*level, page_shown.load(Ordering::SeqCst)),
                 _ => true,
             };
             if !wanted {

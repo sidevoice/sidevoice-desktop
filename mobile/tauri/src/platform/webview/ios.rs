@@ -148,4 +148,10 @@ impl Os for Native {
             insets.right,
         ))
     }
+
+    fn watch_termination(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+        builder.on_web_content_process_terminate(|_webview| {
+            tracing::warn!("the web view's content process was terminated by the system");
+        })
+    }
 }
