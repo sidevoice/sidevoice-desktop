@@ -1095,10 +1095,6 @@ impl Room {
             tracing::info!(target: "intent", "call: hang-up: no call");
             return;
         }
-        tracing::warn!(
-            reason = "surface",
-            "the call was hung up natively from a surface"
-        );
         self.hung_up = Some(self.reported_since);
         self.state.joined = false;
         self.hold(false, None);

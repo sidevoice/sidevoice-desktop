@@ -616,6 +616,16 @@ fn run_app() {
             // The system taking the audio away (a phone call, an alarm) pauses it; iOS tells the app here, Android through the
             // call's service.
             call::watch_interruptions(&handle, phone);
+            // iOS: the page draws while the app is active (Control Center, Siri and alerts resign it without leaving the foreground).
+            #[cfg(target_os = "ios")]
+            {
+                let active_app = handle.clone();
+                platform::app_activity::observe(Arc::new(move |active| {
+                    if let Some(host) = active_app.try_state::<AppHost>() {
+                        host.set_page_shown(active);
+                    }
+                }));
+            }
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
                 // The page's console warnings and errors, uncaught errors and unhandled rejections, into the app's log (as
@@ -695,13 +705,14 @@ fn run_app() {
                     }
                 }
             }
-            // The page can draw only while the app is active: iOS suspends the web view in the background and with the screen
-            // locked, and the call's meters handed to it then would queue in the app (`AppHost::set_page_shown`). The window's
-            // focus and the app's suspend and resume both say it; a mobile app has the one window.
-            #[cfg(any(target_os = "ios", target_os = "android"))]
+            // The page can draw only while the activity is in the foreground: Android pauses it (the window's `Suspended`, the
+            // activity's onPause) and resumes it (`Resumed`, onResume), and the call's meters handed to a paused one would queue
+            // in the app (`AppHost::set_page_shown`). Never the window's focus: it is lost to split screen, the notification
+            // shade and a permission dialog while the page is on screen. iOS says it by the application's own notifications
+            // (`platform::app_activity`, set up with the app), not by these events.
+            #[cfg(target_os = "android")]
             if let tauri::RunEvent::WindowEvent { event, .. } = &event {
                 let shown = match event {
-                    tauri::WindowEvent::Focused(focused) => Some(*focused),
                     tauri::WindowEvent::Suspended => Some(false),
                     tauri::WindowEvent::Resumed => Some(true),
                     _ => None,
