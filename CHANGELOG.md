@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.5.1...v0.6.0) (2026-11-19)
+
+
+### Features
+
+* **crash:** each app sends its own crash reports to Sentry, on by default ([#530](https://github.com/sidevoice/sidevoice-desktop/issues/530)) ([d0dd506](https://github.com/sidevoice/sidevoice-desktop/commit/d0dd506676173cc81b7b63b63a60e132abf10618))
+* **crash:** send handled errors to Sentry under the crash-report switch ([#536](https://github.com/sidevoice/sidevoice-desktop/issues/536)) ([b18b59e](https://github.com/sidevoice/sidevoice-desktop/commit/b18b59ecb54918bab6dea1573e2107cdf5ea68ba))
+* **logging:** adopt tracing in the desktop app per the shared guideline ([#524](https://github.com/sidevoice/sidevoice-desktop/issues/524)) ([ccf3466](https://github.com/sidevoice/sidevoice-desktop/commit/ccf34668f108fc45910778434dbf07c502611602))
+* **logging:** adopt tracing in the mobile app per the shared guideline ([#526](https://github.com/sidevoice/sidevoice-desktop/issues/526)) ([d8a6a04](https://github.com/sidevoice/sidevoice-desktop/commit/d8a6a041350f12bb278a0beec4bfb991b34800f8))
+* **logs:** read the app's own log in pages from the room page ([#535](https://github.com/sidevoice/sidevoice-desktop/issues/535)) ([429a12c](https://github.com/sidevoice/sidevoice-desktop/commit/429a12c94bad1bbf51f301861bf1891186dc0c60))
+
+
+### Bug Fixes
+
+* **android:** stop CallCardRenderTest crashing the test JVM (SIGSEGV) ([#533](https://github.com/sidevoice/sidevoice-desktop/issues/533)) ([7e7af4d](https://github.com/sidevoice/sidevoice-desktop/commit/7e7af4d63c97fadedeaafd15fd02edeb426601d3))
+* **logging:** enforce the webview log allowlist on the Rust side ([#534](https://github.com/sidevoice/sidevoice-desktop/issues/534)) ([1ffff8f](https://github.com/sidevoice/sidevoice-desktop/commit/1ffff8f0faa334c3b243845e81c069be26a443d9))
+
 ## [0.5.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.5.0...v0.5.1) (2026-11-13)
 
 
