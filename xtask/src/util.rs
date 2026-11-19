@@ -652,14 +652,25 @@ impl TauriBuild<'_> {
     /// The build, the split of the debug files off its binary, then the bundle. `decorate` adds what a step's command needs
     /// (the signing environment, a flag of the host's), for both.
     pub fn run(&self, decorate: impl Fn(Cmd) -> Cmd) -> Result<()> {
-        decorate(self.command(self.build_args())?).run()?;
+        // A release or a nightly names no directory of this machine in its panic locations (remap.rs); a dev build keeps
+        // them, except on a CI runner (nobody debugs there): a pull request's build then takes the same flags and scan as the
+        // nightly's and fails here, not at the first nightly.
+        let remapped = self.channel != Channel::Dev || in_ci();
+        let cargo_args =
+            if remapped { crate::remap::cargo_args(&repo(), &repo().join("desktop"))? } else { Vec::new() };
+        decorate(self.command(self.build_args(), cargo_args)?).run()?;
         crate::platform::debug_files::split(&self.release_dir())?;
-        decorate(self.command(self.bundle_args())?).run()
+        if remapped {
+            let binary = sidevoice_platform::target::exe_name(crate::platform::debug_files::BINARY);
+            crate::remap::check(&self.release_dir().join(binary), &repo())?;
+        }
+        decorate(self.command(self.bundle_args(), Vec::new())?).run()
     }
 
     /// The command: the CLI's script run by Node (what `npx tauri` runs), for its channel; only a release or a nightly
-    /// sees the updater's key, and the app's build script is told the channel (and a nightly's commit and date).
-    fn command(&self, args: Vec<String>) -> Result<Cmd> {
+    /// sees the updater's key, and the app's build script is told the channel (and a nightly's commit and date). `cargo_args` go to the
+    /// cargo the CLI runs.
+    fn command(&self, args: Vec<String>, cargo_args: Vec<String>) -> Result<Cmd> {
         let mut cmd = Cmd::new("node").arg(repo().join("node_modules/@tauri-apps/cli/tauri.js")).args(args);
         if self.channel == Channel::Dev {
             cmd = cmd.env_remove("TAURI_SIGNING_PRIVATE_KEY").env_remove("TAURI_SIGNING_PRIVATE_KEY_PASSWORD");
@@ -674,6 +685,10 @@ impl TauriBuild<'_> {
         };
         if let Some(config) = channel_config(self.channel, &version) {
             cmd = cmd.args(["--config", config.as_str()]);
+        }
+        // What follows `--` is cargo's own.
+        if !cargo_args.is_empty() {
+            cmd = cmd.arg("--").args(cargo_args);
         }
         Ok(cmd
             .env("SIDEVOICE_BUILD_CHANNEL", self.channel.name())
