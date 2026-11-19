@@ -9,6 +9,8 @@ pub mod packaging;
 pub mod platform;
 pub mod platform_guard;
 pub mod publish;
+// One file for three repositories, each with its own rustfmt settings: not reformatted.
+#[rustfmt::skip]
 pub mod remap;
 pub mod sentry;
 pub mod util;

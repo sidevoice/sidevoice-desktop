@@ -652,14 +652,17 @@ impl TauriBuild<'_> {
     /// The build, the split of the debug files off its binary, then the bundle. `decorate` adds what a step's command needs
     /// (the signing environment, a flag of the host's), for both.
     pub fn run(&self, decorate: impl Fn(Cmd) -> Cmd) -> Result<()> {
-        // A release or a nightly names no directory of this machine in its panic locations (remap.rs); a dev build keeps them.
-        let remapped = self.channel != Channel::Dev;
-        let cargo_args = if remapped { crate::remap::cargo_args()? } else { Vec::new() };
+        // A release or a nightly names no directory of this machine in its panic locations (remap.rs); a dev build keeps
+        // them, except on a CI runner (nobody debugs there): a pull request's build then takes the same flags and scan as the
+        // nightly's and fails here, not at the first nightly.
+        let remapped = self.channel != Channel::Dev || in_ci();
+        let cargo_args =
+            if remapped { crate::remap::cargo_args(&repo(), &repo().join("desktop"))? } else { Vec::new() };
         decorate(self.command(self.build_args(), cargo_args)?).run()?;
         crate::platform::debug_files::split(&self.release_dir())?;
         if remapped {
             let binary = sidevoice_platform::target::exe_name(crate::platform::debug_files::BINARY);
-            crate::remap::check(&self.release_dir().join(binary))?;
+            crate::remap::check(&self.release_dir().join(binary), &repo())?;
         }
         decorate(self.command(self.bundle_args(), Vec::new())?).run()
     }
