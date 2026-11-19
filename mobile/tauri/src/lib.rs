@@ -513,7 +513,15 @@ fn run_app() {
     // Where the call's events go: over the channel the page opens (the shared plugin's `voice_events`).
     let pages = Pages::default();
     let events = pages.clone();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // iOS ends the web view's own process (memory pressure, a crash) while the app lives on: the page is blank or reloads,
+    // and a reload ends the call (`call::RoomCall::page_changed`). The system says so here, and nowhere else; only logged
+    // (sidevoice-desktop#541).
+    #[cfg(target_os = "ios")]
+    let builder = builder.on_web_content_process_terminate(|_webview| {
+        tracing::warn!("the web view's content process was terminated by the system");
+    });
+    builder
         .plugin(sidevoice_mobile_plugin::init())
         // The camera that scans the pairing code (`host.codeScanner`): the page asks for its permission and a scan through
         // the plugin's own commands, which the window is granted one by one (capabilities/main.json).
@@ -652,6 +660,8 @@ fn run_app() {
                         });
                     }
                     if payload.event() == PageLoadEvent::Started {
+                        // The call's own line (`RoomCall::page_changed`) says whether one was live.
+                        tracing::info!("a page load started");
                         if let Some(host) = page_app.try_state::<AppHost>() {
                             // A page that loads anew is in no call until it says so: the room's call of the one before
                             // ends, queued now, before anything the new page reports (`call::RoomCall`).
@@ -683,6 +693,21 @@ fn run_app() {
                     if let Some(room) = app.try_state::<call::RoomCall>() {
                         room.surface_action(action);
                     }
+                }
+            }
+            // The page can draw only while the app is active: iOS suspends the web view in the background and with the screen
+            // locked, and the call's meters handed to it then would queue in the app (`AppHost::set_page_shown`). The window's
+            // focus and the app's suspend and resume both say it; a mobile app has the one window.
+            #[cfg(any(target_os = "ios", target_os = "android"))]
+            if let tauri::RunEvent::WindowEvent { event, .. } = &event {
+                let shown = match event {
+                    tauri::WindowEvent::Focused(focused) => Some(*focused),
+                    tauri::WindowEvent::Suspended => Some(false),
+                    tauri::WindowEvent::Resumed => Some(true),
+                    _ => None,
+                };
+                if let (Some(shown), Some(host)) = (shown, app.try_state::<AppHost>()) {
+                    host.set_page_shown(shown);
                 }
             }
             // Quitting: the calls stop and every model and audio device is let go, bounded.

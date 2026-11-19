@@ -231,6 +231,12 @@ impl<A: LaneAudio> AppHost<A> {
         PageGeneration(self.inner.generation.load(Ordering::SeqCst))
     }
 
+    /// The page can draw (`true`) or cannot (`false`: the app is in the background, the screen is locked): the meters'
+    /// levels go to it only while it can; the call itself is not touched.
+    pub fn set_page_shown(&self, shown: bool) {
+        self.inner.voice.set_page_shown(shown);
+    }
+
     /// Pauses (`true`) or resumes what the calls play, for as long as the system has the audio taken away (a phone call, an
     /// alarm): what is not yet with the speaker is held, in order, and played on resuming. The microphone is not touched
     /// (the page's mute is).
