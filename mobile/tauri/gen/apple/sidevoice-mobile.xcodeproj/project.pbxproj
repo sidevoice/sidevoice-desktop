@@ -131,6 +131,7 @@
 		749529AE2409B9FB50B39312 /* platform.rs */ = {isa = PBXFileReference; path = platform.rs; sourceTree = "<group>"; };
 		7717DC1AC675EE5C22703A85 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		78DA3D5C4ABD3C61CB5AAB0F /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
+		7AB2047CB0607D031DD6DAC3 /* app_activity.rs */ = {isa = PBXFileReference; path = app_activity.rs; sourceTree = "<group>"; };
 		7D0D2F377196B00F1647880E /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		851D65E8B65D3DFF2188B5A7 /* pt */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pt; path = pt.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		8609C7142CEC5C4009BB8B54 /* surface.rs */ = {isa = PBXFileReference; path = surface.rs; sourceTree = "<group>"; };
@@ -455,6 +456,7 @@
 		C8A96FD8F714BFFEBAC54283 /* platform */ = {
 			isa = PBXGroup;
 			children = (
+				7AB2047CB0607D031DD6DAC3 /* app_activity.rs */,
 				58C2E83A04B6987A0D4453C7 /* app_files.rs */,
 				283E9FABA170116B2849F571 /* audio_input.rs */,
 				B129F4CBB75A235241D6CB33 /* audio_route_picker.rs */,
