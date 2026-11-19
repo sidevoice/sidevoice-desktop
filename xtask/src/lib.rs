@@ -9,6 +9,7 @@ pub mod packaging;
 pub mod platform;
 pub mod platform_guard;
 pub mod publish;
+pub mod remap;
 pub mod sentry;
 pub mod util;
 
