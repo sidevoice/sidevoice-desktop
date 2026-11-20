@@ -519,6 +519,8 @@ pub struct Room {
     rejoin: Rejoin,
     /// The call was given up because the page kept going (`RoomCall::rejoin_give_up`): the next page ready is told, once.
     rejoin_stopped: bool,
+    /// The rejoin of this page was aborted (`abort_rejoin`): its reports of a call joined are not one until it reports none.
+    rejoin_aborted: bool,
 }
 
 /// The ids of the stills `surface` draws.
@@ -613,6 +615,7 @@ impl RoomCall {
             conversation: None,
             rejoin: Rejoin::default(),
             rejoin_stopped: false,
+            rejoin_aborted: false,
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -683,6 +686,7 @@ impl RoomCall {
             room.state = CallState::default();
             room.conversation = None;
             room.mic_disabled = false;
+            room.rejoin_aborted = false;
             room.hung_up = None;
             room.reported_since = None;
             room.muting = None;
@@ -723,6 +727,7 @@ impl RoomCall {
             if room.page == page {
                 let mut state = state;
                 state.joined = after_hang_up(&mut room.hung_up, state.joined, since);
+                state.joined = after_abort(&mut room.rejoin_aborted, state.joined);
                 room.conversation = conversation;
                 // A page that loads after one that was lost in a call is the one to join it again.
                 let at = Instant::now();
@@ -1151,7 +1156,8 @@ impl Room {
 
     /// The person ended the call (or it was given up) while the page was joining it again: that join is told to stop, or the
     /// page's report of it, with another `since`, would start the call again (`after_hang_up`).
-    fn abort_rejoin(&self) {
+    fn abort_rejoin(&mut self) {
+        self.rejoin_aborted = true;
         run_on_page(
             &self.app,
             serde_json::json!({ "command": "rejoin-abort", "page": self.page }),
@@ -1395,8 +1401,13 @@ impl Room {
                     ..self.state.clone()
                 }
             };
-        // The call is the person's through the gap, so a headset's press can still hang it up (Android without Telecom).
-        if self.holding.is_some() && self.rejoin.waiting() {
+        // The call is the person's through the gap, so a headset's press can still hang it up: only where the app's own media
+        // controls carry the call (Android without Telecom), not where the system's call or the Live Activity replaces them.
+        if self.holding.is_some()
+            && self.rejoin.waiting()
+            && !self.system
+            && !call_replaces_media_controls(false)
+        {
             state.joined = true;
         }
         media_controls::update(&self.app, &state);
@@ -1711,6 +1722,19 @@ fn after_hang_up(hung_up: &mut Option<Option<f64>>, joined: bool, since: Option<
             joined
         }
     }
+}
+
+/// Whether the page's report holds a call after its rejoin was aborted: not while it reports one joined (its join was queued
+/// before it heard the abort, and its mark is new, so `after_hang_up` would take it for another call); its report of none is its
+/// own again.
+fn after_abort(aborted: &mut bool, joined: bool) -> bool {
+    if !*aborted {
+        return joined;
+    }
+    if !joined {
+        *aborted = false;
+    }
+    false
 }
 
 /// Runs one of the shared commands on the room through the page's `run`: `request` is `{command, …}` (`hang-up`,
@@ -2201,6 +2225,28 @@ mod give_up_tests {
         assert!(
             rejoin.current().is_none(),
             "so a late rejoin command is not sent"
+        );
+    }
+}
+
+#[cfg(test)]
+mod abort_tests {
+    use super::*;
+
+    #[test]
+    fn a_joined_report_queued_before_the_abort_is_not_a_call_whatever_its_mark() {
+        let mut aborted = true;
+        assert!(
+            !after_abort(&mut aborted, true),
+            "the rejoining page's join, with a new mark"
+        );
+        assert!(aborted, "and the next one too");
+        assert!(!after_abort(&mut aborted, true));
+        assert!(!after_abort(&mut aborted, false));
+        assert!(!aborted, "its report of none is its own again");
+        assert!(
+            after_abort(&mut aborted, true),
+            "a call joined after that is the person's"
         );
     }
 }
