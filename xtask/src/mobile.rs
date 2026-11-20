@@ -364,8 +364,10 @@ pub fn bundle(version_code: &str) -> Result<()> {
     mkdir(&repo().join("dist"))?;
     let libs = AppBuildLibs::hold("android", &ANDROID_TARGETS)?;
     let config = format!(r#"{{"bundle":{{"android":{{"versionCode":{code}}}}}}}"#);
-    build_tauri(&["android", "build", "--aab", "--target", "aarch64", "--target", "armv7", "--ci", "--config", &config])?
-        .run()?;
+    build_tauri(&[
+        "android", "build", "--aab", "--target", "aarch64", "--target", "armv7", "--ci", "--config", &config,
+    ])?
+    .run()?;
     drop(libs);
     let aab = repo().join("mobile/tauri/gen/android").join(UNSIGNED_AAB);
     fs::copy(&aab, unsigned_aab()).map_err(|e| format!("{}: {e}", aab.display()))?;
