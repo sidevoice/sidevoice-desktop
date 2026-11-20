@@ -744,6 +744,7 @@ impl<A: LaneAudio> VoiceState<A> {
     /// from now on what the person finishes saying is kept for the next page, and nothing else is told to anyone. The lanes
     /// are still the old page's; `clear_older_than` ends them once the next page loads.
     pub async fn page_lost(&self) {
+        self.carry.open();
         let page = self.page.load(Ordering::SeqCst);
         for lane in self.calls.lock().await.values().filter(|lane| lane.page <= page) {
             lane.carrying.store(true, Ordering::SeqCst);

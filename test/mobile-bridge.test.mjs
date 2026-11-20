@@ -740,3 +740,16 @@ test("a page that lost a call the person did not end is told to join it again, w
   assert.equal(api.run({ command: "rejoin-stopped", page: 7 }), true);
   assert.equal(lost, 1);
 });
+
+test("a hang-up while the page joins the lost call again tells the page to stop that join", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: false }, mic: { enabled: true }, callCard: {} }), subscribe: () => () => {} } };
+  assert.equal(api.run({ command: "rejoin-abort", page: 7 }), false, "a page without the action cannot");
+  let aborted = 0;
+  win.sidevoiceActions.abortRejoin = () => { aborted += 1; };
+  assert.equal(api.run({ command: "rejoin-abort", page: 7 }), true);
+  assert.equal(aborted, 1);
+  assert.equal(api.run({ command: "rejoin-abort", page: 6 }), false, "another page's");
+});

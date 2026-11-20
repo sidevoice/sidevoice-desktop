@@ -1039,7 +1039,21 @@ impl Room {
                 None => Vec::new(),
             };
             tracing::info!(target: "intent", turns = turns.len(), "the rejoin carries what was said meanwhile");
-            run_on_page(&app, rejoin_request(page, conversation, &turns));
+            // Sent in order with the room's own jobs, and only if the loss is still waited for: a hang-up while the turns were
+            // collected has already told the page to stop (`abort_rejoin`), and this must not follow it.
+            if let Some(room) = app.try_state::<RoomCall>() {
+                let app = app.clone();
+                room.then(move |room| {
+                    if room.page == page
+                        && room
+                            .rejoin
+                            .current()
+                            .is_some_and(|(current, _)| current == id)
+                    {
+                        run_on_page(&app, rejoin_request(page, conversation, &turns));
+                    }
+                });
+            }
         });
     }
 
@@ -1130,8 +1144,18 @@ impl Room {
         if let Some(id) = self.rejoin.cancel() {
             tracing::info!(target: "intent", "the person ended the call while its page was away; no rejoin");
             self.carry_settle(id, "hang-up");
+            self.abort_rejoin();
         }
         self.sync_gap();
+    }
+
+    /// The person ended the call (or it was given up) while the page was joining it again: that join is told to stop, or the
+    /// page's report of it, with another `since`, would start the call again (`after_hang_up`).
+    fn abort_rejoin(&self) {
+        run_on_page(
+            &self.app,
+            serde_json::json!({ "command": "rejoin-abort", "page": self.page }),
+        );
     }
 
     /// The page keeps going (the app reloaded it too often): the call is given up and what was carried dropped, and the next
@@ -1139,9 +1163,14 @@ impl Room {
     fn give_up_lost_call(&mut self) {
         if let Some(id) = self.rejoin.cancel() {
             self.carry_settle(id, "reloads capped");
+            self.abort_rejoin();
         }
         self.carry_drop("reloads capped");
         self.rejoin_stopped = true;
+        // The give-up is a hang-up: the page that is up is not remembered as in a call by its next reload, nor is a late
+        // report of its rejoin taken for a call (`after_hang_up`).
+        self.hung_up = Some(self.reported_since);
+        self.state.joined = false;
         self.end_gap_call();
     }
 
@@ -1352,19 +1381,24 @@ impl Room {
             .app
             .try_state::<crate::bridge::headset::HeadsetSettings>()
             .is_some_and(|settings| settings.double_press_wanted(self.system));
-        let state = if self.holding.is_some() && self.system && call_replaces_media_controls(true) {
-            CallState {
-                ready: self.state.ready,
-                ..CallState::default()
-            }
-        } else {
-            CallState {
-                double_press_wanted: wanted,
-                // The call's audio session is active: Press to Mute's observer is added again then (`media_controls`).
-                record_active: self.cue_allowed(),
-                ..self.state.clone()
-            }
-        };
+        let mut state =
+            if self.holding.is_some() && self.system && call_replaces_media_controls(true) {
+                CallState {
+                    ready: self.state.ready,
+                    ..CallState::default()
+                }
+            } else {
+                CallState {
+                    double_press_wanted: wanted,
+                    // The call's audio session is active: Press to Mute's observer is added again then (`media_controls`).
+                    record_active: self.cue_allowed(),
+                    ..self.state.clone()
+                }
+            };
+        // The call is the person's through the gap, so a headset's press can still hang it up (Android without Telecom).
+        if self.holding.is_some() && self.rejoin.waiting() {
+            state.joined = true;
+        }
         media_controls::update(&self.app, &state);
     }
 
@@ -2125,6 +2159,48 @@ mod rejoin_tests {
         assert_eq!(
             request,
             serde_json::json!({ "command": "rejoin", "page": 7, "threadId": "node|thread", "turns": [] })
+        );
+    }
+}
+
+#[cfg(test)]
+mod give_up_tests {
+    use super::*;
+    use sidevoice_shared::rejoin::{Gone, Rejoin};
+
+    /// A give-up is a hang-up (`Room::give_up_lost_call` marks `hung_up` and no call joined): the next reload of the page that
+    /// rejoined in the meantime does not remember the call again.
+    #[test]
+    fn a_given_up_call_is_not_remembered_by_the_next_reload() {
+        let mut rejoin = Rejoin::default();
+        let mut hung_up = Some(None); // what the give-up leaves
+        let at = Instant::now();
+        // The page rejoining reports the call joined with its own mark: still the give-up's, until the abort.
+        assert!(!after_hang_up(&mut hung_up, true, None));
+        assert_eq!(
+            rejoin.page_gone(false, hung_up.is_some(), Some("t"), at),
+            Gone::Ended
+        );
+        assert!(!rejoin.waiting());
+    }
+
+    #[test]
+    fn a_hang_up_between_the_hand_and_the_join_ends_the_loss_the_page_was_told() {
+        let mut rejoin = Rejoin::default();
+        let at = Instant::now();
+        rejoin.page_gone(true, false, Some("t"), at);
+        assert!(matches!(
+            rejoin.page_reported(true, false, None, at),
+            sidevoice_shared::rejoin::Report::Hand { id: 1, .. }
+        ));
+        assert_eq!(
+            rejoin.cancel(),
+            Some(1),
+            "the hang-up forgets it, and the page is told to stop"
+        );
+        assert!(
+            rejoin.current().is_none(),
+            "so a late rejoin command is not sent"
         );
     }
 }

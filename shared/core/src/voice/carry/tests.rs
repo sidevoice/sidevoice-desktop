@@ -92,3 +92,20 @@ fn an_open_turn_is_waited_for_up_to_the_limit() {
         assert!(!open.settled(Duration::from_millis(60)).await, "it never ended");
     });
 }
+
+#[test]
+fn a_turn_finished_after_the_loss_was_settled_is_dropped_not_adopted_by_the_next_loss() {
+    let carry = Carry::default();
+    let t = Instant::now();
+    carry.bind(1, None);
+    carry.clear();
+    carry.keep(CarriedTurn::of(&finished("late", "x")).unwrap(), t);
+    carry.bind(2, None);
+    assert!(carry.peek(2, None, t).is_empty(), "the late turn of the ended call is not the next loss's");
+    // A turn kept between the web view ending and the loss being named is still its own.
+    carry.settle(2);
+    carry.open();
+    carry.keep(CarriedTurn::of(&finished("early", "y")).unwrap(), t);
+    carry.bind(3, None);
+    assert_eq!(carry.peek(3, None, t).len(), 1);
+}

@@ -51,6 +51,11 @@ static RELOADS: std::sync::Mutex<Reloads> = std::sync::Mutex::new(Reloads::new()
 fn reload(webview: &tauri::Webview) {
     if webview.reload().is_err() {
         tracing::error!("the web view could not be loaded again after its process ended");
+        // No page will load to be told of the loss and no `page_changed` will time it: the call is given up now, so that the
+        // service and the lanes do not outlive a page that never comes.
+        if let Some(room) = webview.app_handle().try_state::<call::RoomCall>() {
+            room.rejoin_give_up();
+        }
     }
 }
 

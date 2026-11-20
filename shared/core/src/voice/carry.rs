@@ -78,6 +78,9 @@ struct Held {
     turns: Vec<Kept>,
     /// The page loss the turns kept now belong to, and the conversation it was on (`rejoin::Rejoin`).
     loss: Option<(u64, Option<String>)>,
+    /// No loss is waited for and none is coming: a turn kept now with no loss is a late one of a call that is over (its lane
+    /// stops asynchronously), and is dropped instead of being adopted by the next loss. [`Carry::open`] ends it.
+    closed: bool,
 }
 
 /// The turns kept for the next page, by the page loss and the conversation they were said in: only that loss's rejoin, on that
@@ -92,8 +95,11 @@ impl Carry {
     /// Keeps `turn`, heard at `now`, for the loss bound now (or the next to be bound).
     pub fn keep(&self, turn: CarriedTurn, now: Instant) {
         let mut held = self.held.lock().unwrap();
-        held.turns.retain(|kept| now.saturating_duration_since(kept.at) < KEPT_FOR);
         let loss = held.loss.as_ref().map(|(id, _)| *id);
+        if loss.is_none() && held.closed {
+            return;
+        }
+        held.turns.retain(|kept| now.saturating_duration_since(kept.at) < KEPT_FOR);
         held.turns.push(Kept { at: now, loss, turn });
         let most = held.turns.len().saturating_sub(MOST);
         held.turns.drain(..most);
@@ -106,6 +112,12 @@ impl Carry {
             kept.loss = Some(id);
         }
         held.loss = Some((id, conversation));
+        held.closed = false;
+    }
+
+    /// A page is being lost (the web view ended): what is finished from now on, until [`Carry::bind`] names the loss, is its.
+    pub fn open(&self) {
+        self.held.lock().unwrap().closed = false;
     }
 
     /// The turns of loss `id` kept for `conversation` that are still the person's to say, oldest first, each with its age at `now`; kept until [`Carry::settle`], so that a page lost again before it joined is handed them again.
@@ -133,6 +145,7 @@ impl Carry {
         if held.loss.as_ref().is_some_and(|(bound, _)| *bound == id) {
             held.loss = None;
         }
+        held.closed = held.loss.is_none();
         before - held.turns.len()
     }
 
@@ -141,6 +154,7 @@ impl Carry {
     pub fn clear(&self) -> usize {
         let mut held = self.held.lock().unwrap();
         held.loss = None;
+        held.closed = true;
         std::mem::take(&mut held.turns).len()
     }
 }

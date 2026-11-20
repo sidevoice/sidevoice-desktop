@@ -126,6 +126,8 @@
         Promise.resolve(actions.rejoinCall({ threadId, turns })).catch(() => {});
         return true;
       },
+      // The person ended the call while this page was joining it again: the join stops (sidevoice-web `abortRejoin`).
+      "rejoin-abort": (_request, _state, actions) => typeof actions.abortRejoin === "function" && (actions.abortRejoin(), true),
       // The app gave the lost call up (its page kept going): the page shows the call ended, as for a call the room dropped.
       "rejoin-stopped": (_request, _state, actions) => typeof actions.callLost === "function" && (actions.callLost(), true),
       // The stack of conversations on the call's surfaces was tapped: the app is in front, and the page shows its list

@@ -310,6 +310,11 @@ process (memory pressure, a crash). The call is the person's, so the app joins i
 - **If the page is not in a call 45 s after the command, or no page is ready within the window**, the loss ends: the service and
   the session go as for a hang-up and the carried turns are dropped (counts logged, never words). A page whose join is lost
   keeps the turns until it reconnects (a join that fails for good drops them).
+- **A hang-up while the page rejoins** (after the command, before it is in a call) ends the loss and tells the page to stop the join
+  (`{command: "rejoin-abort"}`, `sidevoiceActions.abortRejoin`: the join is closed, what was carried dropped, and a late joined report
+  of it starts nothing). The command is sent only while the loss is still waited for. Giving the call up counts as a hang-up too
+  (`hung_up`), so the next reload does not remember it. While a loss is waited for the media controls report the call joined, so a
+  headset can still hang it up (Android without Telecom).
 - **Reloads are capped.** After iOS ends the web view the app loads the page again at once, then after 2 s and 5 s; a fourth
   within 2 minutes is not made: the call is given up, and the page is loaded once more when the window clears, to be told
   (`{command: "rejoin-stopped"}`, `sidevoiceActions.callLost`) that the call ended.
