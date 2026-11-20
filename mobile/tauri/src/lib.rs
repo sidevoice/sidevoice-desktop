@@ -7,6 +7,53 @@
 //! commands every app shares (`sidevoice-shared-tauri`, over `sidevoice-shared`'s application host). The page reports
 //! the call back (`call_state`), which the headset's buttons and the lock screen's controls follow. No page captures
 //! anything: the app owns the microphone and the speaker, as on the desktop (docs/MOBILE.md).
+/// The system ended the web view's process (iOS: memory pressure, a crash) while the app lives on. The web view stays blank
+/// when the app handles that and does nothing (WebKit reloads by itself only when nobody handles it), so the page is loaded
+/// again, which ends the old page's lanes and starts the new one; and from now on what the person says to a call they did
+/// not end is kept for that page (`AppHost::page_lost`), which joins the call again (`call::RoomCall::page_changed`).
+pub(crate) fn web_view_lost(webview: &tauri::Webview) {
+    let app = webview.app_handle().clone();
+    if let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) {
+        tauri::async_runtime::spawn(async move { host.page_lost().await });
+    }
+    // A page that goes again at once is not loaded again at once, and not for ever: past the cap the call it lost is given up
+    // (a page that cannot stay up cannot hold it), and the page is loaded once more when the window clears, to say so.
+    let wait = match RELOADS.lock().unwrap().next(std::time::Instant::now()) {
+        Reload::Now => Duration::ZERO,
+        Reload::After(wait) => wait,
+        Reload::Stop { retry } => {
+            tracing::error!(
+                reloads = RELOAD_MAX,
+                "the web view ended again and again; the call it held is given up"
+            );
+            if let Some(room) = app.try_state::<call::RoomCall>() {
+                room.rejoin_give_up();
+            }
+            retry
+        }
+    };
+    if wait.is_zero() {
+        reload(webview);
+    } else {
+        let webview = webview.clone();
+        let _ = std::thread::Builder::new()
+            .name("web-view-reload".into())
+            .spawn(move || {
+                std::thread::sleep(wait);
+                reload(&webview);
+            });
+    }
+}
+
+/// The reloads the app made after the system ended the web view (`web_view_lost`).
+static RELOADS: std::sync::Mutex<Reloads> = std::sync::Mutex::new(Reloads::new());
+
+fn reload(webview: &tauri::Webview) {
+    if webview.reload().is_err() {
+        tracing::error!("the web view could not be loaded again after its process ended");
+    }
+}
+
 #[cfg(test)]
 mod acl_tests;
 mod bridge;
@@ -519,7 +566,7 @@ fn run_app() {
     let events = pages.clone();
     let builder = tauri::Builder::default();
     // The system ending the web view's own process is logged where it says so (`platform::webview`).
-    let builder = platform::webview::watch_termination(builder);
+    let builder = platform::webview::watch_termination(builder, web_view_lost);
     builder
         .plugin(sidevoice_mobile_plugin::init())
         // The camera that scans the pairing code (`host.codeScanner`): the page asks for its permission and a scan through
@@ -915,52 +962,5 @@ mod tests {
             2,
             "data_extraction_rules.xml: the cloud backup and the transfer"
         );
-    }
-}
-
-/// The system ended the web view's process (iOS: memory pressure, a crash) while the app lives on. The web view stays blank
-/// when the app handles that and does nothing (WebKit reloads by itself only when nobody handles it), so the page is loaded
-/// again, which ends the old page's lanes and starts the new one; and from now on what the person says to a call they did
-/// not end is kept for that page (`AppHost::page_lost`), which joins the call again (`call::RoomCall::page_changed`).
-pub(crate) fn web_view_lost(webview: &tauri::Webview) {
-    let app = webview.app_handle().clone();
-    if let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) {
-        tauri::async_runtime::spawn(async move { host.page_lost().await });
-    }
-    // A page that goes again at once is not loaded again at once, and not for ever: past the cap the call it lost is given up
-    // (a page that cannot stay up cannot hold it), and the page is loaded once more when the window clears, to say so.
-    let wait = match RELOADS.lock().unwrap().next(std::time::Instant::now()) {
-        Reload::Now => Duration::ZERO,
-        Reload::After(wait) => wait,
-        Reload::Stop { retry } => {
-            tracing::error!(
-                reloads = RELOAD_MAX,
-                "the web view ended again and again; the call it held is given up"
-            );
-            if let Some(room) = app.try_state::<call::RoomCall>() {
-                room.rejoin_give_up();
-            }
-            retry
-        }
-    };
-    if wait.is_zero() {
-        reload(webview);
-    } else {
-        let webview = webview.clone();
-        let _ = std::thread::Builder::new()
-            .name("web-view-reload".into())
-            .spawn(move || {
-                std::thread::sleep(wait);
-                reload(&webview);
-            });
-    }
-}
-
-/// The reloads the app made after the system ended the web view (`web_view_lost`).
-static RELOADS: std::sync::Mutex<Reloads> = std::sync::Mutex::new(Reloads::new());
-
-fn reload(webview: &tauri::Webview) {
-    if webview.reload().is_err() {
-        tracing::error!("the web view could not be loaded again after its process ended");
     }
 }
