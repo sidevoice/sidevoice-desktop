@@ -73,7 +73,8 @@ jobs:
         env:
           # Crash reports (docs/CRASH_REPORTS.md): this build sends them.
           SIDEVOICE_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
-        run: cargo xtask mobile bundle android --version-code ${{ 10000 + github.run_number }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: cargo xtask mobile bundle android --version-code $((10000 + RUN_NUMBER))
       # sentry-cli on its own: no secret in this step's environment and no install script.
       - name: Install sentry-cli
         env:
