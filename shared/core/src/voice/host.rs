@@ -448,8 +448,8 @@ impl<A: LaneAudio> VoiceState<A> {
             Arc::clone(&lane.lifecycle),
             Arc::clone(&lane.released),
             ended,
-            Arc::clone(&self.page_shown),
             Carrying {
+                page_shown: Arc::clone(&self.page_shown),
                 carrying: Arc::clone(&lane.carrying),
                 open: Arc::clone(&lane.open_turns),
                 carry: Arc::clone(&self.carry),
@@ -998,9 +998,9 @@ fn forward(
     lifecycle: Arc<Mutex<Lifecycle>>,
     released: Arc<Mutex<bool>>,
     ended: Ended,
-    page_shown: Arc<AtomicBool>,
     kept: Carrying,
 ) {
+    let page_shown = Arc::clone(&kept.page_shown);
     spawn_in_span(async move {
         let mut meters = Meters::default();
         // Whether the call's first idle is still to come: the one before it goes on ([`Ended`]).
@@ -1119,6 +1119,7 @@ where
 
 /// What `forward` needs to keep what the person says to a lane whose page is gone (`voice::carry`).
 struct Carrying {
+    page_shown: Arc<AtomicBool>,
     carrying: Arc<AtomicBool>,
     open: Arc<OpenTurns>,
     carry: Arc<Carry>,
