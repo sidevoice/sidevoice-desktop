@@ -45,7 +45,7 @@ fn signed_bundle() -> PathBuf {
 }
 
 /// `mobile sign android-bundle`: dist/Sidevoice-android-unsigned.aab (`mobile bundle android`) signed with the upload key
-/// by `jarsigner` (the way Google Play checks a bundle: no zipalign, Play makes the APKs from it) and verified, into
+/// by `jarsigner` (the way Google Play checks a bundle: no zipalign, Play makes the APKs from it) and verified (`-verify`, not `-strict`: that exits 4 for a self-signed upload key), into
 /// dist/Sidevoice-android.aab. The same environment and the same private files as [`sign_android`].
 pub fn sign_android_bundle() -> Result<()> {
     let alias = crate::util::required_env("ANDROID_UPLOAD_KEY_ALIAS")?;
@@ -69,7 +69,7 @@ pub fn sign_android_bundle() -> Result<()> {
         .arg(&alias)
         .run()?;
     drop(secrets);
-    Cmd::new("jarsigner").args(["-verify", "-strict"]).arg(&out).run()
+    Cmd::new("jarsigner").args(["-verify"]).arg(&out).run()
 }
 
 /// `mobile sign android`.

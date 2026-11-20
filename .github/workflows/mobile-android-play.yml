@@ -6,12 +6,16 @@ name: mobile-android-play
 # - OFF until the Google Play developer account exists: while the repository secret GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is
 #   absent (or empty) the `gate` job reports it, the others are skipped, and the run is green. Adding the secret is the
 #   switch; nothing in this file changes. (The three keystore secrets are mobile-android-signed.yml's, the same upload key.)
-# - The build number (`versionCode`) is this workflow's run number: it only grows, which Play requires of the uploads of
-#   an app. A re-run of a run whose upload Play accepted has the same number and fails: dispatch again instead.
+# - The build number (`versionCode`) is 10000 + this workflow's run number: it only grows, which Play requires of the
+#   uploads of an app (the offset leaves room below it should the run number ever restart, e.g. a re-created workflow
+#   file or repository: then raise the offset past the last code Play has seen). A re-run of a run whose upload Play accepted has the same number and fails: dispatch again instead.
 # - Uploads are serialized by the concurrency group and never cancelled; GitHub keeps one pending run per group, so the
 #   next build is always the latest main.
 # - Two jobs, as in mobile-android-signed.yml: the one that builds and signs sees the keystore and runs the build's code,
-#   the one that uploads sees the service account and runs no build.
+#   the one that uploads sees the service account and runs no build. `gate` and `upload` run in the environment
+#   `google-play` (deployment branches: main only), where the service account secret belongs, as TestFlight's key does.
+# - By hand (dispatch) the bundle is built and kept as an artifact even while the upload is off: it is the first AAB to
+#   upload by hand to the Play Console (docs/MOBILE.md).
 # Every external action is pinned by its full commit SHA, with its version in a comment.
 on:
   push:
@@ -39,6 +43,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    environment: google-play
     outputs:
       enabled: ${{ steps.gate.outputs.enabled }}
     steps:
@@ -56,7 +61,7 @@ jobs:
   bundle:
     name: Android App Bundle signed with the upload key
     needs: gate
-    if: needs.gate.outputs.enabled == 'true'
+    if: needs.gate.outputs.enabled == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -64,11 +69,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-android
-      - name: "The unsigned bundle (arm64-v8a and armeabi-v7a), versionCode = the run number"
+      - name: "The unsigned bundle (arm64-v8a and armeabi-v7a), versionCode = 10000 + the run number"
         env:
           # Crash reports (docs/CRASH_REPORTS.md): this build sends them.
           SIDEVOICE_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
-        run: cargo xtask mobile bundle android --version-code ${{ github.run_number }}
+        run: cargo xtask mobile bundle android --version-code ${{ 10000 + github.run_number }}
       # sentry-cli on its own: no secret in this step's environment and no install script.
       - name: Install sentry-cli
         env:
@@ -95,9 +100,11 @@ jobs:
 
   upload:
     name: Upload to Google Play internal testing
-    needs: bundle
+    needs: [gate, bundle]
+    if: needs.gate.outputs.enabled == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    environment: google-play
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

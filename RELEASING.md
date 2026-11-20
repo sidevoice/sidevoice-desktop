@@ -338,7 +338,7 @@ previous identifier".
   key to have the **Admin** role; the desktop notarization works with it too. Its job runs in the environment
   `testflight`, whose deployment branches should be `main` only (docs/MOBILE.md → "TestFlight").
 - The mobile app's Google Play upload (`.github/workflows/mobile-android-play.yml`, every push to `main`) is off while `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`
-  is absent. It reads that secret and the upload key's three (`ANDROID_UPLOAD_KEYSTORE_B64`, `ANDROID_UPLOAD_KEYSTORE_PASSWORD`,
+  is absent. It reads that secret (in the environment `google-play`, deployment branches `main` only) and the upload key's three (`ANDROID_UPLOAD_KEYSTORE_B64`, `ANDROID_UPLOAD_KEYSTORE_PASSWORD`,
   `ANDROID_UPLOAD_KEY_ALIAS`); the optional variable `GOOGLE_PLAY_RELEASE_STATUS` is `draft` while the app has no published
   release (docs/MOBILE.md → "Google Play internal testing").
 - Repository secrets for the updates (a release): `TAURI_SIGNING_PRIVATE_KEY` (the minisign private key

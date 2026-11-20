@@ -635,11 +635,14 @@ skipped, and the run is green. Adding the secret is the whole switch.
   with `bundle.android.versionCode` set through `--config`), and `cargo xtask mobile sign android-bundle` signs it with
   `jarsigner` and verifies it (`xtask/src/mobile/sign.rs`), into `dist/Sidevoice-android.aab`. No zipalign: Play makes the
   APKs from the bundle, and the native libraries are 16 KB aligned by the NDK (r28 or later, `setup-android`).
-- **The build number** is `versionCode` = the run number of this workflow, which only grows (Play refuses a `versionCode`
-  it has seen), the Android twin of the iOS build number. A re-run of a run whose upload was accepted fails: dispatch again.
+- **The build number** is `versionCode` = 10000 + the run number of this workflow, which only grows (Play refuses a `versionCode`
+  it has seen), the Android twin of the iOS build number. The offset leaves room below it: if the run number ever
+  restarts (the workflow file or the repository re-created), raise the offset past the last code Play has seen. A re-run of
+  a run whose upload was accepted fails: dispatch again. The bundle is not run through `check-16kb` (that reads an APK);
+  the signed APK build checks the same libraries.
 - **Secrets.** The keystore's three (`ANDROID_UPLOAD_KEYSTORE_B64`, `ANDROID_UPLOAD_KEYSTORE_PASSWORD`,
   `ANDROID_UPLOAD_KEY_ALIAS`, "Signing" above) are read by the signing step alone; the service account's
-  `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (the key file's contents, as is) by the upload job alone, which runs no build.
+  `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (the key file's contents, as is) by the `gate` and `upload` jobs alone, which run in the environment `google-play` and no build.
   The upload is `r0adkll/upload-google-play`, pinned by SHA.
 - **Release status.** The upload asks for `completed` (the testers get the build at once). While the app has never had
   a release published by hand, Play treats it as a draft app and refuses anything but `draft`
@@ -655,8 +658,10 @@ skipped, and the run is green. Adding the secret is the whole switch.
    before anything else works.
 2. Play Console → Create app: name, default language, App, Free; accept the declarations. Its package name is
    **`ai.sidevoice.mobile`**, and it is fixed by the first upload (it cannot be changed).
-3. Upload the **first AAB by hand**: Testing → Internal testing → Create new release → upload an AAB (download the
-   artifact `Sidevoice-android-signed-aab` of a run, or build one with the two commands above), accept **Play App
+3. Upload the **first AAB by hand**, and it must be one **from a CI run** (never one built or numbered by hand: its
+   `versionCode` has to be below every later one). Dispatch the workflow (Actions → mobile-android-play → Run workflow,
+   on `main`): by hand it builds and signs the bundle even while the upload is off, and keeps it as the artifact
+   `Sidevoice-android-signed-aab`. Then Testing → Internal testing → Create new release → upload that AAB, accept **Play App
    Signing** (Google keeps the app signing key; the upload key is the one in the secrets above; if Play asks to enrol,
    choose "use Play App Signing"), name it, save and roll out. Play's API cannot create an app's first release, and
    uploads before one exists fail with a permissions-style error.
@@ -667,8 +672,9 @@ skipped, and the run is green. Adding the secret is the whole switch.
 6. Play Console → Users and permissions → Invite new users: the service account's email, with the app's permissions
    **Release to testing tracks** (and "View app information"). (Since 2024 Google no longer asks for the "API access" page:
    the account is invited like a person. It can take some minutes to apply.)
-7. GitHub → Settings → Secrets and variables → Actions: add the secret `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` with the JSON
-   key file's whole contents; delete the key file from the laptop. If step 3 left the app as a draft, add the variable
+7. GitHub → Settings → Environments → New environment `google-play`, with Deployment branches set to **Selected
+   branches: `main`**, and add the secret `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` **to that environment** (not to the repository,
+   where any branch carrying a workflow could read it), with the JSON key file's whole contents; delete the key file from the laptop. If step 3 left the app as a draft, add the variable
    `GOOGLE_PLAY_RELEASE_STATUS` = `draft` (above).
 8. Dispatch the workflow (Actions → mobile-android-play → Run workflow, on `main`) and check that the build shows in the
    internal track.
@@ -677,8 +683,8 @@ skipped, and the run is green. Adding the secret is the whole switch.
 a valid **D-U-N-S number** for the legal entity (free from Dun & Bradstreet, and Google warns it can take up to 30
 days: ask for it first), the organization's website, a verified developer email and a verified phone number (the
 organization's, a number Google can reach; the website is verified before the phone), and the identity documents
-Play asks for. A new *personal* account must also run a closed test with 12 testers for 14 days before it may publish to
-production; reports say an organization account is exempt, which is the reason to register as one. Internal testing,
+Play asks for. A personal account created after 13 November 2023 must also run a closed test with 12 opted-in testers for 14 days before it may apply for
+production access (Google's documented rule); organization accounts are not named by that rule (Google's page is about personal accounts only), which is a reason to register as one. Internal testing,
 which is all this workflow uses, has no such rule.
 
 Sources: [Required information to create a Play Console developer account](https://support.google.com/googleplay/android-developer/answer/13628312),
@@ -686,7 +692,7 @@ Sources: [Required information to create a Play Console developer account](https
 [Google's note on D-U-N-S verification (2023)](https://android-developers.googleblog.com/2023/07/boosting-trust-and-transparency-in-google-play.html),
 [Codemagic: common Google Play errors](https://docs.codemagic.io/troubleshooting/common-google-play-errors/) (first version by hand, the draft-app error),
 [graywolf#620](https://github.com/chrissnell/graywolf/pull/620) (draft releases on a draft app),
-[the 12-tester rule, third-party summary](https://www.testerscommunity.com/blog/google-play-12-testers-policy).
+[App testing requirements for new personal developer accounts](https://support.google.com/googleplay/android-developer/answer/14151465) (the 12 testers, 14 days).
 Re-read Google's pages when the account is created: they change.
 
 ## The audio session log (iOS)
