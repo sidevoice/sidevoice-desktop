@@ -44,6 +44,8 @@
 //! - `mobile sign android` (CI, by hand from main): the unsigned APK aligned, signed with the upload key, verified and
 //!   checked for 16 KB pages, into dist/ (.github/workflows/mobile-android-signed.yml; mobile/sign.rs). Reads the
 //!   `ANDROID_UPLOAD_*` secrets.
+//! - `mobile bundle android --version-code N` and `mobile sign android-bundle` (CI, from main: .github/workflows/mobile-android-play.yml):
+//!   the Android App Bundle Google Play takes, built unsigned and then signed with the same upload key (mobile/sign.rs).
 //! - `mobile test android` (CI, every pull request): the Android library's JVM unit tests (the call service's sessions, the call
 //!   card drawn to PNG in every state, copied to dist/android-call-card), in the generated project, after a build has written
 //!   its Gradle includes. Needs no device.
@@ -158,7 +160,7 @@ const USAGE: &str =
   | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
   | probe memory | probe voice-memory
   | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
-  | mobile build android | mobile build ios | mobile lint android | mobile lint ios | mobile renders ios | mobile live-activity ios | mobile sign android | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
+  | mobile build android | mobile build ios | mobile lint android | mobile lint ios | mobile renders ios | mobile live-activity ios | mobile sign android | mobile sign android-bundle | mobile bundle android --version-code N | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
   | mobile symbols --build-number N [--ips CRASH_REPORT]
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly | publish apk-nightly
@@ -186,6 +188,8 @@ fn main() -> ExitCode {
         ["mobile", "renders", project] => mobile::renders(project),
         ["mobile", "live-activity", project] => mobile::live_activity(project),
         ["mobile", "sign", "android"] => mobile::sign::sign_android(),
+        ["mobile", "sign", "android-bundle"] => mobile::sign::sign_android_bundle(),
+        ["mobile", "bundle", "android", "--version-code", code] => mobile::bundle(code),
         ["mobile", "test", project] => mobile::test(project),
         ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),
         ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
