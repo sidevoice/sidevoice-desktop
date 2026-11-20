@@ -715,3 +715,23 @@ test("host.textScale is the app's answer where there is one (Android), live, wit
   stop();
   assert.equal(listeners.has("sidevoice-text-scale"), false);
 });
+
+test("a page that lost a call the person did not end is told to join it again, with the turns said meanwhile", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const joined = { value: false };
+  const asked = [];
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: joined.value }, mic: { enabled: true }, callCard: {} }), subscribe: () => () => {} } };
+  const turns = [{ turn_id: "t1", text: "hola", started_at: 1, ended_at: 2 }];
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: "thread", turns }), false, "a page without the action cannot");
+  win.sidevoiceActions.rejoinCall = (call) => { asked.push(call); return Promise.resolve(); };
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: "thread", turns }), true);
+  assert.equal(JSON.stringify(asked), JSON.stringify([{ threadId: "thread", turns }]));
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: 5, turns: "x" }), true, "what is not a thread or turns is none");
+  assert.equal(JSON.stringify(asked[1]), JSON.stringify({ threadId: null, turns: [] }));
+  assert.equal(api.run({ command: "rejoin", page: 6, threadId: "thread" }), false, "another page's");
+  joined.value = true;
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: "thread" }), false, "a page already in a call has nothing to rejoin");
+  assert.equal(asked.length, 2);
+});

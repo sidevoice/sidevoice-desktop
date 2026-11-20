@@ -1164,3 +1164,43 @@ fn a_surface_s_hang_up_stops_the_calls_and_the_page_can_still_dispose_them() {
         audio.until("the lane released", |d| d.attached == 0).await;
     });
 }
+
+/// The system ends the page's web view while the person is talking to a call they did not end: what they finish saying
+/// before the next page loads is told to no page, and kept for the next one, which is handed it once; the old lane goes
+/// when that page loads, and what the next page's lanes say still reaches it.
+#[test]
+fn what_the_person_finishes_saying_after_their_page_was_lost_is_kept_for_the_next_page() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        let (seen, fake) = (Seen::default(), fake());
+        started(&state, &fake, "old", seen.page(), false).await;
+        state.route_input(Some("old".into())).await.unwrap();
+
+        state.page_lost().await;
+        audio.speak(TURN_FRAMES);
+        let mut kept = Vec::new();
+        within(async {
+            while kept.is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                kept = state.carry.take(std::time::Instant::now());
+            }
+        })
+        .await;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].text, "words");
+        assert_eq!(seen.count("old", "turn", None), 0, "no page heard it");
+
+        // The next page loads: the old lane goes, and the new page's lane is its own.
+        state.page.store(1, Ordering::SeqCst);
+        within(state.clear_older_than(1)).await;
+        assert!(state.lane("old").await.is_err());
+        assert!(within(state.carried()).await.is_empty(), "said once");
+        state.create_call_in("new".into(), 1).await.unwrap();
+        configure(&state, &fake, "new", seen.page()).await;
+        within(state.ready("new")).await.unwrap();
+        state.route_input(Some("new".into())).await.unwrap();
+        audio.speak(TURN_FRAMES);
+        seen.until("the new page's turn", |seen| seen.count("new", "turn", Some("finished")) == 1).await;
+        assert!(within(state.carried()).await.is_empty(), "a live page's turns are its own");
+    });
+}

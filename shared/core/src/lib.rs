@@ -9,6 +9,7 @@ pub mod engine;
 pub mod error;
 pub mod logging;
 pub mod platform;
+pub mod rejoin;
 pub mod system_log;
 pub mod voice;
 

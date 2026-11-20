@@ -36,6 +36,7 @@ use sidevoice_mobile_plugin::{
     SurfaceAction,
 };
 use sidevoice_shared::app::{AppHost, CallActivity};
+use sidevoice_shared::rejoin::{Gone, Rejoin};
 use sidevoice_shared::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
 use sidevoice_shared_tauri::platform::media_controls::{self, CallState};
 use tauri::{AppHandle, Manager};
@@ -482,6 +483,10 @@ pub struct Room {
     /// The stills the page forgot whose files stay while a surface may still draw them: the one the service last showed
     /// or the one waiting to be shown names them ([`unreferenced`]).
     forgotten: BTreeSet<String>,
+    /// The conversation the page last reported the call was on.
+    conversation: Option<String>,
+    /// The call a page went away from while the person was in it, for the next page to join again (`sidevoice_shared::rejoin`).
+    rejoin: Rejoin,
 }
 
 /// The ids of the stills `surface` draws.
@@ -573,6 +578,8 @@ impl RoomCall {
             updated_at: None,
             update_queued: false,
             forgotten: BTreeSet::new(),
+            conversation: None,
+            rejoin: Rejoin::default(),
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -596,17 +603,32 @@ impl RoomCall {
     /// in order with what the new page reports after it.
     pub fn page_changed(&self, page: u64) {
         self.then(move |room| {
+            // A call the person did not end goes on for them: the next page is told to join it again (`Room::rejoin_call`).
+            let gone = room.rejoin.page_gone(
+                room.state.joined,
+                room.hung_up.is_some(),
+                room.conversation.as_deref(),
+                Instant::now(),
+            );
+            tracing::info!(?gone, "a page went away");
+            if gone == Gone::Remembered {
+                tracing::warn!(
+                    reason = "page_unload",
+                    "the call was not ended by the person; the next page joins it again"
+                );
+            }
             // A call live on the page before ends here without a word of the person's: say it, with the page's numbers.
             if room.state.joined || room.holding.is_some() {
                 tracing::warn!(
                     reason = "page_load",
                     from_page = room.page,
                     to_page = page,
-                    "a page load started during a live call; the call ends"
+                    "a page load started during a live call; the page's call ends here"
                 );
             }
             room.page = page;
             room.state = CallState::default();
+            room.conversation = None;
             room.mic_disabled = false;
             room.hung_up = None;
             room.reported_since = None;
@@ -628,13 +650,14 @@ impl RoomCall {
     }
 
     /// The page `page` reports its call: whether it is joined (the green and the red button), since when (`since`, the
-    /// page's own mark of that call: a join of the same page later is another call), its conversation and its mute
-    /// (`state`), whether the mute can be used (`mic_disabled`), and what its surfaces show (`surface`).
+    /// page's own mark of that call: a join of the same page later is another call), the conversation it is on
+    /// (`conversation`) and its mute (`state`), whether the mute can be used (`mic_disabled`), and what its surfaces show (`surface`).
     pub fn report(
         &self,
         page: u64,
         state: CallState,
         since: Option<f64>,
+        conversation: Option<String>,
         mic_disabled: bool,
         surface: crate::surface::Reported,
     ) {
@@ -642,6 +665,14 @@ impl RoomCall {
             if room.page == page {
                 let mut state = state;
                 state.joined = after_hang_up(&mut room.hung_up, state.joined, since);
+                room.conversation = conversation;
+                // A page that loads after one that was lost in a call is the one to join it again.
+                if let Some(thread) =
+                    room.rejoin
+                        .page_reported(state.ready, state.joined, Instant::now())
+                {
+                    room.rejoin_call(thread);
+                }
                 let (joined, reported) = (state.joined, state.mic_enabled);
                 room.state = state;
                 room.mic_disabled = mic_disabled;
@@ -912,6 +943,32 @@ impl Room {
                     room.show();
                 });
             }
+        });
+    }
+
+    /// The page this room is for lost a call the person did not end, and is up again: it is told to join `conversation`
+    /// again (the page's `rejoin` command, mobile/tauri/js/mobile-bridge.js), with what the person said to that call while
+    /// no page heard it, which the voice host kept (`AppHost::carried`: the turn that was open is closed and transcribed
+    /// first, so the command waits for the old call to be stopped). Once: a join that fails is the page's to say.
+    fn rejoin_call(&self, conversation: Option<String>) {
+        let (app, page) = (self.app.clone(), self.page);
+        tracing::info!(target: "intent", page, "the call the page lost is joined again");
+        tauri::async_runtime::spawn(async move {
+            let host = app.try_state::<AppHost>().map(|host| host.inner().clone());
+            let turns = match host {
+                Some(host) => host.carried().await,
+                None => Vec::new(),
+            };
+            tracing::info!(target: "intent", turns = turns.len(), "the rejoin carries what was said meanwhile");
+            run_on_page(
+                &app,
+                serde_json::json!({
+                    "command": "rejoin",
+                    "page": page,
+                    "threadId": conversation,
+                    "turns": turns,
+                }),
+            );
         });
     }
 

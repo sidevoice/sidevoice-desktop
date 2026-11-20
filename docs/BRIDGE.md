@@ -246,6 +246,7 @@ window.__sidevoiceHost.run({ command: "keep-alive" })       // card
 window.__sidevoiceHost.run({ command: "hold-start" })       // global hold to talk, down
 window.__sidevoiceHost.run({ command: "hold-end" })         // global hold to talk, let go (by the key, or the app's safety net)
 window.__sidevoiceHost.run({ command: "one-turn" })         // global say one thing
+window.__sidevoiceHost.run({ command: "rejoin", threadId, turns })  // mobile: join the call the last page lost (below, "A call that survives its page")
 ```
 
 Evaluated by the app with `webview.eval` (works with the window hidden); the command travels as JSON (core
@@ -273,6 +274,31 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
+
+## A call that survives its page
+
+The phone's room page can go while the person is in a call they did not end: it reloads, or iOS ends the web view's content
+process (memory pressure, a crash). The call is the person's, so the app joins it again by itself instead of dropping it
+(sidevoice-desktop#541; the page says why a call ends: `call.ended.<reason>`, `call.parked.page_unload`).
+
+- **iOS, the web view's process ends** (`on_web_content_process_terminate`, `platform::webview`): the web view is blank and
+  WebKit does not reload it for an app that handles the event, so the app loads the page again (`web_view_lost`). From then
+  on the voice host keeps what the person finishes saying (`AppHost::page_lost`).
+- **The page goes** (any load that starts; `RoomCall::page_changed`): if its last report had the call joined and the app had
+  not hung it up natively, the app remembers *a live call on conversation T, not ended by the person*
+  (`sidevoice_shared::rejoin`). A hang-up the page reported, or one made from a surface, is the person ending it: nothing is
+  remembered. The voice host stops the old page's lanes; the turn the person had open on the call is closed and its words
+  waited for first (up to 8 s: a stop cancels an open turn), and each turn finished with words is kept instead of being told
+  to a page (`voice::carry`; at most 8, for 10 minutes).
+- **The next page is ready and in no call** (its first report): within 10 minutes of the loss the app runs
+  `{command: "rejoin", page, threadId, turns}` on it, once. `turns` are the kept ones (`turn_id`, `text`, `language?`,
+  `started_at`, `ended_at`), handed over once, after the old lanes are stopped. The page joins the call again with its own
+  resume ticket (a join inside the room's resume window continues the same session), shows "Reconnecting…" while it does, and
+  says each turn to the room as a turn of the person's. A page without `sidevoiceActions.rejoinCall` ignores the command.
+- **Past the window, or if the join fails**, the call is over, and the page says so as it says any failed join; the kept
+  turns are not delivered later (they lapse).
+- **If the whole app process dies**, nothing survives it: the call, the Live Activity and anything said and not yet delivered
+  are gone, and the app does not claim otherwise. Android's web view process (`onRenderProcessGone`) is not handled yet.
 
 ## The host
 

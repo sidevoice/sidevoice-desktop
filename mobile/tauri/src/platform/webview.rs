@@ -24,9 +24,10 @@ trait Os {
     /// such thing to describe. Runs on the main thread.
     fn layout(webview: &PlatformWebview) -> Option<String>;
 
-    /// Logs when the system ends the web view's own process while the app lives on (iOS: memory pressure, a crash): the
-    /// page is blank or reloads, and a reload ends the call (`call::RoomCall::page_changed`). Only logged
-    /// (sidevoice-desktop#541); where the system says nothing of it, the builder comes back as it went in.
+    /// Hears when the system ends the web view's own process while the app lives on (iOS: memory pressure, a crash): the
+    /// page is blank, so the app loads it again (`crate::web_view_lost`), and a call the person was in is joined again by the
+    /// page that loads (`call::RoomCall::page_changed`; sidevoice-desktop#541). Where the system says nothing of it, the
+    /// builder comes back as it went in.
     fn watch_termination(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry>;
 }
 

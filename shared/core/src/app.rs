@@ -279,6 +279,20 @@ impl<A: LaneAudio> AppHost<A> {
         PageGeneration(next)
     }
 
+    /// The page that owns the calls is gone and no page has loaded yet (the system ended the web view's process): what the person
+    /// finishes saying from now on is kept, to be handed to the next page by [`AppHost::carried`], instead of being told to a
+    /// page that is not there.
+    pub async fn page_lost(&self) {
+        self.entered(self.inner.voice.page_lost()).await;
+    }
+
+    /// What the person said to the calls of the pages before this one, which they were still saying or waiting for the words of
+    /// when those pages went, once those calls are stopped: handed over once, for the page to say as turns of its own, and only
+    /// while the person's call may still be theirs to speak into ([`crate::voice::carry::KEPT_FOR`]).
+    pub async fn carried(&self) -> Vec<crate::voice::carry::CarriedTurn> {
+        self.entered(self.inner.voice.carried()).await
+    }
+
     /// Quitting or restarting, before `exit()` runs the static destructors of the C++ libraries the models are made of:
     /// no load starts from now on (a load refused here ends `shutting_down`, and one that was waiting for the catalogues
     /// finds it so before it hands anything to a blocking thread), the loads under way are waited for, and given up

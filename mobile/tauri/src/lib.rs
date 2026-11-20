@@ -115,6 +115,9 @@ struct CallReport {
     title: String,
     /// When the call was joined, as the page marks it (ms since the epoch): a later join is another call.
     since: Option<f64>,
+    /// The conversation the call is on (`callCard.conversation`), a string, read leniently: anything else is none.
+    conversation: serde_json::Value,
+    since: Option<f64>,
     /// The room's own words for the call, which the call's surfaces read (`surface.rs`): the agent's mood, the person's
     /// open turn, why the call is busy (strings, read leniently: anything else is none), and whether a reply can be
     /// skipped.
@@ -406,6 +409,7 @@ fn call_state(
         page,
         snapshot.clone().into(),
         snapshot.since,
+        snapshot.conversation.as_str().map(str::to_owned),
         snapshot.mic_disabled,
         snapshot.surface(),
     );
@@ -911,5 +915,19 @@ mod tests {
             2,
             "data_extraction_rules.xml: the cloud backup and the transfer"
         );
+    }
+}
+
+/// The system ended the web view's process (iOS: memory pressure, a crash) while the app lives on. The web view stays blank
+/// when the app handles that and does nothing (WebKit reloads by itself only when nobody handles it), so the page is loaded
+/// again, which ends the old page's lanes and starts the new one; and from now on what the person says to a call they did
+/// not end is kept for that page (`AppHost::page_lost`), which joins the call again (`call::RoomCall::page_changed`).
+pub(crate) fn web_view_lost(webview: &tauri::Webview) {
+    let app = webview.app_handle().clone();
+    if let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) {
+        tauri::async_runtime::spawn(async move { host.page_lost().await });
+    }
+    if webview.reload().is_err() {
+        tracing::error!("the web view could not be loaded again after its process ended");
     }
 }

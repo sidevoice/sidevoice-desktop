@@ -14,6 +14,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
+pub mod carry;
 pub mod host;
 pub mod meters;
 pub mod models;
