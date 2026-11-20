@@ -246,6 +246,7 @@ window.__sidevoiceHost.run({ command: "keep-alive" })       // card
 window.__sidevoiceHost.run({ command: "hold-start" })       // global hold to talk, down
 window.__sidevoiceHost.run({ command: "hold-end" })         // global hold to talk, let go (by the key, or the app's safety net)
 window.__sidevoiceHost.run({ command: "one-turn" })         // global say one thing
+window.__sidevoiceHost.run({ command: "rejoin", threadId, turns })  // mobile: join the call the last page lost (below, "A call that survives its page")
 ```
 
 Evaluated by the app with `webview.eval` (works with the window hidden); the command travels as JSON (core
@@ -273,6 +274,52 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
+
+## A call that survives its page
+
+The phone's room page can go while the person is in a call they did not end: it reloads, or iOS ends the web view's content
+process (memory pressure, a crash). The call is the person's, so the app joins it again by itself instead of dropping it
+(sidevoice-desktop#541; the page says why a call ends: `call.ended.<reason>`, `call.parked.page_unload`).
+
+- **iOS, the web view's process ends** (`on_web_content_process_terminate`, `platform::webview`): the web view is blank and
+  WebKit does not reload it for an app that handles the event, so the app loads the page again (`web_view_lost`). From then
+  on the voice host keeps what the person finishes saying (`AppHost::page_lost`).
+- **The page goes** (any load that starts: a reload, `reloadToUpdate`, the activity being recreated on Android, a lost iOS web
+  view; `RoomCall::page_changed`): if its last report had the call joined and the app had not hung it up natively, the app
+  remembers *loss N: a live call on conversation T, not ended by the person* (`sidevoice_shared::rejoin`). A hang-up the page
+  reported, or one made from a surface, is the person ending it: nothing is remembered. The voice host stops the old page's
+  lanes; the turn the person had open on the call is closed and its words waited for first (up to 8 s: a stop cancels an open
+  turn), and each turn finished with words is kept instead of being told to a page (`voice::carry`, keyed by loss N and the
+  conversation; at most 8, for 10 minutes).
+- **The gap keeps the call up.** While loss N is waited for, the call's service (Android's foreground service, the Live Activity,
+  CallKit's or Telecom's call) is *not* ended and the audio session is not given back when the old page's audio stops
+  (`PhoneCall::gap`): the call does not look hung up, iOS does not suspend the app for having no audio, and Android's
+  foreground service, which cannot be started again from the background, is still there. Any hang-up in the gap (a surface,
+  the system's call, a car or headset) is the person's: loss N is forgotten with what was carried, and no page joins it.
+  **Needs a device check** (iOS suspension while the session is held but no stream is open; Android foreground service type
+  microphone through a reload in the background); the microphone itself is not captured between the old lanes' stop and the new
+  page's, so nothing said in those seconds is heard.
+- **The next page is ready** (its first report): within 10 minutes of the loss the app runs
+  `{command: "rejoin", page, threadId, turns}` on it, once (told again if that page goes before it is in a call). It also runs
+  on a page the person already joined by themselves on the same conversation, which merges the turns into that call; on another
+  conversation the turns are dropped. `turns` are the kept ones (`turn_id`, `text`, `language?`, `started_at`, `ended_at`,
+  `started_told`, `age_ms`). The host keeps them until the page is in a call, then drops its copy: the page owns them from then
+  on. The page joins the call again with its own resume ticket (a join inside the room's resume window continues the same
+  session), shows "Reconnecting…", and says each turn to the room before anything new; a turn the old page had been told started,
+  or older than the room's resume window, is said as words said while away (its end only, never a second start).
+- **If the page is not in a call 45 s after the command, or no page is ready within the window**, the loss ends: the service and
+  the session go as for a hang-up and the carried turns are dropped (counts logged, never words). A page whose join is lost
+  keeps the turns until it reconnects (a join that fails for good drops them).
+- **A hang-up while the page rejoins** (after the command, before it is in a call) ends the loss and tells the page to stop the join
+  (`{command: "rejoin-abort"}`, `sidevoiceActions.abortRejoin`: the join is closed, what was carried dropped, and a late joined report
+  of it starts nothing). The command is sent only while the loss is still waited for. Giving the call up counts as a hang-up too
+  (`hung_up`), so the next reload does not remember it. While a loss is waited for the media controls report the call joined, so a
+  headset can still hang it up (Android without Telecom).
+- **Reloads are capped.** After iOS ends the web view the app loads the page again at once, then after 2 s and 5 s; a fourth
+  within 2 minutes is not made: the call is given up, and the page is loaded once more when the window clears, to be told
+  (`{command: "rejoin-stopped"}`, `sidevoiceActions.callLost`) that the call ended.
+- **If the whole app process dies**, nothing survives it: the call, the Live Activity and anything said and not yet delivered
+  are gone, and the app does not claim otherwise. Android's web view process (`onRenderProcessGone`) is not handled yet.
 
 ## The host
 

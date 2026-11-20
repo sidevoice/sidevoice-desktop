@@ -715,3 +715,41 @@ test("host.textScale is the app's answer where there is one (Android), live, wit
   stop();
   assert.equal(listeners.has("sidevoice-text-scale"), false);
 });
+
+test("a page that lost a call the person did not end is told to join it again, with the turns said meanwhile", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const joined = { value: false };
+  const asked = [];
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: joined.value }, mic: { enabled: true }, callCard: {} }), subscribe: () => () => {} } };
+  const turns = [{ turn_id: "t1", text: "hola", started_at: 1, ended_at: 2 }];
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: "thread", turns }), false, "a page without the action cannot");
+  win.sidevoiceActions.rejoinCall = (call) => { asked.push(call); return Promise.resolve(); };
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: "thread", turns }), true);
+  assert.equal(JSON.stringify(asked), JSON.stringify([{ threadId: "thread", turns }]));
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: 5, turns: "x" }), true, "what is not a thread or turns is none");
+  assert.equal(JSON.stringify(asked[1]), JSON.stringify({ threadId: null, turns: [] }));
+  assert.equal(api.run({ command: "rejoin", page: 6, threadId: "thread" }), false, "another page's");
+  joined.value = true;
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: "thread", turns }), true, "a page already in a call merges the turns");
+  assert.equal(asked.length, 3);
+  assert.equal(api.run({ command: "rejoin-stopped", page: 7 }), false, "a page without the action cannot say it");
+  let lost = 0;
+  win.sidevoiceActions.callLost = () => { lost += 1; };
+  assert.equal(api.run({ command: "rejoin-stopped", page: 7 }), true);
+  assert.equal(lost, 1);
+});
+
+test("a hang-up while the page joins the lost call again tells the page to stop that join", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: false }, mic: { enabled: true }, callCard: {} }), subscribe: () => () => {} } };
+  assert.equal(api.run({ command: "rejoin-abort", page: 7 }), false, "a page without the action cannot");
+  let aborted = 0;
+  win.sidevoiceActions.abortRejoin = () => { aborted += 1; };
+  assert.equal(api.run({ command: "rejoin-abort", page: 7 }), true);
+  assert.equal(aborted, 1);
+  assert.equal(api.run({ command: "rejoin-abort", page: 6 }), false, "another page's");
+});

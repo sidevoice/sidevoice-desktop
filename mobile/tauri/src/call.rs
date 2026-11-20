@@ -36,6 +36,7 @@ use sidevoice_mobile_plugin::{
     SurfaceAction,
 };
 use sidevoice_shared::app::{AppHost, CallActivity};
+use sidevoice_shared::rejoin::{Gone, Rejoin, Report};
 use sidevoice_shared::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
 use sidevoice_shared_tauri::platform::media_controls::{self, CallState};
 use tauri::{AppHandle, Manager};
@@ -113,6 +114,11 @@ struct Audio {
     open: bool,
     /// The system's call, where the system makes its audio ready ([`call_activates_audio`]).
     system: SystemAudio,
+    /// A call lost with its page waits for the next one to join it (`sidevoice_shared::rejoin`): the session is not given back
+    /// when the old page's last audio stops, so that the app is not suspended (iOS) in the seconds the call has none open.
+    gap: bool,
+    /// The session was not given back for that ([`PhoneCall::gap`] gives it back when the wait is over).
+    release_owed: bool,
 }
 
 /// The audio of the system's call, where the system makes it ready (CallKit activates the session; Telecom makes the call
@@ -287,6 +293,26 @@ impl PhoneCall {
         }
     }
 
+    /// A call lost with its page is waited for (`on`), or is not any more. While it is, the session stays active when the voice's
+    /// audio stops; once it is over, a session kept for it and used by no audio is given back.
+    fn gap(&self, on: bool) {
+        let mut audio = self.audio.lock().unwrap();
+        if audio.gap == on {
+            return;
+        }
+        audio.gap = on;
+        if !on && audio.release_owed && !audio.open {
+            audio.release_owed = false;
+            if audio.system == SystemAudio::None && Session::deactivate().is_err() {
+                tracing::warn!("call: the audio session was not given back");
+            }
+            report("as the wait for a rejoin ends");
+        }
+        if !on {
+            audio.release_owed = false;
+        }
+    }
+
     /// The room's call is a call of the system's that makes its own audio ready (`on`), or is not any more.
     fn system_call(&self, on: bool) {
         let mut audio = self.audio.lock().unwrap();
@@ -358,6 +384,11 @@ impl CallActivity for PhoneCall {
         let mut audio = self.audio.lock().unwrap();
         audio.open = false;
         if audio.system != SystemAudio::None {
+            return;
+        }
+        if audio.gap {
+            audio.release_owed = true;
+            tracing::info!(target: "audio", "the audio session is kept: the call's page is away and a rejoin is waited for");
             return;
         }
         if Session::deactivate().is_err() {
@@ -482,6 +513,14 @@ pub struct Room {
     /// The stills the page forgot whose files stay while a surface may still draw them: the one the service last showed
     /// or the one waiting to be shown names them ([`unreferenced`]).
     forgotten: BTreeSet<String>,
+    /// The conversation the page last reported the call was on.
+    conversation: Option<String>,
+    /// The call a page went away from while the person was in it, for the next page to join again (`sidevoice_shared::rejoin`).
+    rejoin: Rejoin,
+    /// The call was given up because the page kept going (`RoomCall::rejoin_give_up`): the next page ready is told, once.
+    rejoin_stopped: bool,
+    /// The rejoin of this page was aborted (`abort_rejoin`): its reports of a call joined are not one until it reports none.
+    rejoin_aborted: bool,
 }
 
 /// The ids of the stills `surface` draws.
@@ -573,6 +612,10 @@ impl RoomCall {
             updated_at: None,
             update_queued: false,
             forgotten: BTreeSet::new(),
+            conversation: None,
+            rejoin: Rejoin::default(),
+            rejoin_stopped: false,
+            rejoin_aborted: false,
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -587,6 +630,12 @@ impl RoomCall {
         }
     }
 
+    /// The page keeps going after the app loaded it again too often: the call it lost is given up (service, Live Activity and
+    /// what was carried), and the next page is told so.
+    pub fn rejoin_give_up(&self) {
+        self.then(|room| room.give_up_lost_call());
+    }
+
     /// Queues `job`; it runs after every job queued before it.
     pub fn then(&self, job: impl FnOnce(&mut Room) + Send + 'static) {
         let _ = self.jobs.lock().unwrap().send(Box::new(job));
@@ -596,24 +645,59 @@ impl RoomCall {
     /// in order with what the new page reports after it.
     pub fn page_changed(&self, page: u64) {
         self.then(move |room| {
+            // A call the person did not end goes on for them: the next page is told to join it again (`Room::rejoin_call`),
+            // and the call's native side (service, Live Activity, CallKit or Telecom) stays up meanwhile.
+            let gone = room.rejoin.page_gone(
+                room.state.joined,
+                room.hung_up.is_some(),
+                room.conversation.as_deref(),
+                Instant::now(),
+            );
+            tracing::info!(?gone, "a page went away");
+            match gone {
+                Gone::Remembered => {
+                    tracing::warn!(
+                        reason = "page_unload",
+                        "the call was not ended by the person; the next page joins it again"
+                    );
+                    if let Some((id, conversation)) = room.rejoin.current() {
+                        let conversation = conversation.map(str::to_owned);
+                        if let Some(host) = room.app.try_state::<AppHost>() {
+                            host.carry_bind(id, conversation);
+                        }
+                    }
+                    room.rejoin_timer(sidevoice_shared::rejoin::WINDOW + Duration::from_secs(1));
+                }
+                // The person's hang-up, or a page that was in no call and no call remembered: nothing is carried.
+                Gone::Ended => room.carry_drop("hang-up"),
+                Gone::NoCall if !room.rejoin.waiting() => room.carry_drop("no call"),
+                Gone::NoCall => {}
+            }
             // A call live on the page before ends here without a word of the person's: say it, with the page's numbers.
             if room.state.joined || room.holding.is_some() {
                 tracing::warn!(
                     reason = "page_load",
                     from_page = room.page,
                     to_page = page,
-                    "a page load started during a live call; the call ends"
+                    "a page load started during a live call; the page's call ends here"
                 );
             }
             room.page = page;
             room.state = CallState::default();
+            room.conversation = None;
             room.mic_disabled = false;
+            room.rejoin_aborted = false;
             room.hung_up = None;
             room.reported_since = None;
             room.muting = None;
             room.surface = CallSurface::default();
-            room.hold(false, None);
+            // The service stays while a rejoin is waited for: ending it would look like a hang-up (the Live Activity and CallKit's
+            // or Telecom's call gone), and Android cannot start it again from the background.
+            if !room.rejoin.waiting() {
+                room.hold(false, None);
+            }
             room.stop_cue();
+            room.sync_gap();
             // The old page's stills go with it (nothing draws them once its call has ended): the new page sends its own.
             room.forgotten.clear();
             if let Err(error) = clear_stills(&room.app) {
@@ -628,13 +712,14 @@ impl RoomCall {
     }
 
     /// The page `page` reports its call: whether it is joined (the green and the red button), since when (`since`, the
-    /// page's own mark of that call: a join of the same page later is another call), its conversation and its mute
-    /// (`state`), whether the mute can be used (`mic_disabled`), and what its surfaces show (`surface`).
+    /// page's own mark of that call: a join of the same page later is another call), the conversation it is on
+    /// (`conversation`) and its mute (`state`), whether the mute can be used (`mic_disabled`), and what its surfaces show (`surface`).
     pub fn report(
         &self,
         page: u64,
         state: CallState,
         since: Option<f64>,
+        conversation: Option<String>,
         mic_disabled: bool,
         surface: crate::surface::Reported,
     ) {
@@ -642,6 +727,25 @@ impl RoomCall {
             if room.page == page {
                 let mut state = state;
                 state.joined = after_hang_up(&mut room.hung_up, state.joined, since);
+                state.joined = after_abort(&mut room.rejoin_aborted, state.joined);
+                room.conversation = conversation;
+                // A page that loads after one that was lost in a call is the one to join it again.
+                let at = Instant::now();
+                let outcome = room.rejoin.page_reported(
+                    state.ready,
+                    state.joined,
+                    room.conversation.as_deref(),
+                    at,
+                );
+                let resumed = matches!(outcome, Report::Joined { .. });
+                room.rejoin_outcome(outcome);
+                if room.rejoin_stopped && state.ready && !state.joined {
+                    room.rejoin_stopped = false;
+                    run_on_page(
+                        &room.app,
+                        serde_json::json!({ "command": "rejoin-stopped", "page": page }),
+                    );
+                }
                 let (joined, reported) = (state.joined, state.mic_enabled);
                 room.state = state;
                 room.mic_disabled = mic_disabled;
@@ -650,7 +754,15 @@ impl RoomCall {
                 room.reported_since = since;
                 room.surface = crate::surface::surface(&surface, &room.surface);
                 room.collect();
-                room.hold(joined, since);
+                // Not in a call while a lost call is waited for is not a hang-up: the service stays (`rejoin::JOIN_WAIT` ends it).
+                if joined || !room.rejoin.waiting() {
+                    room.hold(joined, since);
+                }
+                if resumed && joined && room.holding.is_some() {
+                    // The service was started for the call the old page held: it is the new page's call now.
+                    room.since = since;
+                }
+                room.sync_gap();
                 room.microphone(mic_enabled, mic_disabled);
                 room.show();
                 room.media();
@@ -915,6 +1027,159 @@ impl Room {
         });
     }
 
+    /// The page this room is for lost a call the person did not end, and is up again: it is told to join `conversation`
+    /// again (the page's `rejoin` command, mobile/tauri/js/mobile-bridge.js), with what the person said to that call while
+    /// no page heard it, which the voice host kept for loss `id` and this conversation (`AppHost::carried`: the turn that was
+    /// open is closed and transcribed first, so the command waits for the old call to be stopped). The host keeps the turns
+    /// until the page is in a call (`Room::rejoin_outcome`), so a page lost again before that is handed them again. A join that
+    /// fails is the page's to say; one that never starts ends the loss after `JOIN_WAIT`.
+    fn rejoin_call(&self, id: u64, conversation: Option<String>) {
+        let (app, page) = (self.app.clone(), self.page);
+        tracing::info!(target: "intent", page, "the call the page lost is joined again");
+        self.rejoin_timer(sidevoice_shared::rejoin::JOIN_WAIT + Duration::from_secs(1));
+        tauri::async_runtime::spawn(async move {
+            let host = app.try_state::<AppHost>().map(|host| host.inner().clone());
+            let turns = match host {
+                Some(host) => host.carried(id, conversation.clone()).await,
+                None => Vec::new(),
+            };
+            tracing::info!(target: "intent", turns = turns.len(), "the rejoin carries what was said meanwhile");
+            // Sent in order with the room's own jobs, and only if the loss is still waited for: a hang-up while the turns were
+            // collected has already told the page to stop (`abort_rejoin`), and this must not follow it.
+            if let Some(room) = app.try_state::<RoomCall>() {
+                let app = app.clone();
+                room.then(move |room| {
+                    if room.page == page
+                        && room
+                            .rejoin
+                            .current()
+                            .is_some_and(|(current, _)| current == id)
+                    {
+                        run_on_page(&app, rejoin_request(page, conversation, &turns));
+                    }
+                });
+            }
+        });
+    }
+
+    /// What a page's report made of the call lost with its page.
+    fn rejoin_outcome(&mut self, outcome: Report) {
+        match outcome {
+            Report::Nothing => {}
+            Report::Hand { id, conversation } => self.rejoin_call(id, conversation),
+            Report::Joined { id, same } => {
+                tracing::info!(target: "intent", same, "the page is in the call it lost; the rejoin is over");
+                self.carry_settle(
+                    id,
+                    if same {
+                        "handed over"
+                    } else {
+                        "another conversation"
+                    },
+                );
+            }
+            Report::Lapsed { id } => self.rejoin_lapsed(id),
+        }
+    }
+
+    /// The wait for a page to join the call it lost ran out: the call is over for real, and nothing carried is kept.
+    fn rejoin_lapsed(&mut self, id: u64) {
+        tracing::warn!(target: "intent", "the call the page lost was not joined again in time; the call ends");
+        self.carry_settle(id, "lapsed");
+        self.end_gap_call();
+    }
+
+    /// Ends what stayed up for a lost call: the service (its Live Activity, CallKit or Telecom call) and the audio session kept.
+    fn end_gap_call(&mut self) {
+        self.hold(false, None);
+        self.media();
+        self.stop_audio();
+        self.sync_gap();
+    }
+
+    /// The audio session is kept exactly while a lost call is waited for.
+    fn sync_gap(&self) {
+        self.phone.gap(self.rejoin.waiting());
+    }
+
+    /// A later check of the wait for a rejoin (nothing reports after the page that never comes up).
+    fn rejoin_timer(&self, after: Duration) {
+        let app = self.app.clone();
+        let _ = std::thread::Builder::new()
+            .name("rejoin-timer".into())
+            .spawn(move || {
+                std::thread::sleep(after);
+                if let Some(room) = app.try_state::<RoomCall>() {
+                    room.then(|room| {
+                        if let Some(id) = room.rejoin.expire(Instant::now()) {
+                            room.rejoin_lapsed(id);
+                        }
+                    });
+                }
+            });
+    }
+
+    /// Drops what was carried for loss `id` (`why`, for the log: never the words).
+    fn carry_settle(&self, id: u64, why: &'static str) {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) {
+                let dropped = host.carry_settle(id).await;
+                tracing::info!(target: "intent", why, dropped, "what was carried for a lost call is settled");
+            }
+        });
+    }
+
+    /// Drops everything carried (`why`): no lost call is waited for.
+    fn carry_drop(&self, why: &'static str) {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) {
+                let dropped = host.carry_clear().await;
+                if dropped > 0 {
+                    tracing::info!(target: "intent", why, dropped, "what was carried is dropped");
+                }
+            }
+        });
+    }
+
+    /// The person ended the call (a surface's hang-up, the system's, a car or a headset), possibly while the page was away: a
+    /// lost call is forgotten with what was carried for it, so that no page joins it again.
+    fn forget_lost_call(&mut self) {
+        if let Some(id) = self.rejoin.cancel() {
+            tracing::info!(target: "intent", "the person ended the call while its page was away; no rejoin");
+            self.carry_settle(id, "hang-up");
+            self.abort_rejoin();
+        }
+        self.sync_gap();
+    }
+
+    /// The person ended the call (or it was given up) while the page was joining it again: that join is told to stop, or the
+    /// page's report of it, with another `since`, would start the call again (`after_hang_up`).
+    fn abort_rejoin(&mut self) {
+        self.rejoin_aborted = true;
+        run_on_page(
+            &self.app,
+            serde_json::json!({ "command": "rejoin-abort", "page": self.page }),
+        );
+    }
+
+    /// The page keeps going (the app reloaded it too often): the call is given up and what was carried dropped, and the next
+    /// page that is up in no call is told, once, that the call was lost.
+    fn give_up_lost_call(&mut self) {
+        if let Some(id) = self.rejoin.cancel() {
+            self.carry_settle(id, "reloads capped");
+            self.abort_rejoin();
+        }
+        self.carry_drop("reloads capped");
+        self.rejoin_stopped = true;
+        // The give-up is a hang-up: the page that is up is not remembered as in a call by its next reload, nor is a late
+        // report of its rejoin taken for a call (`after_hang_up`).
+        self.hung_up = Some(self.reported_since);
+        self.state.joined = false;
+        self.end_gap_call();
+    }
+
     /// Runs what the person asked for on a surface. Each action has one native owner, the same the page's own button ends
     /// in, and the app calls it itself: with the screen locked the WebView may not run script, so nothing waits for the
     /// page ([`native_action`]). The page is still told, as its own command for its call (its number, and the call's join
@@ -1091,6 +1356,8 @@ impl Room {
     /// not taken for it any more ([`after_hang_up`]). The page finishes the hang-up when it runs (the room told, its
     /// lanes disposed of).
     fn hang_up(&mut self) {
+        // A hang-up in the gap is the person's: no rejoin, with or without a call on the page.
+        self.forget_lost_call();
         if self.holding.is_none() && !self.state.joined {
             tracing::info!(target: "intent", "call: hang-up: no call");
             return;
@@ -1120,19 +1387,29 @@ impl Room {
             .app
             .try_state::<crate::bridge::headset::HeadsetSettings>()
             .is_some_and(|settings| settings.double_press_wanted(self.system));
-        let state = if self.holding.is_some() && self.system && call_replaces_media_controls(true) {
-            CallState {
-                ready: self.state.ready,
-                ..CallState::default()
-            }
-        } else {
-            CallState {
-                double_press_wanted: wanted,
-                // The call's audio session is active: Press to Mute's observer is added again then (`media_controls`).
-                record_active: self.cue_allowed(),
-                ..self.state.clone()
-            }
-        };
+        let mut state =
+            if self.holding.is_some() && self.system && call_replaces_media_controls(true) {
+                CallState {
+                    ready: self.state.ready,
+                    ..CallState::default()
+                }
+            } else {
+                CallState {
+                    double_press_wanted: wanted,
+                    // The call's audio session is active: Press to Mute's observer is added again then (`media_controls`).
+                    record_active: self.cue_allowed(),
+                    ..self.state.clone()
+                }
+            };
+        // The call is the person's through the gap, so a headset's press can still hang it up: only where the app's own media
+        // controls carry the call (Android without Telecom), not where the system's call or the Live Activity replaces them.
+        if self.holding.is_some()
+            && self.rejoin.waiting()
+            && !self.system
+            && !call_replaces_media_controls(false)
+        {
+            state.joined = true;
+        }
         media_controls::update(&self.app, &state);
     }
 
@@ -1209,7 +1486,9 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
         return;
     };
     // What only the call of this start, on this page, acts on.
-    let mine = move |room: &Room| room.holding == Some(start) && room.page == page;
+    // The service of a call lost with its page stays through the gap and goes on for the page that rejoins it, so its events are
+    // the room's while it is the one that runs (`start`), whichever page it was made for.
+    let mine = move |room: &Room| room.holding == Some(start);
     match event {
         CallEvent::Focus { state } => {
             if let Some(signal) = focus_signal(state) {
@@ -1304,6 +1583,8 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             room.phone.system_call(false);
             room.clear_interruption();
             room.since = None;
+            // The person's, in the gap too: the page that loads is not to join the call again.
+            room.forget_lost_call();
             // Hung up natively too, as a surface's hang-up is: the page may not run (the screen locked).
             room.hung_up = Some(since);
             room.state.joined = false;
@@ -1443,8 +1724,36 @@ fn after_hang_up(hung_up: &mut Option<Option<f64>>, joined: bool, since: Option<
     }
 }
 
+/// Whether the page's report holds a call after its rejoin was aborted: not while it reports one joined (its join was queued
+/// before it heard the abort, and its mark is new, so `after_hang_up` would take it for another call); its report of none is its
+/// own again.
+fn after_abort(aborted: &mut bool, joined: bool) -> bool {
+    if !*aborted {
+        return joined;
+    }
+    if !joined {
+        *aborted = false;
+    }
+    false
+}
+
 /// Runs one of the shared commands on the room through the page's `run`: `request` is `{command, …}` (`hang-up`,
 /// `toggle-mute`, …), and with `page` and `since` it runs only on that page's call joined then (mobile/tauri/js/mobile-bridge.js).
+/// The `rejoin` command for the page `page`: the conversation to join and the turns said meanwhile, each with how long ago it
+/// ended and whether the page that went was told it started.
+fn rejoin_request(
+    page: u64,
+    conversation: Option<String>,
+    turns: &[sidevoice_shared::voice::carry::CarriedTurn],
+) -> serde_json::Value {
+    serde_json::json!({
+        "command": "rejoin",
+        "page": page,
+        "threadId": conversation,
+        "turns": turns,
+    })
+}
+
 pub fn run_on_page(app: &AppHandle, request: serde_json::Value) {
     if let Some(window) = app.get_webview_window(crate::WINDOW) {
         let _ = window.eval(format!(
@@ -1850,5 +2159,94 @@ mod tests {
         assert!(forgotten.contains("a"));
         assert_eq!(keep_if_saved::<&str>(&mut forgotten, "a", Ok(())), Ok(()));
         assert!(forgotten.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod rejoin_tests {
+    use super::*;
+
+    #[test]
+    fn the_session_is_kept_through_the_wait_for_a_rejoin_and_owed_back_after() {
+        let phone = PhoneCall::default();
+        phone.audio.lock().unwrap().open = true;
+        phone.gap(true);
+        phone.ended();
+        let audio = phone.audio.lock().unwrap();
+        assert!(!audio.open);
+        assert!(audio.release_owed, "not given back while the wait lasts");
+    }
+
+    #[test]
+    fn the_rejoin_command_names_the_page_the_conversation_and_what_was_said() {
+        let request = rejoin_request(7, Some("node|thread".into()), &[]);
+        assert_eq!(
+            request,
+            serde_json::json!({ "command": "rejoin", "page": 7, "threadId": "node|thread", "turns": [] })
+        );
+    }
+}
+
+#[cfg(test)]
+mod give_up_tests {
+    use super::*;
+    use sidevoice_shared::rejoin::{Gone, Rejoin};
+
+    /// A give-up is a hang-up (`Room::give_up_lost_call` marks `hung_up` and no call joined): the next reload of the page that
+    /// rejoined in the meantime does not remember the call again.
+    #[test]
+    fn a_given_up_call_is_not_remembered_by_the_next_reload() {
+        let mut rejoin = Rejoin::default();
+        let mut hung_up = Some(None); // what the give-up leaves
+        let at = Instant::now();
+        // The page rejoining reports the call joined with its own mark: still the give-up's, until the abort.
+        assert!(!after_hang_up(&mut hung_up, true, None));
+        assert_eq!(
+            rejoin.page_gone(false, hung_up.is_some(), Some("t"), at),
+            Gone::Ended
+        );
+        assert!(!rejoin.waiting());
+    }
+
+    #[test]
+    fn a_hang_up_between_the_hand_and_the_join_ends_the_loss_the_page_was_told() {
+        let mut rejoin = Rejoin::default();
+        let at = Instant::now();
+        rejoin.page_gone(true, false, Some("t"), at);
+        assert!(matches!(
+            rejoin.page_reported(true, false, None, at),
+            sidevoice_shared::rejoin::Report::Hand { id: 1, .. }
+        ));
+        assert_eq!(
+            rejoin.cancel(),
+            Some(1),
+            "the hang-up forgets it, and the page is told to stop"
+        );
+        assert!(
+            rejoin.current().is_none(),
+            "so a late rejoin command is not sent"
+        );
+    }
+}
+
+#[cfg(test)]
+mod abort_tests {
+    use super::*;
+
+    #[test]
+    fn a_joined_report_queued_before_the_abort_is_not_a_call_whatever_its_mark() {
+        let mut aborted = true;
+        assert!(
+            !after_abort(&mut aborted, true),
+            "the rejoining page's join, with a new mark"
+        );
+        assert!(aborted, "and the next one too");
+        assert!(!after_abort(&mut aborted, true));
+        assert!(!after_abort(&mut aborted, false));
+        assert!(!aborted, "its report of none is its own again");
+        assert!(
+            after_abort(&mut aborted, true),
+            "a call joined after that is the person's"
+        );
     }
 }

@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
+use super::carry::{CarriedTurn, Carry, OpenTurns, TRANSCRIPTION_WAIT};
 use super::meters::Meters;
 use super::{self as choice, VoiceSettings};
 use futures_util::StreamExt;
@@ -162,6 +163,10 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     /// Whether the page can draw the meters now: false while the app is in the background or its screen is locked, when the
     /// system has suspended the page and a level handed to it would only queue (`set_page_shown`).
     page_shown: Arc<AtomicBool>,
+    /// What the person said to calls whose page was gone, for the next page (`voice::carry`).
+    pub carry: Arc<Carry>,
+    /// Held while the lanes of pages that went are cleared, so that the turns they kept are asked for once it is done.
+    clearing: tokio::sync::Mutex<()>,
 }
 
 pub struct CallLane<P> {
@@ -187,6 +192,11 @@ pub struct CallLane<P> {
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
     /// The tasks handing each saying's steps to the page, up to its `done`.
     telling: Mutex<Vec<JoinHandle<()>>>,
+    /// Whether the page that owns the lane is gone (reloaded, or its web view's process ended): what the person finishes
+    /// saying is kept for the next page and nothing else reaches a page (`voice::carry`).
+    carrying: Arc<AtomicBool>,
+    /// The turns of the person's open on the lane's call.
+    open_turns: Arc<OpenTurns>,
 }
 
 /// The lane's call, and what it was made of.
@@ -248,6 +258,8 @@ impl<A: LaneAudio> VoiceState<A> {
             active: Arc::default(),
             pause: pause::PlaybackPause::default(),
             page_shown: Arc::new(AtomicBool::new(true)),
+            carry: Arc::default(),
+            clearing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -436,7 +448,12 @@ impl<A: LaneAudio> VoiceState<A> {
             Arc::clone(&lane.lifecycle),
             Arc::clone(&lane.released),
             ended,
-            Arc::clone(&self.page_shown),
+            Carrying {
+                page_shown: Arc::clone(&self.page_shown),
+                carrying: Arc::clone(&lane.carrying),
+                open: Arc::clone(&lane.open_turns),
+                carry: Arc::clone(&self.carry),
+            },
         );
         call.start(StartOptions { take });
         *running = Some(Running { call, applied });
@@ -692,12 +709,18 @@ impl<A: LaneAudio> VoiceState<A> {
     /// made its lanes before this ran, under the key of one that went too: the route is to a lane, not to a key, so a
     /// route the newer page made to its own is not the old one's to clear.
     pub async fn clear_older_than(&self, page: u64) {
+        // Held to the end: whoever asks for the turns carried waits for this (`carried`).
+        let _clearing = self.clearing.lock().await;
         let old: Vec<(String, Arc<CallLane<A::Port>>)> = {
             let mut calls = self.calls.lock().await;
             let keys: Vec<String> =
                 calls.iter().filter(|(_, lane)| lane.page < page).map(|(key, _)| key.clone()).collect();
             keys.into_iter().filter_map(|key| calls.remove(&key).map(|lane| (key, lane))).collect()
         };
+        // What the person finishes saying to them is kept for the next page instead (`voice::carry`).
+        for (_, lane) in &old {
+            lane.carrying.store(true, Ordering::SeqCst);
+        }
         // What waits on these lanes hears first that they are over, whatever their calls are doing (one still loading its
         // models may not answer a stop for as long as it loads), and nothing they say reaches the page any more.
         for (_, lane) in &old {
@@ -711,9 +734,45 @@ impl<A: LaneAudio> VoiceState<A> {
             }
         }
         for (_, lane) in old {
+            lane.finish_open_turns().await;
             lane.stop().await;
             self.retire(&lane).await;
         }
+    }
+
+    /// The page of the current lanes is gone, and the next one has not loaded yet (the system ended its web view's process):
+    /// from now on what the person finishes saying is kept for the next page, and nothing else is told to anyone. The lanes
+    /// are still the old page's; `clear_older_than` ends them once the next page loads.
+    pub async fn page_lost(&self) {
+        self.carry.open();
+        let page = self.page.load(Ordering::SeqCst);
+        for lane in self.calls.lock().await.values().filter(|lane| lane.page <= page) {
+            lane.carrying.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// The page was lost (loss `id`, on `conversation`): what is kept is its, and what is kept from now on.
+    pub fn carry_bind(&self, id: u64, conversation: Option<String>) {
+        self.carry.bind(id, conversation);
+    }
+
+    /// The turns kept for loss `id` on `conversation`, once the lanes of the pages before the current one have finished theirs.
+    /// Kept until [`VoiceState::carry_settle`].
+    pub async fn carried(&self, id: u64, conversation: Option<&str>) -> Vec<CarriedTurn> {
+        let _clearing = self.clearing.lock().await;
+        self.carry.peek(id, conversation, std::time::Instant::now())
+    }
+
+    /// Loss `id` is over with the turns handed to a page, or dropped: how many turns were dropped.
+    pub async fn carry_settle(&self, id: u64) -> usize {
+        let _clearing = self.clearing.lock().await;
+        self.carry.settle(id)
+    }
+
+    /// Nothing is carried: how many turns were dropped.
+    pub async fn carry_clear(&self) -> usize {
+        let _clearing = self.clearing.lock().await;
+        self.carry.clear()
     }
 
     /// No route and no lanes: each old call is stopped and released, and keeps its models for its idle minutes.
@@ -750,6 +809,8 @@ impl<P> CallLane<P> {
             released: Arc::new(Mutex::new(false)),
             sayings: Arc::new(Mutex::new(HashMap::new())),
             telling: Mutex::new(Vec::new()),
+            carrying: Arc::new(AtomicBool::new(false)),
+            open_turns: Arc::default(),
         }
     }
 
@@ -766,6 +827,22 @@ impl<P> CallLane<P> {
         // Whatever still waits on the call hears that it is over: a `ready` of a call that never worked, a stop whose idle
         // state will not come.
         self.lifecycle.lock().unwrap().end();
+    }
+
+    /// Closes the turn the person has open on the call and waits (up to [`TRANSCRIPTION_WAIT`]) for its words, before the call
+    /// is stopped (a stop cancels an open turn): for a lane that is carrying, they are kept for the next page.
+    async fn finish_open_turns(&self) {
+        if !self.open_turns.any() {
+            return;
+        }
+        let closed = match self.call.lock().await.as_ref() {
+            Some(running) => running.call.end_input(),
+            None => return,
+        };
+        closed.await;
+        if !self.open_turns.settled(TRANSCRIPTION_WAIT).await {
+            tracing::warn!("a turn was still being transcribed when its page's call was stopped; it is lost");
+        }
     }
 
     /// Stops listening and speaking; the models stay loaded. A `ready` still waiting rejects with `stopped`. Returns
@@ -922,13 +999,17 @@ fn forward(
     lifecycle: Arc<Mutex<Lifecycle>>,
     released: Arc<Mutex<bool>>,
     ended: Ended,
-    page_shown: Arc<AtomicBool>,
+    kept: Carrying,
 ) {
+    let page_shown = Arc::clone(&kept.page_shown);
     spawn_in_span(async move {
         let mut meters = Meters::default();
         // Whether the call's first idle is still to come: the one before it goes on ([`Ended`]).
         let mut first_idle = true;
         while let Some(event) = events.next().await {
+            if let VoiceEvent::Turn(turn) = &event {
+                kept.open.seen(turn, !kept.carrying.load(Ordering::SeqCst));
+            }
             let wanted = match &event {
                 VoiceEvent::Level(level) => meters.level(*level, page_shown.load(Ordering::SeqCst)),
                 VoiceEvent::PlaybackLevel(level) => meters.playback(*level, page_shown.load(Ordering::SeqCst)),
@@ -959,7 +1040,18 @@ fn forward(
                     value
                 }
             };
-            if !value.is_null() {
+            if kept.carrying.load(Ordering::SeqCst) {
+                // The page that owns the lane is gone: what the person finished saying waits for the next one, and
+                // nothing else is told to anyone (`voice::carry`).
+                if let Some(mut turn) = carried_of(&event) {
+                    turn.started_told = kept.open.take_told(&turn.turn_id);
+                    tracing::info!(
+                        turn = crate::logging::client_id(&turn.turn_id),
+                        "a turn finished with no page to hear it; it is kept for the next one"
+                    );
+                    kept.carry.keep(turn, std::time::Instant::now());
+                }
+            } else if !value.is_null() {
                 value["key"] = json!(key);
                 // Held across the hand-over: `release` waits for the event in hand, and nothing follows it.
                 let released = released.lock().unwrap();
@@ -1024,4 +1116,20 @@ where
 {
     use tracing::Instrument;
     tokio::spawn(future.in_current_span())
+}
+
+/// What `forward` needs to keep what the person says to a lane whose page is gone (`voice::carry`).
+struct Carrying {
+    page_shown: Arc<AtomicBool>,
+    carrying: Arc<AtomicBool>,
+    open: Arc<OpenTurns>,
+    carry: Arc<Carry>,
+}
+
+/// The turn `event` finishes with words, if it is one.
+fn carried_of(event: &VoiceEvent) -> Option<CarriedTurn> {
+    match event {
+        VoiceEvent::Turn(turn) => CarriedTurn::of(turn),
+        _ => None,
+    }
 }

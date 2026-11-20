@@ -11,7 +11,10 @@ impl Os for Native {
         None
     }
 
-    fn watch_termination(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    fn watch_termination(
+        builder: tauri::Builder<tauri::Wry>,
+        _on_lost: fn(&tauri::Webview),
+    ) -> tauri::Builder<tauri::Wry> {
         builder
     }
 }

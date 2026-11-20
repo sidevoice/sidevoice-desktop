@@ -7,6 +7,58 @@
 //! commands every app shares (`sidevoice-shared-tauri`, over `sidevoice-shared`'s application host). The page reports
 //! the call back (`call_state`), which the headset's buttons and the lock screen's controls follow. No page captures
 //! anything: the app owns the microphone and the speaker, as on the desktop (docs/MOBILE.md).
+/// The system ended the web view's process (iOS: memory pressure, a crash) while the app lives on. The web view stays blank
+/// when the app handles that and does nothing (WebKit reloads by itself only when nobody handles it), so the page is loaded
+/// again, which ends the old page's lanes and starts the new one; and from now on what the person says to a call they did
+/// not end is kept for that page (`AppHost::page_lost`), which joins the call again (`call::RoomCall::page_changed`).
+pub(crate) fn web_view_lost(webview: &tauri::Webview) {
+    let app = webview.app_handle().clone();
+    if let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) {
+        tauri::async_runtime::spawn(async move { host.page_lost().await });
+    }
+    // A page that goes again at once is not loaded again at once, and not for ever: past the cap the call it lost is given up
+    // (a page that cannot stay up cannot hold it), and the page is loaded once more when the window clears, to say so.
+    let wait = match RELOADS.lock().unwrap().next(std::time::Instant::now()) {
+        Reload::Now => Duration::ZERO,
+        Reload::After(wait) => wait,
+        Reload::Stop { retry } => {
+            tracing::error!(
+                reloads = RELOAD_MAX,
+                "the web view ended again and again; the call it held is given up"
+            );
+            if let Some(room) = app.try_state::<call::RoomCall>() {
+                room.rejoin_give_up();
+            }
+            retry
+        }
+    };
+    if wait.is_zero() {
+        reload(webview);
+    } else {
+        let webview = webview.clone();
+        let _ = std::thread::Builder::new()
+            .name("web-view-reload".into())
+            .spawn(move || {
+                std::thread::sleep(wait);
+                reload(&webview);
+            });
+    }
+}
+
+/// The reloads the app made after the system ended the web view (`web_view_lost`).
+static RELOADS: std::sync::Mutex<Reloads> = std::sync::Mutex::new(Reloads::new());
+
+fn reload(webview: &tauri::Webview) {
+    if webview.reload().is_err() {
+        tracing::error!("the web view could not be loaded again after its process ended");
+        // No page will load to be told of the loss and no `page_changed` will time it: the call is given up now, so that the
+        // service and the lanes do not outlive a page that never comes.
+        if let Some(room) = webview.app_handle().try_state::<call::RoomCall>() {
+            room.rejoin_give_up();
+        }
+    }
+}
+
 #[cfg(test)]
 mod acl_tests;
 mod bridge;
@@ -21,7 +73,8 @@ pub mod pairings;
 mod platform;
 mod surface;
 
-use std::{path::PathBuf, sync::Arc};
+use sidevoice_shared::rejoin::{Reload, Reloads, RELOAD_MAX};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 pub use platform::entry::run;
 use sidevoice_mobile_plugin::SurfaceAction;
@@ -115,6 +168,8 @@ struct CallReport {
     title: String,
     /// When the call was joined, as the page marks it (ms since the epoch): a later join is another call.
     since: Option<f64>,
+    /// The conversation the call is on (`callCard.conversation`), a string, read leniently: anything else is none.
+    conversation: serde_json::Value,
     /// The room's own words for the call, which the call's surfaces read (`surface.rs`): the agent's mood, the person's
     /// open turn, why the call is busy (strings, read leniently: anything else is none), and whether a reply can be
     /// skipped.
@@ -406,6 +461,7 @@ fn call_state(
         page,
         snapshot.clone().into(),
         snapshot.since,
+        snapshot.conversation.as_str().map(str::to_owned),
         snapshot.mic_disabled,
         snapshot.surface(),
     );
@@ -515,7 +571,7 @@ fn run_app() {
     let events = pages.clone();
     let builder = tauri::Builder::default();
     // The system ending the web view's own process is logged where it says so (`platform::webview`).
-    let builder = platform::webview::watch_termination(builder);
+    let builder = platform::webview::watch_termination(builder, web_view_lost);
     builder
         .plugin(sidevoice_mobile_plugin::init())
         // The camera that scans the pairing code (`host.codeScanner`): the page asks for its permission and a scan through
