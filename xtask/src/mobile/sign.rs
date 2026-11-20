@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 
 use super::check::{build_tool, check_16kb};
-use super::unsigned_apk;
+use super::{unsigned_aab, unsigned_apk};
 use crate::util::{ensure, read_secret, repo, work, Cmd, SecretDir};
 use crate::Result;
 
@@ -38,6 +38,38 @@ fn keystore(dir: &SecretDir) -> Result<PathBuf> {
             None => Err("neither ANDROID_UPLOAD_KEYSTORE_B64 nor ANDROID_UPLOAD_KEYSTORE_PATH (a file) is set".into()),
         },
     }
+}
+
+fn signed_bundle() -> PathBuf {
+    repo().join("dist/Sidevoice-android.aab")
+}
+
+/// `mobile sign android-bundle`: dist/Sidevoice-android-unsigned.aab (`mobile bundle android`) signed with the upload key
+/// by `jarsigner` (the way Google Play checks a bundle: no zipalign, Play makes the APKs from it) and verified, into
+/// dist/Sidevoice-android.aab. The same environment and the same private files as [`sign_android`].
+pub fn sign_android_bundle() -> Result<()> {
+    let alias = crate::util::required_env("ANDROID_UPLOAD_KEY_ALIAS")?;
+    let password = crate::util::required_env("ANDROID_UPLOAD_KEYSTORE_PASSWORD")?;
+    let input = unsigned_aab();
+    ensure(
+        input.exists(),
+        format!("{}: build it first (`cargo xtask mobile bundle android --version-code N`)", input.display()),
+    )?;
+    let (out, secrets) = (signed_bundle(), SecretDir::new("android-signing")?);
+    let (keystore, password) = (keystore(&secrets)?, secrets.file("password", password.as_bytes())?);
+    let _ = fs::remove_file(&out);
+    Cmd::new("jarsigner")
+        .args(["-keystore"])
+        .arg(&keystore)
+        .args(["-storetype", "PKCS12", "-storepass:file"])
+        .arg(&password)
+        .arg("-signedjar")
+        .arg(&out)
+        .arg(&input)
+        .arg(&alias)
+        .run()?;
+    drop(secrets);
+    Cmd::new("jarsigner").args(["-verify", "-strict"]).arg(&out).run()
 }
 
 /// `mobile sign android`.

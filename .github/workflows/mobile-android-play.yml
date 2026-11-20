@@ -1,0 +1,115 @@
+name: mobile-android-play
+
+# The mobile app's Android build, signed with the upload key and uploaded to Google Play's internal testing track
+# (docs/MOBILE.md → "Google Play internal testing"): the Android counterpart of mobile-testflight.yml. It runs on every
+# push to main and by hand, and only from main; no pull request runs it.
+# - OFF until the Google Play developer account exists: while the repository secret GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is
+#   absent (or empty) the `gate` job reports it, the others are skipped, and the run is green. Adding the secret is the
+#   switch; nothing in this file changes. (The three keystore secrets are mobile-android-signed.yml's, the same upload key.)
+# - The build number (`versionCode`) is this workflow's run number: it only grows, which Play requires of the uploads of
+#   an app. A re-run of a run whose upload Play accepted has the same number and fails: dispatch again instead.
+# - Uploads are serialized by the concurrency group and never cancelled; GitHub keeps one pending run per group, so the
+#   next build is always the latest main.
+# - Two jobs, as in mobile-android-signed.yml: the one that builds and signs sees the keystore and runs the build's code,
+#   the one that uploads sees the service account and runs no build.
+# Every external action is pinned by its full commit SHA, with its version in a comment.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-android-play
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The bundled web interface is a release of sidevoice-web (web.pin.json): its attestation is verified wherever it is
+  # fetched, with gh and this run's token (contents: read).
+  SIDEVOICE_WEB_ATTESTATION: require
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  # Whether the upload is switched on: the secret exists. A secret cannot be read by a job's `if`, so a step says it.
+  gate:
+    name: Is the Google Play upload on
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    steps:
+      - id: gate
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Google Play upload is off::GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not set (docs/MOBILE.md, Google Play internal testing)."
+          fi
+
+  bundle:
+    name: Android App Bundle signed with the upload key
+    needs: gate
+    if: needs.gate.outputs.enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-android
+      - name: "The unsigned bundle (arm64-v8a and armeabi-v7a), versionCode = the run number"
+        env:
+          # Crash reports (docs/CRASH_REPORTS.md): this build sends them.
+          SIDEVOICE_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+        run: cargo xtask mobile bundle android --version-code ${{ github.run_number }}
+      # sentry-cli on its own: no secret in this step's environment and no install script.
+      - name: Install sentry-cli
+        env:
+          GH_TOKEN: ''
+        run: npm install --global --ignore-scripts @sentry/cli@3.8.2
+      - name: Upload the debug files and the release to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          cargo xtask sentry upload sidevoice-mobile target/aarch64-linux-android/release target/armv7-linux-androideabi/release
+      # The only step that sees the keystore: its secrets are the signed APK's (docs/MOBILE.md → "Signing").
+      - name: Sign and verify the bundle
+        env:
+          ANDROID_UPLOAD_KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_B64 }}
+          ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        run: cargo xtask mobile sign android-bundle
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Sidevoice-android-signed-aab
+          path: dist/Sidevoice-android.aab
+          retention-days: 14
+          if-no-files-found: error
+
+  upload:
+    name: Upload to Google Play internal testing
+    needs: bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: Sidevoice-android-signed-aab
+          path: dist
+      # `completed` offers the build to the internal testers at once. Play refuses it while the app is still a draft
+      # (before its first release was published by hand): set the repository variable GOOGLE_PLAY_RELEASE_STATUS to
+      # `draft` until then (docs/MOBILE.md).
+      - uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ai.sidevoice.mobile
+          releaseFiles: dist/Sidevoice-android.aab
+          track: internal
+          status: ${{ vars.GOOGLE_PLAY_RELEASE_STATUS || 'completed' }}
