@@ -37,6 +37,12 @@ pub struct CarriedTurn {
     /// When the person started speaking and when the turn ended, in Unix milliseconds.
     pub started_at: u64,
     pub ended_at: u64,
+    /// Whether the page that went had been told this turn started: the next page then says only its end, as words said
+    /// while away, and not a second start of the same turn.
+    pub started_told: bool,
+    /// How long ago the turn ended when it was handed over, in milliseconds: a turn older than the core's resume window is
+    /// said as words said while away, with that age.
+    pub age_ms: u64,
 }
 
 impl CarriedTurn {
@@ -51,6 +57,8 @@ impl CarriedTurn {
                     language: language.clone(),
                     started_at: *started_at,
                     ended_at: *ended_at,
+                    started_told: false,
+                    age_ms: 0,
                 })
             }
             _ => None,
@@ -58,28 +66,82 @@ impl CarriedTurn {
     }
 }
 
-/// The turns kept for the next page.
+/// A turn kept, and the loss of a page it belongs to (`None` until [`Carry::bind`] names it).
+struct Kept {
+    at: Instant,
+    loss: Option<u64>,
+    turn: CarriedTurn,
+}
+
+#[derive(Default)]
+struct Held {
+    turns: Vec<Kept>,
+    /// The page loss the turns kept now belong to, and the conversation it was on (`rejoin::Rejoin`).
+    loss: Option<(u64, Option<String>)>,
+}
+
+/// The turns kept for the next page, by the page loss and the conversation they were said in: only that loss's rejoin, on that
+/// conversation, is handed them, and any other outcome (the window lapsed, the reload failed, the person joined another
+/// conversation) drops them ([`Carry::settle`]).
 #[derive(Default)]
 pub struct Carry {
-    turns: Mutex<Vec<(Instant, CarriedTurn)>>,
+    held: Mutex<Held>,
 }
 
 impl Carry {
-    /// Keeps `turn`, heard at `now`.
+    /// Keeps `turn`, heard at `now`, for the loss bound now (or the next to be bound).
     pub fn keep(&self, turn: CarriedTurn, now: Instant) {
-        let mut turns = self.turns.lock().unwrap();
-        turns.retain(|(at, _)| now.saturating_duration_since(*at) < KEPT_FOR);
-        turns.push((now, turn));
-        if turns.len() > MOST {
-            let surplus = turns.len() - MOST;
-            turns.drain(..surplus);
+        let mut held = self.held.lock().unwrap();
+        held.turns.retain(|kept| now.saturating_duration_since(kept.at) < KEPT_FOR);
+        let loss = held.loss.as_ref().map(|(id, _)| *id);
+        held.turns.push(Kept { at: now, loss, turn });
+        let most = held.turns.len().saturating_sub(MOST);
+        held.turns.drain(..most);
+    }
+
+    /// The page was lost: loss `id`, on `conversation`. What was kept meanwhile is its, and so is what is kept from now on.
+    pub fn bind(&self, id: u64, conversation: Option<String>) {
+        let mut held = self.held.lock().unwrap();
+        for kept in held.turns.iter_mut().filter(|kept| kept.loss.is_none()) {
+            kept.loss = Some(id);
+        }
+        held.loss = Some((id, conversation));
+    }
+
+    /// The turns of loss `id` kept for `conversation` that are still the person's to say, oldest first, each with its age at `now`; kept until [`Carry::settle`], so that a page lost again before it joined is handed them again.
+    pub fn peek(&self, id: u64, conversation: Option<&str>, now: Instant) -> Vec<CarriedTurn> {
+        let held = self.held.lock().unwrap();
+        match &held.loss {
+            Some((bound, on)) if *bound == id && on.as_deref() == conversation => held
+                .turns
+                .iter()
+                .filter(|kept| kept.loss == Some(id))
+                .map(|kept| (now.saturating_duration_since(kept.at), kept))
+                .filter(|(age, _)| *age < KEPT_FOR)
+                .map(|(age, kept)| CarriedTurn { age_ms: age.as_millis() as u64, ..kept.turn.clone() })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
-    /// Hands over the turns kept that are still the person's to say, oldest first, and keeps none: said once.
-    pub fn take(&self, now: Instant) -> Vec<CarriedTurn> {
-        let kept = std::mem::take(&mut *self.turns.lock().unwrap());
-        kept.into_iter().filter(|(at, _)| now.saturating_duration_since(*at) < KEPT_FOR).map(|(_, turn)| turn).collect()
+    /// The loss `id` is over (the page that joined has the turns now, or the call ended, lapsed or went elsewhere): what was
+    /// kept for it, and anything kept with no loss, is dropped. How many turns that was.
+    pub fn settle(&self, id: u64) -> usize {
+        let mut held = self.held.lock().unwrap();
+        let before = held.turns.len();
+        held.turns.retain(|kept| kept.loss.is_some_and(|loss| loss != id));
+        if held.loss.as_ref().is_some_and(|(bound, _)| *bound == id) {
+            held.loss = None;
+        }
+        before - held.turns.len()
+    }
+
+    /// Nothing is carried any more, whichever loss it was for (no call was remembered, or the person ended it). How many
+    /// turns were dropped.
+    pub fn clear(&self) -> usize {
+        let mut held = self.held.lock().unwrap();
+        held.loss = None;
+        std::mem::take(&mut held.turns).len()
     }
 }
 
@@ -87,20 +149,30 @@ impl Carry {
 #[derive(Default)]
 pub struct OpenTurns {
     ids: Mutex<HashSet<String>>,
+    /// The turns whose start was handed to a page (the page that went was told them).
+    told: Mutex<HashSet<String>>,
 }
 
 impl OpenTurns {
-    /// A step of a turn of the lane's call.
-    pub fn seen(&self, event: &TurnEvent) {
+    /// A step of a turn of the lane's call; `told`: it was handed to a page.
+    pub fn seen(&self, event: &TurnEvent, told: bool) {
         let mut ids = self.ids.lock().unwrap();
         match event {
             TurnEvent::Started { turn_id, .. } => {
                 ids.insert(turn_id.clone());
+                if told {
+                    self.told.lock().unwrap().insert(turn_id.clone());
+                }
             }
             TurnEvent::Finished { turn_id, .. } | TurnEvent::Cancelled { turn_id, .. } => {
                 ids.remove(turn_id);
             }
         }
+    }
+
+    /// Whether the start of `turn_id` was handed to a page; asked once, when the turn is kept.
+    pub fn take_told(&self, turn_id: &str) -> bool {
+        self.told.lock().unwrap().remove(turn_id)
     }
 
     pub fn any(&self) -> bool {

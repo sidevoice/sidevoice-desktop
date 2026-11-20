@@ -750,10 +750,28 @@ impl<A: LaneAudio> VoiceState<A> {
         }
     }
 
-    /// The turns kept for the page that is current now, once the lanes of the pages before it have finished theirs.
-    pub async fn carried(&self) -> Vec<CarriedTurn> {
-        let _ = self.clearing.lock().await;
-        self.carry.take(std::time::Instant::now())
+    /// The page was lost (loss `id`, on `conversation`): what is kept is its, and what is kept from now on.
+    pub fn carry_bind(&self, id: u64, conversation: Option<String>) {
+        self.carry.bind(id, conversation);
+    }
+
+    /// The turns kept for loss `id` on `conversation`, once the lanes of the pages before the current one have finished theirs.
+    /// Kept until [`VoiceState::carry_settle`].
+    pub async fn carried(&self, id: u64, conversation: Option<&str>) -> Vec<CarriedTurn> {
+        let _clearing = self.clearing.lock().await;
+        self.carry.peek(id, conversation, std::time::Instant::now())
+    }
+
+    /// Loss `id` is over with the turns handed to a page, or dropped: how many turns were dropped.
+    pub async fn carry_settle(&self, id: u64) -> usize {
+        let _clearing = self.clearing.lock().await;
+        self.carry.settle(id)
+    }
+
+    /// Nothing is carried: how many turns were dropped.
+    pub async fn carry_clear(&self) -> usize {
+        let _clearing = self.clearing.lock().await;
+        self.carry.clear()
     }
 
     /// No route and no lanes: each old call is stopped and released, and keeps its models for its idle minutes.
@@ -989,7 +1007,7 @@ fn forward(
         let mut first_idle = true;
         while let Some(event) = events.next().await {
             if let VoiceEvent::Turn(turn) = &event {
-                kept.open.seen(turn);
+                kept.open.seen(turn, !kept.carrying.load(Ordering::SeqCst));
             }
             let wanted = match &event {
                 VoiceEvent::Level(level) => meters.level(*level, page_shown.load(Ordering::SeqCst)),
@@ -1024,7 +1042,8 @@ fn forward(
             if kept.carrying.load(Ordering::SeqCst) {
                 // The page that owns the lane is gone: what the person finished saying waits for the next one, and
                 // nothing else is told to anyone (`voice::carry`).
-                if let Some(turn) = carried_of(&event) {
+                if let Some(mut turn) = carried_of(&event) {
+                    turn.started_told = kept.open.take_told(&turn.turn_id);
                     tracing::info!(
                         turn = crate::logging::client_id(&turn.turn_id),
                         "a turn finished with no page to hear it; it is kept for the next one"

@@ -1176,13 +1176,14 @@ fn what_the_person_finishes_saying_after_their_page_was_lost_is_kept_for_the_nex
         started(&state, &fake, "old", seen.page(), false).await;
         state.route_input(Some("old".into())).await.unwrap();
 
+        state.carry_bind(7, Some("c".into()));
         state.page_lost().await;
         audio.speak(TURN_FRAMES);
         let mut kept = Vec::new();
         within(async {
             while kept.is_empty() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
-                kept = state.carry.take(std::time::Instant::now());
+                kept = state.carry.peek(7, Some("c"), std::time::Instant::now());
             }
         })
         .await;
@@ -1194,13 +1195,13 @@ fn what_the_person_finishes_saying_after_their_page_was_lost_is_kept_for_the_nex
         state.page.store(1, Ordering::SeqCst);
         within(state.clear_older_than(1)).await;
         assert!(state.lane("old").await.is_err());
-        assert!(within(state.carried()).await.is_empty(), "said once");
+        assert!(within(state.carry_settle(7)).await == 1, "settled once");
         state.create_call_in("new".into(), 1).await.unwrap();
         configure(&state, &fake, "new", seen.page()).await;
         within(state.ready("new")).await.unwrap();
         state.route_input(Some("new".into())).await.unwrap();
         audio.speak(TURN_FRAMES);
         seen.until("the new page's turn", |seen| seen.count("new", "turn", Some("finished")) == 1).await;
-        assert!(within(state.carried()).await.is_empty(), "a live page's turns are its own");
+        assert!(within(state.carried(7, Some("c"))).await.is_empty(), "a live page's turns are its own");
     });
 }

@@ -118,13 +118,16 @@
       // The page that was in a call the person did not end went away (it reloaded, or the system ended its web view): this one
       // joins that call again, on `threadId`, and says the turns the person finished meanwhile (`turns`, from the voice host).
       // Only a page that offers the action (sidevoice-web `rejoinCall`) can; one that does not leaves the call as the person finds it.
-      rejoin: (request, state, actions) => {
-        if (state.joined || typeof actions.rejoinCall !== "function") return false;
+      // A page already in a call (the person joined by themselves meanwhile) still gets it: it merges the turns into that call.
+      rejoin: (request, _state, actions) => {
+        if (typeof actions.rejoinCall !== "function") return false;
         const turns = Array.isArray(request.turns) ? request.turns : [];
         const threadId = typeof request.threadId === "string" && request.threadId ? request.threadId : null;
         Promise.resolve(actions.rejoinCall({ threadId, turns })).catch(() => {});
         return true;
       },
+      // The app gave the lost call up (its page kept going): the page shows the call ended, as for a call the room dropped.
+      "rejoin-stopped": (_request, _state, actions) => typeof actions.callLost === "function" && (actions.callLost(), true),
       // The stack of conversations on the call's surfaces was tapped: the app is in front, and the page shows its list
       // of conversations (the room's `openConversations`, where the page has it).
       "open-conversations": () => {

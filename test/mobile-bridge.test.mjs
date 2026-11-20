@@ -732,6 +732,11 @@ test("a page that lost a call the person did not end is told to join it again, w
   assert.equal(JSON.stringify(asked[1]), JSON.stringify({ threadId: null, turns: [] }));
   assert.equal(api.run({ command: "rejoin", page: 6, threadId: "thread" }), false, "another page's");
   joined.value = true;
-  assert.equal(api.run({ command: "rejoin", page: 7, threadId: "thread" }), false, "a page already in a call has nothing to rejoin");
-  assert.equal(asked.length, 2);
+  assert.equal(api.run({ command: "rejoin", page: 7, threadId: "thread", turns }), true, "a page already in a call merges the turns");
+  assert.equal(asked.length, 3);
+  assert.equal(api.run({ command: "rejoin-stopped", page: 7 }), false, "a page without the action cannot say it");
+  let lost = 0;
+  win.sidevoiceActions.callLost = () => { lost += 1; };
+  assert.equal(api.run({ command: "rejoin-stopped", page: 7 }), true);
+  assert.equal(lost, 1);
 });

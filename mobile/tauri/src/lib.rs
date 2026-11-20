@@ -21,7 +21,8 @@ pub mod pairings;
 mod platform;
 mod surface;
 
-use std::{path::PathBuf, sync::Arc};
+use sidevoice_shared::rejoin::{Reload, Reloads, RELOAD_MAX};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 pub use platform::entry::run;
 use sidevoice_mobile_plugin::SurfaceAction;
@@ -117,7 +118,6 @@ struct CallReport {
     since: Option<f64>,
     /// The conversation the call is on (`callCard.conversation`), a string, read leniently: anything else is none.
     conversation: serde_json::Value,
-    since: Option<f64>,
     /// The room's own words for the call, which the call's surfaces read (`surface.rs`): the agent's mood, the person's
     /// open turn, why the call is busy (strings, read leniently: anything else is none), and whether a reply can be
     /// skipped.
@@ -927,6 +927,39 @@ pub(crate) fn web_view_lost(webview: &tauri::Webview) {
     if let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) {
         tauri::async_runtime::spawn(async move { host.page_lost().await });
     }
+    // A page that goes again at once is not loaded again at once, and not for ever: past the cap the call it lost is given up
+    // (a page that cannot stay up cannot hold it), and the page is loaded once more when the window clears, to say so.
+    let wait = match RELOADS.lock().unwrap().next(std::time::Instant::now()) {
+        Reload::Now => Duration::ZERO,
+        Reload::After(wait) => wait,
+        Reload::Stop { retry } => {
+            tracing::error!(
+                reloads = RELOAD_MAX,
+                "the web view ended again and again; the call it held is given up"
+            );
+            if let Some(room) = app.try_state::<call::RoomCall>() {
+                room.rejoin_give_up();
+            }
+            retry
+        }
+    };
+    if wait.is_zero() {
+        reload(webview);
+    } else {
+        let webview = webview.clone();
+        let _ = std::thread::Builder::new()
+            .name("web-view-reload".into())
+            .spawn(move || {
+                std::thread::sleep(wait);
+                reload(&webview);
+            });
+    }
+}
+
+/// The reloads the app made after the system ended the web view (`web_view_lost`).
+static RELOADS: std::sync::Mutex<Reloads> = std::sync::Mutex::new(Reloads::new());
+
+fn reload(webview: &tauri::Webview) {
     if webview.reload().is_err() {
         tracing::error!("the web view could not be loaded again after its process ended");
     }

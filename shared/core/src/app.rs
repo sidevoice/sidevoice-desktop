@@ -289,8 +289,24 @@ impl<A: LaneAudio> AppHost<A> {
     /// What the person said to the calls of the pages before this one, which they were still saying or waiting for the words of
     /// when those pages went, once those calls are stopped: handed over once, for the page to say as turns of its own, and only
     /// while the person's call may still be theirs to speak into ([`crate::voice::carry::KEPT_FOR`]).
-    pub async fn carried(&self) -> Vec<crate::voice::carry::CarriedTurn> {
-        self.entered(self.inner.voice.carried()).await
+    pub async fn carried(&self, id: u64, conversation: Option<String>) -> Vec<crate::voice::carry::CarriedTurn> {
+        self.entered(self.inner.voice.carried(id, conversation.as_deref())).await
+    }
+
+    /// The page was lost (loss `id`, on `conversation`): what is kept is for that loss's rejoin only.
+    pub fn carry_bind(&self, id: u64, conversation: Option<String>) {
+        self.inner.voice.carry_bind(id, conversation);
+    }
+
+    /// Loss `id` is over (the page has the turns, or the call ended, lapsed or went elsewhere): what was kept for it is
+    /// dropped. How many turns were dropped.
+    pub async fn carry_settle(&self, id: u64) -> usize {
+        self.entered(self.inner.voice.carry_settle(id)).await
+    }
+
+    /// Nothing is carried (the person ended the call). How many turns were dropped.
+    pub async fn carry_clear(&self) -> usize {
+        self.entered(self.inner.voice.carry_clear()).await
     }
 
     /// Quitting or restarting, before `exit()` runs the static destructors of the C++ libraries the models are made of:
