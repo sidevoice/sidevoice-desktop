@@ -84,6 +84,7 @@
 		035C90F560637AC4EE9E2858 /* microphone_help.rs */ = {isa = PBXFileReference; path = microphone_help.rs; sourceTree = "<group>"; };
 		04B561B0C6069C039FFEED09 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		084491628E8D53FF0885F833 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
+		085474441D5CE1D859DE3A39 /* screen.rs */ = {isa = PBXFileReference; path = screen.rs; sourceTree = "<group>"; };
 		08702CFC095D2F17073267AA /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		0C54967DE38A99011EDDA22E /* AVFAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFAudio.framework; path = System/Library/Frameworks/AVFAudio.framework; sourceTree = SDKROOT; };
 		109890CBCB27601B28629110 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
@@ -128,7 +129,6 @@
 		61C7ECE496BB70EEFE453E6C /* SidevoiceActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SidevoiceActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		64394271D504A3167B6E3545 /* acl_tests.rs */ = {isa = PBXFileReference; path = acl_tests.rs; sourceTree = "<group>"; };
 		749529AE2409B9FB50B39312 /* platform.rs */ = {isa = PBXFileReference; path = platform.rs; sourceTree = "<group>"; };
-		085474441D5CE1D859DE3A39 /* screen.rs */ = {isa = PBXFileReference; path = screen.rs; sourceTree = "<group>"; };
 		7717DC1AC675EE5C22703A85 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		78DA3D5C4ABD3C61CB5AAB0F /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		7AB2047CB0607D031DD6DAC3 /* app_activity.rs */ = {isa = PBXFileReference; path = app_activity.rs; sourceTree = "<group>"; };
