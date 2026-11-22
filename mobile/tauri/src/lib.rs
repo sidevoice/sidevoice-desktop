@@ -702,11 +702,11 @@ fn run_app() {
                         if let Some(screen) = page_app.try_state::<Arc<screen::Screen>>() {
                             let screen = screen.inner().clone();
                             screen.want_call(false);
-                            let _ = tauri::async_runtime::spawn_blocking(move || {
+                            drop(tauri::async_runtime::spawn_blocking(move || {
                                 if let Err(error) = screen.sync() {
                                     tracing::warn!(%error, "the screen could not be released as the page loaded");
                                 }
-                            });
+                            }));
                         }
                     }
                 })
