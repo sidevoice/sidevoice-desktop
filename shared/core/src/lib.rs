@@ -3,6 +3,7 @@
 //! and no webview: it is tested anywhere, and the apps put a shell on it.
 
 pub mod app;
+pub mod call_link;
 pub mod crash;
 pub mod debug;
 pub mod engine;

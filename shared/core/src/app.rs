@@ -17,9 +17,10 @@
 //! - **Lifecycle.** [`AppHost::page_changed`] when the page that owns the calls is gone (it answers the next page's number), and [`AppHost::close`] before the
 //!   process exits, bounded, so every model and device is released before the C++ libraries' static destructors run.
 //!
-//! The commands of each concern are in `app/voice.rs` and `app/engine.rs`; they refuse as the bridge does
+//! The commands of each concern are in `app/voice.rs`, `app/engine.rs` and `app/call_link.rs`; they refuse as the bridge does
 //! (docs/BRIDGE.md → "Refusals").
 
+mod call_link;
 mod downloads;
 mod engine;
 mod inputs;
@@ -166,6 +167,8 @@ struct Inner<A: LaneAudio> {
     closing: AtomicBool,
     /// The tasks that load models ([`AppHost::detached`]), until they end.
     loads: Mutex<Vec<JoinHandle<()>>>,
+    /// The call links the pages opened (`call_link`), closed with their page.
+    links: crate::call_link::CallLinks,
     /// The task that tells the page when the devices change, from the first time the page asks for them.
     watcher: Mutex<Option<JoinHandle<()>>>,
 }
@@ -210,11 +213,13 @@ impl<A: LaneAudio> AppHost<A> {
         voice.active.observe(Arc::clone(&hooks.calls));
         let downloads = downloads::Downloads::new(Arc::clone(&hooks.downloads));
         let inputs = Arc::new(inputs::Inputs::new(Arc::clone(&hooks.inputs)));
+        let links = crate::call_link::CallLinks::new(runtime.clone());
         let inner = Inner {
             runtime,
             hooks,
             voice,
             engines,
+            links,
             jobs: Arc::default(),
             downloads,
             inputs,
@@ -276,6 +281,7 @@ impl<A: LaneAudio> AppHost<A> {
         let next = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let inner = Arc::clone(&self.inner);
         self.inner.runtime.spawn(async move { inner.voice.clear_older_than(next).await });
+        self.inner.links.close_older_than(next);
         PageGeneration(next)
     }
 
@@ -287,6 +293,7 @@ impl<A: LaneAudio> AppHost<A> {
     /// Metal device aborts in its own when one is (#121). Bounded: it returns the models still held when `limit` passed
     /// (by their key), logged, and the quit goes on; none once every one was released.
     pub async fn close(&self, limit: Duration) -> Vec<String> {
+        self.inner.links.close_all();
         if let Some(watcher) = self.inner.watcher.lock().unwrap().take() {
             watcher.abort();
         }

@@ -24,10 +24,13 @@ trait Os {
     /// such thing to describe. Runs on the main thread.
     fn layout(webview: &PlatformWebview) -> Option<String>;
 
-    /// Logs when the system ends the web view's own process while the app lives on (iOS: memory pressure, a crash): the
-    /// page is blank or reloads, and a reload ends the call (`call::RoomCall::page_changed`). Only logged
-    /// (sidevoice-desktop#541); where the system says nothing of it, the builder comes back as it went in.
-    fn watch_termination(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry>;
+    /// Tells `gone` (and logs) when the system ends the web view's own process while the app lives on (iOS: memory
+    /// pressure, a crash): the page is gone. What follows is the caller's. Where the system says nothing of it, the
+    /// builder comes back as it went in.
+    fn watch_termination(
+        builder: tauri::Builder<tauri::Wry>,
+        gone: Gone,
+    ) -> tauri::Builder<tauri::Wry>;
 }
 
 /// Makes the web view fill the screen, under the status bar and the home indicator.
@@ -35,9 +38,15 @@ pub fn fill_screen(webview: &PlatformWebview) {
     Native::fill_screen(webview);
 }
 
-/// The builder, told to log the system ending the web view's process.
-pub fn watch_termination(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-    Native::watch_termination(builder)
+/// What is told the web view whose content process the system ended.
+type Gone = Box<dyn Fn(&tauri::Webview<tauri::Wry>) + Send + Sync>;
+
+/// The builder, told to log the system ending the web view's process and to tell `gone`, where the system says so.
+pub fn watch_termination(
+    builder: tauri::Builder<tauri::Wry>,
+    gone: impl Fn(&tauri::Webview<tauri::Wry>) + Send + Sync + 'static,
+) -> tauri::Builder<tauri::Wry> {
+    Native::watch_termination(builder, Box::new(gone))
 }
 
 /// Logs where the web view is (a device test shows what the screen really holds, not what the code assumes).

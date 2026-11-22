@@ -514,8 +514,11 @@ fn run_app() {
     let pages = Pages::default();
     let events = pages.clone();
     let builder = tauri::Builder::default();
-    // The system ending the web view's own process is logged where it says so (`platform::webview`).
-    let builder = platform::webview::watch_termination(builder);
+    // The system ending the web view's own process (iOS: `platform::webview`) leaves no page: its calls and call links
+    // end as a page that is replaced ends them, or the app's link would keep answering the room's keepalive for a page
+    // that is gone (a call no one is in).
+    let builder =
+        platform::webview::watch_termination(builder, |webview| page_gone(webview.app_handle()));
     builder
         .plugin(sidevoice_mobile_plugin::init())
         // The camera that scans the pairing code (`host.codeScanner`): the page asks for its permission and a scan through
@@ -659,14 +662,7 @@ fn run_app() {
                     if payload.event() == PageLoadEvent::Started {
                         // The call's own line (`RoomCall::page_changed`) says whether one was live.
                         tracing::info!("a page load started");
-                        if let Some(host) = page_app.try_state::<AppHost>() {
-                            // A page that loads anew is in no call until it says so: the room's call of the one before
-                            // ends, queued now, before anything the new page reports (`call::RoomCall`).
-                            let page = host.page_changed().0;
-                            let room = page_app.state::<call::RoomCall>();
-                            room.page_changed(page);
-                        }
-                        *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
+                        page_gone(&page_app);
                     }
                 })
                 .build()?
@@ -733,6 +729,18 @@ fn write_line(file: &dyn log::Log, line: &str) {
 }
 
 /// tauri-plugin-log's file logger, built but not installed (`split`): it keeps the file's place and rotation.
+/// The page that owned the calls is gone (a new one loads, or the system ended the web view's process): a page that loads
+/// anew is in no call until it says so. The room's call of the one before ends, queued now, before anything the new page
+/// reports (`call::RoomCall`), and its call links are closed as going away (1001), so the room parks the call for the
+/// next page to resume (`AppHost::page_changed`). Twice in a row (a termination, then the reload) is harmless.
+fn page_gone(app: &AppHandle) {
+    if let Some(host) = app.try_state::<AppHost>() {
+        let page = host.page_changed().0;
+        app.state::<call::RoomCall>().page_changed(page);
+    }
+    *app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
+}
+
 fn open_log_file(app: &AppHandle) {
     use tauri_plugin_log::{FileOpenStrategy, RotationStrategy, Target, TargetKind};
     let built = tauri_plugin_log::Builder::new()

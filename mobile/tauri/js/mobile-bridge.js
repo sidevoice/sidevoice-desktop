@@ -349,6 +349,9 @@
       engine: Object.freeze(members.engine()),
       // The voice call the app runs: the page neither opens the microphone nor runs models.
       voice: voiceCall.host,
+      // The call's link to the room, which the app opens and keeps (docs/BRIDGE.md -> "The call link"): it goes on with the
+      // phone locked, when the page does not run; the page never opens its own call socket here.
+      callLink: members.callLink(),
       // The system's own microphone permission (shared/tauri platform/microphone: AVFoundation's on iOS, the runtime
       // permission on Android), never the webview's; its settings page where it has one, and the app's words for a
       // blocked one on this phone (mobile/tauri/src/i18n.rs).

@@ -48,7 +48,7 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.equal(typeof api.snapshot, "function");
     assert.equal(typeof api.run, "function");
     const host = api.host;
-    assert.deepEqual(Object.keys(host).sort(), ["audioRoute", "build", "callSurface", "codeScanner", "crashReports", "cue", "engine", "microphone", "pairings", "presence", "reach", "screen", "shortcuts", "voice"]);
+    assert.deepEqual(Object.keys(host).sort(), ["audioRoute", "build", "callLink", "callSurface", "codeScanner", "crashReports", "cue", "engine", "microphone", "pairings", "presence", "reach", "screen", "shortcuts", "voice"]);
     assert.equal(host.callSurface.active(), true, "the app draws the call's surfaces");
     for (const fn of ["still", "forget"]) assert.equal(typeof host.callSurface[fn], "function", fn);
     assert.equal(JSON.stringify(host.presence), JSON.stringify({ media: "app" }));
