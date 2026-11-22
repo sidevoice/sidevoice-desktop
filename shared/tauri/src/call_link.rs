@@ -62,7 +62,8 @@ pub async fn call_link_send<R: Runtime>(
     host.call_link_send(page, &key, text)
 }
 
-/// Closes the link with `code` (1000, a hang-up, by default) and `reason`.
+/// Closes the link as a browser's `close(code, reason)`: with no code, a close frame without one (the room parks the call);
+/// 1000 is a hang-up; a code other than 1000 or 3000–4999 is refused (`call_link_close_code`).
 #[tauri::command]
 pub async fn call_link_close<R: Runtime>(
     webview: Webview<R>,

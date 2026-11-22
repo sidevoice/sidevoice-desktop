@@ -81,6 +81,30 @@ test("a channel hands the app's messages over in index order, and is let go when
   assert.equal(callbacks[id], null, "the callback is unregistered once every message before the end came");
 });
 
+test("an unordered channel hands each message as it comes, and a lost one holds nothing back", () => {
+  const { win, callbacks } = page();
+  const heard = [];
+  const channel = makeTransport(win).channel((message) => heard.push(message), { ordered: false });
+  const id = Number(channel.split(":")[1]);
+  callbacks[id]({ index: 2, message: "c" });
+  callbacks[id]({ index: 0, message: "a" });
+  assert.deepEqual(heard, ["c", "a"], "number 1 was lost on the way: the others still come");
+  callbacks[id]({ index: 3, end: true });
+  assert.notEqual(callbacks[id], null, "not every message before the end came");
+  callbacks[id]({ index: 1, message: "b" });
+  assert.equal(callbacks[id], null);
+});
+
+test("an ordered channel does not grow for good behind a message that never comes", () => {
+  const { win, callbacks } = page();
+  const heard = [];
+  const channel = makeTransport(win).channel((message) => heard.push(message));
+  const id = Number(channel.split(":")[1]);
+  for (let index = 1; index <= 1025; index++) callbacks[id]({ index, message: index });
+  assert.equal(heard.length, 1025, "number 0 is given up on once 1024 wait behind it");
+  assert.deepEqual([heard[0], heard.at(-1)], [1, 1025]);
+});
+
 test("a listener that throws does not stop the messages after it", () => {
   const { win, callbacks } = page();
   const heard = [];

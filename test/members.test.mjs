@@ -382,3 +382,106 @@ test("an end the app sends while missed frames are being asked for comes after t
   await flush(); await flush(); await flush();
   assert.deepEqual(seen, ["one", "two", "close 1006"]);
 });
+
+test("a close without a code is codeless, as a browser's: the room parks the call; only 1000 hangs up", async () => {
+  const { transport, calls } = fakeTransport();
+  const link = makeMembers(wakingWindow().win, transport).callLink();
+  const socket = link.open("ws://h/", []);
+  assert.throws(() => socket.close(1001), { name: "InvalidAccessError" }, "a page may not close with 1001");
+  assert.throws(() => socket.close(2999), { name: "InvalidAccessError" });
+  assert.throws(() => socket.close(1000, "x".repeat(124)), { name: "SyntaxError" });
+  assert.throws(() => socket.close(1000, "é".repeat(62)), { name: "SyntaxError" }, "bytes, not characters");
+  socket.close();
+  await flush(); await flush();
+  assert.deepEqual(calls.find(([name]) => name === "call_link_close")[1], { page: PAGE, key: calls[1][1].key, code: null, reason: null });
+  const other = link.open("ws://h/", []);
+  other.close(4000, "moved");
+  await flush(); await flush();
+  assert.deepEqual(calls.filter(([name]) => name === "call_link_close").map(([, a]) => [a.code, a.reason]),
+    [[null, null], [4000, "moved"]]);
+});
+
+test("the link's channel hands events as they come: the frames' numbers are the one place a gap is seen", async () => {
+  const options = [];
+  const { transport, calls } = fakeTransport();
+  const channel = transport.channel;
+  transport.channel = (onmessage, opts) => { options.push(opts); return channel(onmessage); };
+  makeMembers(wakingWindow().win, transport).callLink().open("ws://h/", []);
+  await flush();
+  assert.ok(calls.some(([name]) => name === "call_link_open"));
+  assert.deepEqual(plain(options[0]), { ordered: false }, "the link's; the voice's stays ordered");
+  assert.equal(options[1], undefined);
+});
+
+test("frames the app no longer holds end the socket as a drop the page resumes from, and are not asked for again", async () => {
+  const { transport, calls, channels } = fakeTransport((command) => command === "call_link_since"
+    ? { readyState: 1, frames: [{ index: 600, data: "late" }], last: 600, close: null } : undefined);
+  const socket = makeMembers(wakingWindow().win, transport).callLink().open("ws://h/", []);
+  const seen = [];
+  socket.onmessage = (event) => seen.push(event.data);
+  socket.onclose = (event) => seen.push(`close ${event.code} ${event.wasClean}`);
+  await flush();
+  const app = channelOf(calls, channels);
+  app({ type: "message", index: 1, data: "one" });
+  app({ type: "message", index: 600, data: "late" });
+  for (let n = 0; n < 6; n++) await flush();
+  app({ type: "message", index: 601, data: "later" });
+  await flush(); await flush();
+  assert.deepEqual(seen, ["one", "close 1006 false"], "nothing out of order is read");
+  assert.equal(calls.filter(([name]) => name === "call_link_since").length, 1, "no loop");
+  assert.ok(calls.some(([name]) => name === "call_link_forget"), "the app's link goes away (1001), never a hang-up");
+  assert.ok(!calls.some(([name]) => name === "call_link_close"));
+});
+
+test("a frame told while missed ones are asked for is asked for after them", async () => {
+  const answers = [];
+  const { transport, calls, channels } = fakeTransport((command) =>
+    command === "call_link_since" ? new Promise((resolve) => answers.push(resolve)) : undefined);
+  const socket = makeMembers(wakingWindow().win, transport).callLink().open("ws://h/", []);
+  const seen = [];
+  socket.onmessage = (event) => seen.push(event.data);
+  await flush();
+  const app = channelOf(calls, channels);
+  app({ type: "message", index: 2, data: "two" });
+  await flush();
+  app({ type: "message", index: 3, data: "three" });
+  answers[0]({ readyState: 1, frames: [{ index: 1, data: "one" }, { index: 2, data: "two" }], last: 2, close: null });
+  await flush(); await flush(); await flush();
+  assert.deepEqual(calls.filter(([name]) => name === "call_link_since").map(([, a]) => a.after), [0, 2]);
+  answers[1]({ readyState: 1, frames: [{ index: 3, data: "three" }], last: 3, close: null });
+  await flush(); await flush();
+  assert.deepEqual(seen, ["one", "two", "three"]);
+});
+
+test("a link that never opened and closed while the page slept says no open", async () => {
+  const { transport } = fakeTransport((command) => command === "call_link_since"
+    ? { readyState: 3, frames: [], last: 0, close: { code: 1006, reason: "", wasClean: false } } : undefined);
+  const { win, fire } = wakingWindow();
+  const socket = makeMembers(win, transport).callLink().open("ws://h/", []);
+  const seen = [];
+  socket.onopen = () => seen.push("open");
+  socket.onclose = (event) => seen.push(`close ${event.code}`);
+  await flush();
+  fire("focus");
+  await flush(); await flush();
+  assert.deepEqual(seen, ["close 1006"]);
+});
+
+test("a call link refusal does not open the voice's channel anew; a replaced page's number does", async () => {
+  const { transport, calls, channels } = fakeTransport((command, args) =>
+    command === "call_link_send" ? Promise.reject({ key: args.text === "stale" ? "page_stale" : "call_link_not_open" }) : undefined);
+  const socket = makeMembers(wakingWindow().win, transport).callLink().open("ws://h/", []);
+  await flush();
+  channelOf(calls, channels)({ type: "open" });
+  const numbering = () => calls.filter(([name]) => name === "voice_events").length;
+  socket.send("refused");
+  await flush(); await flush(); await flush();
+  socket.send("after");
+  await flush(); await flush(); await flush();
+  assert.equal(numbering(), 1, "the page's number stands");
+  socket.send("stale");
+  await flush(); await flush(); await flush();
+  socket.send("again");
+  await flush(); await flush(); await flush();
+  assert.equal(numbering(), 2, "asked again once the app said it is a replaced page's");
+});

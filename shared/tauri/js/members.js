@@ -4,8 +4,10 @@
 // reaches the app is a `transport`, handed in, that has the shape below (the shell's binding makes it).
 //
 //   transport.call(command, args)   the shared command, as a promise
-//   transport.channel(onmessage)    what a command that takes a channel is given in its place; the app's messages over it
-//                                   are handed to `onmessage` in the order the app made them
+//   transport.channel(onmessage, options)
+//                                   what a command that takes a channel is given in its place; the app's messages over it
+//                                   are handed to `onmessage` in the order the app made them, or, with `{ordered: false}`,
+//                                   as they come (the call link numbers its own and asks for what it missed)
 //
 // (A transport has `send(command, args)` too, the same as `call` without an answer and never an error; the members have no
 // use for it, the apps that report levels do.)
@@ -21,7 +23,9 @@
   // The app numbers the pages that own its calls and call links, and sends a page's voice events over the channel it opens
   // when it loads, to that page only. Every command of the voice and of the call link carries the number back, so that a
   // page that was replaced moves nothing of the one that replaced it. Asked once, with the first command; asked again if
-  // the app refused it. The voice's events go to `voiceEvents`, once `voice()` is made.
+  // the app refused it, or said the number is a replaced page's (`page_stale`): any other refusal is the command's own,
+  // and asking again would only open the voice's channel anew. The voice's events go to `voiceEvents`, once `voice()` is
+  // made.
   let voiceEvents = null;
   let numbered = null;
   const paged = (command, args) => {
@@ -30,10 +34,15 @@
       document: win.performance.timeOrigin,
       events: channel((event) => voiceEvents?.(event)),
     }));
-    return numbered.then((page) => call(command, { page, ...args }), (error) => {
-      numbered = null;
+    const asked = numbered;
+    const forget = (error) => {
+      if (numbered === asked) numbered = null;
       throw error;
-    });
+    };
+    return asked.then((page) => call(command, { page, ...args }).catch((error) => {
+      if (error?.key === "page_stale") forget(error);
+      throw error;
+    }), forget);
   };
 
   /** A refusal of `host.engine`'s catalogue and key calls, with the `code` the page reads: the refusal's own, else its
@@ -566,8 +575,11 @@
    *  `onopen`, `onmessage`, `onerror`, `onclose`), whose socket is the app's. The app answers the room's keepalive itself,
    *  so the page never sees a `voice-ping`, and keeps what the room sends: a page that runs again after the system froze it
    *  (a locked phone) asks the app for what came after the last frame it read, so nothing that came meanwhile is lost
-   *  and nothing is read twice. It implements sidevoice-web's `CallLink` (host/types.ts), which the browser's own
-   *  websocket implements in a browser. */
+   *  and nothing is read twice. The link's channel hands each event as it comes (`{ordered: false}`): the frames' own
+   *  numbers are the one place a gap is seen, and a gap is asked for here. What the app no longer holds (more than it
+   *  keeps went by) cannot be read in order any more: the socket is let go as going away (the room parks the call) and
+   *  the page reads an abnormal close (1006), so it resumes the call against the room, as after a dropped socket. It
+   *  implements sidevoice-web's `CallLink` (host/types.ts), which the browser's own websocket implements in a browser. */
   function callLink() {
     const links = new Map();
     const epoch = Math.random().toString(36).slice(2, 10);
@@ -580,10 +592,17 @@
     win.addEventListener?.("pageshow", catchUpAll);
     win.addEventListener?.("focus", catchUpAll);
 
+    /** A DOMException-like error, as a browser's websocket throws it. */
+    const thrown = (name, message) => Object.assign(new Error(message), { name });
+    const ABNORMAL = { type: "close", code: 1006, reason: "", wasClean: false };
+    /** How many bytes `text` is in UTF-8 (a lone surrogate as the replacement character a browser sends). */
+    const utf8 = (text) => encodeURIComponent(String(text).toWellFormed?.() ?? String(text)).replace(/%[0-9A-F]{2}/g, "x").length;
+
     function open(url, protocols) {
       const key = `link-${epoch}-${++opened}`;
       let readyState = 0;
       let last = 0; // the index of the last of the room's frames the page read
+      let seen = 0; // the highest index the app said it has
       let ended = false;
       let catching = null;
       let sending = Promise.resolve();
@@ -594,16 +613,24 @@
         onopen: null, onmessage: null, onerror: null, onclose: null,
         /** As a browser's: refused before the socket opened, let go once it is closing; sent in the order asked. */
         send(text) {
-          if (readyState === 0) throw Object.assign(new Error("the call link is not open yet"), { name: "InvalidStateError" });
+          if (readyState === 0) throw thrown("InvalidStateError", "the call link is not open yet");
           if (readyState !== 1) return;
           sending = sending.then(() => paged("call_link_send", { key, text: String(text) })).catch(() => {});
         },
-        /** After what was sent before it; 1000 (a hang-up) when no code is given. */
+        /** As a browser's: a code is 1000 or 3000–4999 (else `InvalidAccessError`), a reason at most 123 bytes (else
+         *  `SyntaxError`). Without a code or a reason the close frame has no code, and the room parks the call; only
+         *  1000 hangs up. A reason without a code is 1000. After what was sent before it. */
         close(code, reason) {
+          if (code !== undefined && !(code === 1000 || (Number.isInteger(code) && code >= 3000 && code <= 4999))) {
+            throw thrown("InvalidAccessError", `${code} is neither 1000 nor in 3000-4999`);
+          }
+          if (reason !== undefined && utf8(reason) > 123) {
+            throw thrown("SyntaxError", "the close reason is longer than 123 bytes");
+          }
           if (readyState >= 2) return;
           readyState = 2;
-          sending = sending.then(() => paged("call_link_close", { key, code: code ?? null, reason: reason ?? null }))
-            .catch(() => deliver({ type: "close", code: 1006, reason: "", wasClean: false }));
+          const asked = { key, code: code ?? null, reason: reason === undefined ? null : String(reason) };
+          sending = sending.then(() => paged("call_link_close", asked)).catch(() => deliver(ABNORMAL));
         },
       };
       const fire = (name, event) => {
@@ -611,48 +638,81 @@
         if (typeof handler !== "function") return;
         try { handler.call(socket, event); } catch (error) { win.console?.error?.(error); }
       };
+      const opens = () => {
+        if (readyState === 0) { readyState = 1; fire("onopen", { type: "open" }); }
+      };
       function deliver(event) {
         if (ended || !event || typeof event !== "object") return;
-        if (event.type === "open" || (event.type === "message" && readyState === 0)) {
-          if (readyState === 0) { readyState = 1; fire("onopen", { type: "open" }); }
-        }
-        if (event.type === "message") {
+        if (event.type === "open") opens();
+        else if (event.type === "message") {
           const index = Number(event.index);
+          if (index > seen) seen = index;
           if (!(index > last)) return; // read already
           // One the page has not read came before it: ask for everything after the last one read, this one included.
-          if (index > last + 1) { catchUp(); return; }
+          if (index > last + 1 || catching) { catchUp(); return; }
+          opens();
           last = index;
           fire("onmessage", { type: "message", data: event.data });
         } else if (event.type === "error") {
           fire("onerror", { type: "error" });
         } else if (event.type === "close") {
-          // Frames the page missed are being asked for: the end comes after them.
-          if (catching) { catching.then(() => deliver(event)); return; }
-          ended = true;
-          readyState = 3;
-          links.delete(key);
-          fire("onclose", { type: "close", code: event.code, reason: event.reason ?? "", wasClean: event.wasClean === true });
-          paged("call_link_forget", { key }).catch(() => {});
+          if (Number(event.last) > seen) seen = Number(event.last);
+          // Frames the page has not read are being asked for, or came before the end: the end comes after them.
+          const settle = () => {
+            if (ended) return;
+            if (catching || seen > last) catchUp().then(settle);
+            else finish(event);
+          };
+          settle();
         }
+      }
+      function finish(event) {
+        if (ended) return;
+        ended = true;
+        readyState = 3;
+        links.delete(key);
+        fire("onclose", { type: "close", code: event.code, reason: event.reason ?? "", wasClean: event.wasClean === true });
+        paged("call_link_forget", { key }).catch(() => {});
+      }
+      /** What the app no longer holds is gone: the app's link goes away (forgetting it closes it with 1001, never a
+       *  hang-up) and the page reads the drop it resumes from. */
+      function lost() {
+        if (ended) return;
+        paged("call_link_forget", { key }).catch(() => {});
+        finish(ABNORMAL);
       }
       function catchUp() {
         if (ended) return Promise.resolve();
         catching ??= paged("call_link_since", { key, after: last })
           .then((held) => {
-            if (held?.readyState >= 1) deliver({ type: "open" });
-            for (const frame of held?.frames ?? []) deliver({ type: "message", index: frame.index, data: frame.data });
-            if (held?.close) deliver({ type: "close", ...held.close });
-          }, () => deliver({ type: "close", code: 1006, reason: "", wasClean: false }))
-          .finally(() => { catching = null; });
+            const frames = (held?.frames ?? []).filter((frame) => Number(frame.index) > last);
+            const newest = Number(held?.last ?? frames.at(-1)?.index ?? last);
+            if (newest > seen) seen = newest;
+            // A first frame past the next one, or none while the app got more: frames went by that it no longer holds.
+            if (frames.length ? Number(frames[0].index) > last + 1 : newest > last) { lost(); return; }
+            if (held?.readyState === 1 || held?.readyState === 2) opens();
+            for (const frame of frames) {
+              if (ended) return;
+              opens();
+              last = Number(frame.index);
+              fire("onmessage", { type: "message", data: frame.data });
+            }
+            if (held?.close) finish(held.close);
+          }, () => finish(ABNORMAL))
+          .finally(() => {
+            catching = null;
+            // A frame past what was read came while the app was being asked: ask again.
+            if (!ended && seen > last) catchUp();
+          });
         return catching;
       }
       links.set(key, { catchUp });
       paged("call_link_open", {
         key, url: String(url), protocols: [...(protocols ?? [])].map(String), language: win.navigator?.language ?? null,
-        events: channel(deliver),
+        events: channel(deliver, { ordered: false }),
       }).catch(() => {
         deliver({ type: "error" });
-        deliver({ type: "close", code: 1006, reason: "", wasClean: false });
+        deliver(ABNORMAL);
       });
       return socket;
     }

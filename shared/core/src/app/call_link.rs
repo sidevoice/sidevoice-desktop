@@ -33,7 +33,8 @@ impl<A: LaneAudio> AppHost<A> {
         self.inner.links.send(page.0, key, text).map_err(refused)
     }
 
-    /// Closes the link with `code` (1000 by default) and `reason`.
+    /// Closes the link as a browser's `close(code, reason)`: without a code, a close frame without one (the room parks the
+    /// call); only 1000 hangs up. Codes other than 1000 and 3000–4999 are refused.
     pub fn call_link_close(
         &self,
         page: PageGeneration,

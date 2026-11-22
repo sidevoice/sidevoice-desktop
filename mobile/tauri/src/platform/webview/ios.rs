@@ -149,9 +149,13 @@ impl Os for Native {
         ))
     }
 
-    fn watch_termination(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-        builder.on_web_content_process_terminate(|_webview| {
+    fn watch_termination(
+        builder: tauri::Builder<tauri::Wry>,
+        gone: super::Gone,
+    ) -> tauri::Builder<tauri::Wry> {
+        builder.on_web_content_process_terminate(move |webview| {
             tracing::warn!("the web view's content process was terminated by the system");
+            gone(webview);
         })
     }
 }

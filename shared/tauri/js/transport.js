@@ -8,7 +8,8 @@
 //
 //   call(command, args, options)   the plugin's command, as a promise; rejects when the page has no host
 //   send(command, args)            the same, without an answer, and never an error (the app may be mid-reload)
-//   channel(onmessage)             what a command that takes a channel is given in its place
+//   channel(onmessage, options)    what a command that takes a channel is given in its place (`{ordered: false}`: each
+//                                  message as it comes, for a caller that numbers its own and asks for what it missed)
 //   own.call, own.send             the same for the app's own commands, which are not the plugin's
 (function (win) {
   "use strict";
@@ -39,24 +40,38 @@
     };
   }
 
+  /** The most messages an ordered channel holds while one before them has not come: past it, that one is given up on and
+   *  the channel goes on from the next it has, instead of growing for good behind a message that was lost. */
+  const MAX_WAITING = 1024;
+
   /** A Tauri channel without the API's module: the app sends over it `{index, message}` (and `{index, end}` last), and the
    *  messages are handed to `onmessage` in index order, as the API's `Channel` does. What this returns is what a command
-   *  that takes a channel is given in its place. */
-  function channel(onmessage) {
+   *  that takes a channel is given in its place. With `{ordered: false}` each message is handed over as it comes and none
+   *  waits for the ones before it: for a caller that numbers its own messages and asks the app for any it missed (the call
+   *  link, members.js), which is then the one place a gap is seen, and a lost message holds nothing back. */
+  function channel(onmessage, options) {
     const internals = win.__TAURI_INTERNALS__;
+    const ordered = options?.ordered !== false;
     const waiting = new Map();
     let next = 0;
+    let received = 0;
     let end = null;
+    const hand = (message) => {
+      try { onmessage(message); } catch (_) { /* a listener's error is the page's own */ }
+    };
     const id = internals.transformCallback((event) => {
       if (event && "end" in event) end = event.index;
+      else if (event && !ordered) { received++; hand(event.message); }
       else if (event && event.index >= next) waiting.set(event.index, event.message);
+      if (waiting.size > MAX_WAITING) next = Math.min(...waiting.keys());
       while (waiting.has(next)) {
         const message = waiting.get(next);
         waiting.delete(next);
         next++;
-        try { onmessage(message); } catch (_) { /* a listener's error is the page's own */ }
+        hand(message);
       }
-      if (end !== null && next >= end && typeof internals.unregisterCallback === "function") internals.unregisterCallback(id);
+      const done = end !== null && (ordered ? next >= end : received >= end);
+      if (done && typeof internals.unregisterCallback === "function") internals.unregisterCallback(id);
     });
     return `__CHANNEL__:${id}`;
   }

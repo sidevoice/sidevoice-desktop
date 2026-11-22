@@ -13,12 +13,16 @@
 //!   of them within [`KEPT_BYTES`], and handed to the link's events as it comes. A page that ran again asks for what
 //!   came after the last index it read ([`CallLinks::since`]): what was handed to it while it slept may not have
 //!   reached it.
-//! - **The end.** How the socket closed (`code`, `reason`, whether the close was clean) is kept with the frames until
-//!   the page forgets the link.
+//! - **Liveness.** A protocol ping goes to the room every [`PING_EVERY`]; a room that answers nothing within
+//!   [`PONG_PATIENCE`] (a network that went away without a word, a NAT that forgot the socket) ends the link as an
+//!   abnormal close (1006), as a dropped socket ends, so the page resumes the call against the core.
+//! - **The end.** How the socket closed (`code`, `reason`, whether the close was clean, and `last`, the index of the last
+//!   frame it got) is kept with the frames until the page forgets the link.
 //!
 //! A link belongs to the page that opened it (its owner, the page's number): once another page is the current one,
 //! the old page's links are closed as going away (1001), never as a hang-up (1000), so the room parks the call and
-//! the new page may take it back with its resume ticket.
+//! the new page may take it back with its resume ticket. Only the page's own `close(1000)` hangs up: a close without a
+//! code is a close frame without one, as a browser's, and forgetting a link that is still open closes it as going away.
 //!
 //! No shell: the events go to a function the shell gives (`LinkEvents`), and the runtime is the one the app passes in.
 
@@ -54,15 +58,28 @@ const ABNORMAL: u16 = 1006;
 const NO_STATUS: u16 = 1005;
 /// The most closed links a page keeps unforgotten: a page that never forgets them does not grow the app.
 const CLOSED_KEPT: usize = 8;
+/// How often a link pings the room while it is open.
+#[cfg(not(test))]
+pub const PING_EVERY: Duration = Duration::from_secs(15);
+#[cfg(test)]
+pub const PING_EVERY: Duration = Duration::from_millis(100);
+/// How long a link waits for the room to answer its ping (with its pong, or any frame) before it gives the socket up.
+#[cfg(not(test))]
+pub const PONG_PATIENCE: Duration = Duration::from_secs(10);
+#[cfg(test)]
+pub const PONG_PATIENCE: Duration = Duration::from_millis(300);
+/// The longest close reason a browser lets a page give, in bytes of UTF-8.
+const REASON_BYTES: usize = 123;
 
 /// Where a link's events go, as JSON: `{type: "open"}`, `{type: "message", index, data}`, `{type: "error"}` and
-/// `{type: "close", code, reason, wasClean}`, in the order they happened.
+/// `{type: "close", code, reason, wasClean, last}`, in the order they happened (`last`: the index of the last frame the
+/// link got, so a page that missed some asks for them before it reads the end).
 pub type LinkEvents = Arc<dyn Fn(Value) + Send + Sync>;
 
 /// What the page asks a link to open: the socket's address and its subprotocols, as a page would open a websocket.
 #[derive(Debug, Clone)]
 pub struct LinkRequest {
-    /// `ws://` or `wss://`.
+    /// `wss://`, or `ws://` to a loopback or private-network host ([`private_host`]).
     pub url: String,
     /// The subprotocols the socket offers (the core's `sidevoice` and the device's token, `sidevoice.token.…`).
     pub protocols: Vec<String>,
@@ -83,6 +100,14 @@ const TAKEN: LinkRefusal =
     LinkRefusal { key: "call_link_taken", message: "A call link with that key is open already." };
 const BAD_URL: LinkRefusal =
     LinkRefusal { key: "call_link_url", message: "A call link opens a ws:// or wss:// address." };
+const INSECURE: LinkRefusal = LinkRefusal {
+    key: "call_link_insecure",
+    message: "A call link opens ws:// only to a loopback or private-network address.",
+};
+const BAD_CODE: LinkRefusal =
+    LinkRefusal { key: "call_link_close_code", message: "A call link closes with 1000 or a code from 3000 to 4999." };
+const BAD_REASON: LinkRefusal =
+    LinkRefusal { key: "call_link_close_reason", message: "A close reason is at most 123 bytes." };
 const NOT_OPEN: LinkRefusal = LinkRefusal { key: "call_link_not_open", message: "The call link is not open." };
 
 /// `readyState`, as a browser's websocket numbers it.
@@ -139,7 +164,8 @@ impl Kept {
 /// What a command asks of a link's task.
 enum Ask {
     Send(String),
-    Close(u16, String),
+    /// A close frame with this code and reason, or with none (`None`), as a browser's `close()` without a code sends.
+    Close(Option<(u16, String)>),
 }
 
 /// A link as the registry holds it.
@@ -172,6 +198,14 @@ impl CallLinks {
             Some(scheme) if scheme == "ws" => false,
             _ => return Err(BAD_URL),
         };
+        // The device's token travels in the subprotocols: in the clear only where the page would send it in the clear
+        // (sidevoice-web device-pairing.js `privateHost`).
+        if !secure {
+            let handshake = request.url.as_str().into_client_request().map_err(|_| BAD_URL)?;
+            if !handshake.uri().host().is_some_and(private_host) {
+                return Err(INSECURE);
+            }
+        }
         let mut links = self.links.lock().unwrap();
         if links.contains_key(&key) {
             return Err(TAKEN);
@@ -203,17 +237,22 @@ impl CallLinks {
         Ok(())
     }
 
-    /// Closes the link with `code` (1000, a hang-up, by default) and `reason`. Its `close` event comes once the room
-    /// answered, or once it was given up on.
+    /// Closes the link as a browser's `close(code, reason)` does: with neither, a close frame without a code (the room
+    /// parks the call; only 1000 hangs up); a reason without a code is 1000. A code other than 1000 or 3000–4999, or a
+    /// reason past 123 bytes, is refused, as a browser throws. Its `close` event comes once the room answered, or once
+    /// it was given up on.
     pub fn close(&self, owner: u64, key: &str, code: Option<u16>, reason: Option<String>) -> Result<(), LinkRefusal> {
+        let frame = close_frame(code, reason)?;
         let links = self.links.lock().unwrap();
         let link = Self::owned(&links, owner, key)?;
-        Self::ask_close(link, code.unwrap_or(1000), reason.unwrap_or_default());
+        Self::ask_close(link, frame);
         Ok(())
     }
 
-    /// What the link holds after the page's last index `after`: `{readyState, frames: [{index, data}], close}`, `close`
-    /// how it ended (`{code, reason, wasClean}`) or `null` while it has not. What it let go of is not in `frames`.
+    /// What the link holds after the page's last index `after`: `{readyState, frames: [{index, data}], last, close}`,
+    /// `last` the index of the newest frame it got and `close` how it ended (`{code, reason, wasClean}`) or `null` while it
+    /// has not. What it let go of is not in `frames`: a first frame past `after + 1` (or none, with `last` past `after`)
+    /// says the page lost some for good.
     pub fn since(&self, owner: u64, key: &str, after: u64) -> Result<Value, LinkRefusal> {
         let links = self.links.lock().unwrap();
         let link = Self::owned(&links, owner, key)?;
@@ -229,15 +268,16 @@ impl CallLinks {
             close.as_object_mut().map(|object| object.remove("type"));
             close
         });
-        Ok(json!({"readyState": kept.ready as u8, "frames": frames, "close": close}))
+        Ok(json!({"readyState": kept.ready as u8, "frames": frames, "last": kept.last, "close": close}))
     }
 
-    /// The page is done with the link: it is closed (1000) if it is still open, and nothing of it is kept.
+    /// The page is done with the link: nothing of it is kept, and one still open is closed as going away (1001), so
+    /// the room parks the call. Forgetting never hangs up: only the page's `close(1000)` does.
     pub fn forget(&self, owner: u64, key: &str) -> Result<(), LinkRefusal> {
         let mut links = self.links.lock().unwrap();
         Self::owned(&links, owner, key)?;
         if let Some(link) = links.remove(key) {
-            Self::ask_close(&link, 1000, String::new());
+            Self::ask_close(&link, going_away());
         }
         Ok(())
     }
@@ -250,7 +290,7 @@ impl CallLinks {
             if link.owner >= current {
                 return true;
             }
-            Self::ask_close(link, GOING_AWAY, String::new());
+            Self::ask_close(link, going_away());
             false
         });
     }
@@ -259,7 +299,7 @@ impl CallLinks {
     pub fn close_all(&self) {
         let mut links = self.links.lock().unwrap();
         for (_, link) in links.drain() {
-            Self::ask_close(&link, GOING_AWAY, String::new());
+            Self::ask_close(&link, going_away());
         }
     }
 
@@ -277,11 +317,11 @@ impl CallLinks {
         links.get(key).filter(|link| link.owner == owner).ok_or(UNKNOWN)
     }
 
-    fn ask_close(link: &Link, code: u16, reason: String) {
+    fn ask_close(link: &Link, frame: Option<(u16, String)>) {
         let mut kept = link.kept.lock().unwrap();
         if matches!(kept.ready, Ready::Connecting | Ready::Open) {
             kept.ready = Ready::Closing;
-            let _ = link.asks.send(Ask::Close(code, reason));
+            let _ = link.asks.send(Ask::Close(frame));
         }
     }
 
@@ -300,6 +340,51 @@ impl CallLinks {
             links.remove(key);
         }
     }
+}
+
+/// The close a page asks for, as a browser checks it: no code and no reason, a frame without a code; a reason alone, 1000.
+fn close_frame(code: Option<u16>, reason: Option<String>) -> Result<Option<(u16, String)>, LinkRefusal> {
+    if code.is_some_and(|code| code != 1000 && !(3000..=4999).contains(&code)) {
+        return Err(BAD_CODE);
+    }
+    if reason.as_ref().is_some_and(|reason| reason.len() > REASON_BYTES) {
+        return Err(BAD_REASON);
+    }
+    Ok(match (code, reason) {
+        (None, None) => None,
+        (code, reason) => Some((code.unwrap_or(1000), reason.unwrap_or_default())),
+    })
+}
+
+/// How the app closes a link the page did not close itself: going away, so the room parks the call.
+fn going_away() -> Option<(u16, String)> {
+    Some((GOING_AWAY, String::new()))
+}
+
+/// A host only a private network reaches, as sidevoice-web's `privateHost` (device-pairing.js) says it: loopback
+/// (`localhost`, 127/8, `::1`), 10/8, 172.16/12, 192.168/16, 100.64/10 (carrier-grade NAT, Tailscale), IPv6 unique-local
+/// (fc00::/7) and `*.local` names. Anything else is public, and a `ws://` link is not opened to it.
+pub fn private_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    if host == "localhost" || host == "::1" {
+        return true;
+    }
+    let name = host.strip_suffix('.').unwrap_or(&host);
+    if let Some(name) = name.strip_suffix(".local") {
+        return !name.is_empty()
+            && name
+                .split('.')
+                .all(|label| !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    }
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        let [a, b, ..] = v4.octets();
+        return a == 10
+            || a == 127
+            || (a == 172 && (16..=31).contains(&b))
+            || (a == 192 && b == 168)
+            || (a == 100 && (64..=127).contains(&b));
+    }
+    host.parse::<std::net::Ipv6Addr>().is_ok_and(|v6| v6.segments()[0] & 0xfe00 == 0xfc00)
 }
 
 /// A link's life: the socket opened, then the room's frames and the page's asks, until it closes.
@@ -326,12 +411,15 @@ async fn run(
         Ok(Socket::Tls(socket)) => serve(*socket, &kept, &mut asked, &events).await,
     };
     tracing::info!(code = ended.code, clean = ended.clean, "call link closed");
-    {
+    let last = {
         let mut kept = kept.lock().unwrap();
         kept.ready = Ready::Closed;
         kept.ended = Some(ended.clone());
-    }
-    events(ended.json());
+        kept.last
+    };
+    let mut close = ended.json();
+    close["last"] = json!(last);
+    events(close);
 }
 
 /// Resolves once a close is asked; sends asked before the link opens cannot be (they are refused).
@@ -388,7 +476,8 @@ fn tls_config() -> Result<Arc<rustls::ClientConfig>, ()> {
     Ok(Arc::new(config))
 }
 
-/// An open link: the room's frames kept and told, the keepalive answered, the page's asks sent, until it closes.
+/// An open link: the room's frames kept and told, the keepalive answered, the room pinged, the page's asks sent, until it
+/// closes.
 async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     mut socket: WebSocketStream<S>,
     kept: &Mutex<Kept>,
@@ -407,9 +496,17 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
     // The session the room said the link is for: a ping without one is answered for it.
     let mut session: Option<String> = None;
     let mut closing: Option<tokio::time::Instant> = None;
+    // Liveness: when the next ping goes, and, while one is unanswered, by when the room must have said something.
+    let mut next_ping = tokio::time::Instant::now() + PING_EVERY;
+    let mut answer_by: Option<tokio::time::Instant> = None;
+    let far = || tokio::time::Instant::now() + Duration::from_secs(3600);
     loop {
-        let patience = closing.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600));
+        let patience = closing.unwrap_or_else(far);
+        let deadline = answer_by.unwrap_or_else(far);
+        // Biased: the page's asks first, then what the room already sent, and only then a deadline (a phone that slept
+        // may have the pong waiting in the socket).
         tokio::select! {
+            biased;
             ask = asked.recv(), if closing.is_none() => match ask {
                 Some(Ask::Send(text)) => {
                     if socket.send(Message::Text(text.into())).await.is_err() {
@@ -418,23 +515,21 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                 }
                 // The page's close, or the registry let the link go (no one can ask anything of it any more).
                 ask => {
-                    let (code, reason) = match ask {
-                        Some(Ask::Close(code, reason)) => (code, reason),
-                        _ => (GOING_AWAY, String::new()),
+                    let frame = match ask {
+                        Some(Ask::Close(frame)) => frame,
+                        _ => going_away(),
                     };
                     kept.lock().unwrap().ready = Ready::Closing;
-                    let frame = CloseFrame { code: CloseCode::from(code), reason: reason.into() };
-                    if socket.close(Some(frame)).await.is_err() {
+                    let frame = frame.map(|(code, reason)| CloseFrame { code: CloseCode::from(code), reason: reason.into() });
+                    if socket.close(frame).await.is_err() {
                         return Ended { code: ABNORMAL, reason: String::new(), clean: false };
                     }
                     closing = Some(tokio::time::Instant::now() + CLOSE_PATIENCE);
                 }
             },
-            _ = tokio::time::sleep_until(patience), if closing.is_some() => {
-                return Ended { code: ABNORMAL, reason: String::new(), clean: false };
-            }
             frame = socket.next() => match frame {
                 Some(Ok(Message::Text(text))) => {
+                    answer_by = None;
                     let text = text.to_string();
                     if let Some(pong) = keepalive(&text, &mut session) {
                         if socket.send(Message::Text(pong.into())).await.is_err() {
@@ -455,11 +550,26 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                     let _ = tokio::time::timeout(CLOSE_PATIENCE, async { while socket.next().await.is_some() {} }).await;
                     return ended;
                 }
-                Some(Ok(_)) => {}
+                // A pong, or any other frame: the room is there.
+                Some(Ok(_)) => answer_by = None,
                 Some(Err(_)) | None => {
                     return Ended { code: ABNORMAL, reason: String::new(), clean: false };
                 }
             },
+            _ = tokio::time::sleep_until(patience), if closing.is_some() => {
+                return Ended { code: ABNORMAL, reason: String::new(), clean: false };
+            }
+            _ = tokio::time::sleep_until(deadline), if closing.is_none() && answer_by.is_some() => {
+                tracing::info!("call link: the room answered no ping");
+                return Ended { code: ABNORMAL, reason: String::new(), clean: false };
+            }
+            _ = tokio::time::sleep_until(next_ping), if closing.is_none() && answer_by.is_none() => {
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    return Ended { code: ABNORMAL, reason: String::new(), clean: false };
+                }
+                answer_by = Some(tokio::time::Instant::now() + PONG_PATIENCE);
+                next_ping = tokio::time::Instant::now() + PING_EVERY;
+            }
         }
     }
 }
@@ -643,6 +753,8 @@ mod tests {
         let caught = links.since(1, &key, 1).unwrap();
         assert_eq!(caught["readyState"], 3);
         assert_eq!(caught["frames"], json!([{"index": 2, "data": "frame 2"}, {"index": 3, "data": "frame 3"}]));
+        assert_eq!(caught["last"], 3);
+        assert_eq!(told.lock().unwrap().last().unwrap()["last"], 3, "the end says which frame came last");
         assert_eq!(caught["close"], json!({"code": 4401, "reason": "unpaired", "wasClean": true}));
         assert_eq!(links.since(2, &key, 0), Err(UNKNOWN), "another page's link is not this page's");
         links.forget(1, &key).unwrap();
@@ -691,9 +803,128 @@ mod tests {
         let key = key();
         links.open(1, key.clone(), request(&url), events).unwrap();
         until(|| types(&told) == ["error", "close"]).await;
-        assert_eq!(told.lock().unwrap()[1], json!({"type": "close", "code": 1006, "reason": "", "wasClean": false}));
+        assert_eq!(
+            told.lock().unwrap()[1],
+            json!({"type": "close", "code": 1006, "reason": "", "wasClean": false, "last": 0})
+        );
         assert_eq!(links.open(1, "x".into(), request("https://example.com"), recorder().0), Err(BAD_URL));
+        assert_eq!(links.open(1, "x".into(), request("ws://core.example.com/"), recorder().0), Err(INSECURE));
         assert_eq!(links.open(1, key, request(&url), recorder().0), Err(TAKEN));
+    }
+
+    /// The close frame the stand-in room got: `Some(None)` for one without a code.
+    fn close_got(received: &Mutex<Vec<Message>>) -> Option<Option<(u16, String)>> {
+        received.lock().unwrap().iter().find_map(|m| match m {
+            Message::Close(frame) => Some(frame.as_ref().map(|f| (u16::from(f.code), f.reason.to_string()))),
+            _ => None,
+        })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_close_without_a_code_parks_the_call_as_a_browsers_does_and_bad_codes_are_refused() {
+        let links = CallLinks::new(Handle::current());
+        let (url, _, received, _room_says) = room().await;
+        let (events, told) = recorder();
+        let key = key();
+        links.open(1, key.clone(), request(&url), events).unwrap();
+        until(|| types(&told) == ["open"]).await;
+        assert_eq!(links.close(1, &key, Some(1001), None), Err(BAD_CODE), "a browser throws for 1001");
+        assert_eq!(links.close(1, &key, Some(2999), None), Err(BAD_CODE));
+        assert_eq!(links.close(1, &key, None, Some("x".repeat(124))), Err(BAD_REASON));
+        links.close(1, &key, None, None).unwrap();
+        until(|| close_got(&received).is_some()).await;
+        assert_eq!(close_got(&received), Some(None), "a close frame without a code, never a hang-up (1000)");
+        until(|| types(&told).last().map(String::as_str) == Some("close")).await;
+
+        let (url, _, received, _room_says) = room().await;
+        let (events, told) = recorder();
+        let key = super::tests::key();
+        links.open(1, key.clone(), request(&url), events).unwrap();
+        until(|| types(&told) == ["open"]).await;
+        links.close(1, &key, None, Some("bye".into())).unwrap();
+        until(|| close_got(&received).is_some()).await;
+        assert_eq!(close_got(&received), Some(Some((1000, "bye".into()))), "a reason alone is 1000, as a browser's");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn forgetting_an_open_link_goes_away_and_never_hangs_up() {
+        let links = CallLinks::new(Handle::current());
+        let (url, _, received, _room_says) = room().await;
+        let (events, told) = recorder();
+        let key = key();
+        links.open(1, key.clone(), request(&url), events).unwrap();
+        until(|| types(&told) == ["open"]).await;
+        links.forget(1, &key).unwrap();
+        until(|| close_got(&received).is_some()).await;
+        assert_eq!(close_got(&received), Some(Some((GOING_AWAY, String::new()))));
+        assert!(links.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_room_that_answers_pings_keeps_the_link_and_one_that_answers_nothing_ends_it_as_abnormal() {
+        let links = CallLinks::new(Handle::current());
+        let (url, _, received, _room_says) = room().await;
+        let (events, told) = recorder();
+        links.open(1, key(), request(&url), events).unwrap();
+        until(|| types(&told) == ["open"]).await;
+        tokio::time::sleep(PING_EVERY * 3 + PONG_PATIENCE * 2).await;
+        assert_eq!(types(&told), ["open"], "the room's pongs keep it");
+        assert!(received.lock().unwrap().iter().any(|m| matches!(m, Message::Ping(_))), "the link pings");
+
+        // A room that took the socket and then went away without a word: it reads nothing, so it answers no ping.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let (gone, mut hold) = mpsc::unbounded_channel::<()>();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let _socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            hold.recv().await;
+        });
+        let (events, told) = recorder();
+        let key = key();
+        let plain = LinkRequest { url, protocols: Vec::new(), language: None };
+        links.open(1, key.clone(), plain, events).unwrap();
+        until(|| types(&told).last().map(String::as_str) == Some("close")).await;
+        assert_eq!(types(&told), ["open", "close"]);
+        let close = told.lock().unwrap()[1].clone();
+        assert_eq!((close["code"].clone(), close["wasClean"].clone()), (json!(1006), json!(false)));
+        assert_eq!(links.since(1, &key, 0).unwrap()["close"]["code"], 1006);
+        drop(gone);
+    }
+
+    #[test]
+    fn plain_ws_goes_only_to_hosts_a_private_network_reaches() {
+        for host in [
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.9.9",
+            "192.168.1.20",
+            "100.64.0.1",
+            "100.127.255.255",
+            "mac.local",
+            "my-mac.local.",
+            "[fd12::1]",
+            "fc00::2",
+        ] {
+            assert!(private_host(host), "{host} is private");
+        }
+        for host in [
+            "core.example.com",
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.128.0.1",
+            "192.169.0.1",
+            "[2001:db8::1]",
+            ".local",
+            "local",
+            "a..local",
+            "999.1.1.1",
+        ] {
+            assert!(!private_host(host), "{host} is public");
+        }
     }
 
     #[test]
