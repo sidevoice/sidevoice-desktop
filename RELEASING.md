@@ -1,6 +1,6 @@
 # Releasing
 
-The release rules (nightlies during development, the release-please PR, release day, pins) are the organisation's, in the [releasing guideline](https://github.com/sidevoice/.github-private/blob/main/docs/releasing.md). This file is only this repository's own steps.
+This file is self-sufficient: it holds what anyone needs to build, release and download this repository. The maintainers also follow an internal release guideline shared by all Sidevoice repositories ([releasing guideline](https://github.com/sidevoice/.github-private/blob/main/docs/releasing.md), maintainers only; nothing here depends on it).
 
 One version for the whole desktop app, tagged `vX.Y.Z`. It lives in `desktop/tauri/tauri.conf.json`, `package.json`,
 `package-lock.json`, the three `Cargo.toml` and `Cargo.lock`; release-please moves them together
@@ -36,10 +36,11 @@ the package needs no change to the desktop app's tags, releases or nightly:
   - `"exclude-paths": ["mobile"]` on the `.` package. release-please gives the root package every commit, so without it
     the mobile commits would land in the desktop's version and changelog.
 - **`Release-As` once the mobile package exists.** `exclude-paths` also drops a commit that touches no file, and
-  release-please gives such a commit to every package but the root. So the empty commit of `Release-As` (guideline §3) then sets the **mobile** version only; for the desktop app the footer goes on a commit that
+  release-please gives such a commit to every package but the root. So the empty commit of "A release candidate, or any
+  explicit version" (below) then sets the **mobile** version only; for the desktop app the footer goes on a commit that
   changes at least one file outside `mobile/` (the PR that needs the release does; with nothing else to merge, a
   one-line fix in this file). Until the mobile package exists there is no exclusion and the empty commit works for the
-  desktop app.
+  desktop app as documented below.
 - **A commit that changes only a shared crate** (`shared/core/`, `shared/tauri/`) belongs to the `.` package, not to `mobile`:
   release-please attributes a commit to a package by the files it touches, and a package is one directory. A mobile
   release for such a change needs a commit that touches `mobile/`, or the empty `Release-As` commit above.
@@ -56,6 +57,10 @@ Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, Developer ID 
 `Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`, and
 what the app updates itself from (Updates, below): `latest.json`, `Sidevoice_X.Y.Z_aarch64.app.tar.gz` and the
 `.sig` of it, of the installer and of the AppImage.
+
+The changelog is written from the squashed PR titles. To change it, edit `CHANGELOG.md` in the release PR right
+before merging it: any later merge into `main` regenerates the PR. After the release, fix the notes on the
+Release itself.
 
 ## The steps: `cargo xtask`
 
@@ -145,15 +150,28 @@ platform allows:
   `X.Y.Z` with the Debian revision `nightly.N`, above release `X.Y.Z`: installing exactly that release's .deb over the
   nightly is a downgrade to dpkg (it warns). A .deb never updates itself.
 
-## Versions
+## Which version comes next
+
+`fix:` → patch, `feat:` → minor. While the version is 0.x a breaking change (`feat!:` or a `BREAKING CHANGE:`
+footer) bumps the minor, not the major. `docs:`, `chore:`, `ci:`, `test:`, `refactor:` alone make no release. Core (`sidevoice-platform`, the library of the core repository), engine, voice and web are bundled: a PR that moves one of their pins (the `Cargo.toml` tags, `web.pin.json`) is a change of the desktop app and is titled `fix(deps): ...`, not `chore`; `feat(deps): ...` when the web pin brings a new connector minor. That is the guideline's convention (section 1): a pin is a change.
 
 Nothing is tagged yet: the manifest starts at 0.1.0, so the first release PR proposes 0.2.0 if there is a `feat`.
+To publish the first one as 0.1.0, use `Release-As: 0.1.0` (below).
 
-**`Release-As` and the mobile package** (the footer itself is in the guideline). Once the mobile package exists, an empty
-commit versions the mobile app and the desktop app needs a commit that changes a file ("Two products in one repository",
-above).
+## A release candidate, or any explicit version
 
-Core, engine, voice and web are bundled: a PR that moves one of their pins (the `Cargo.toml` tags, `web.pin.json`) is a change of the desktop app and is titled `fix(deps): ...` (guideline, section 1), not `chore`.
+Put the footer as the **last line of a PR's description** (the squash commit takes the description as its body):
+
+```
+Release-As: 0.3.0-rc.1
+```
+
+The release PR then proposes exactly that version. A version with a `-` suffix is published as a **pre-release
+and never as latest**. The next candidate is `Release-As: 0.3.0-rc.2`; the final one is `Release-As: 0.3.0`
+(say it: after a candidate, do not leave the next version to the computation). With nothing else to merge, a PR
+with one empty commit (`git commit --allow-empty`) carries the footer. (Once the mobile package exists, an empty
+commit versions the mobile app and the desktop app needs a commit that changes a file: "Two products in one
+repository", above.)
 
 ## Nightly
 
@@ -309,7 +327,9 @@ previous identifier".
 
 ## What this needs from the repository settings
 
-- The settings every repository needs are in the guideline, section 7; the setting "Allow GitHub Actions to create and approve pull requests" was off as of 2026-10-01.
+- Settings → Actions → General → **Allow GitHub Actions to create and approve pull requests**: without it
+  release-please cannot open its PR (off as of 2026-10-01).
+- Squash merging, with the PR title as the commit message.
 - Repository secrets for macOS signing (a release, or a manual `sign` run): `APPLE_CERTIFICATE` (the Developer ID
   Application certificate and key, a base64 .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`
   ("Developer ID Application: … (TEAMID)"), `APPLE_TEAM_ID`, and the notary's App Store Connect API key:
