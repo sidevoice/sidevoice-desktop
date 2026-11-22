@@ -55,6 +55,11 @@ card's window none, no other window any).
 | `voice_end_input` | `sidevoice-shared-tauri:allow-voice-end-input` | room | room page | `page`, `key` | the closed `turn`, as any turn | no |
 | `voice_audio_devices` | `sidevoice-shared-tauri:allow-voice-audio-devices` | room | room page | `page` | from now on, `devices` when they change | no |
 | `voice_set_audio_devices` | `sidevoice-shared-tauri:allow-voice-set-audio-devices` | room | room page | `page`, `choice` | `devices`, when the choice changes them | no |
+| `call_link_open` | `sidevoice-shared-tauri:allow-call-link-open` | room | room page | `page`, `key`, `url` (`ws://` or `wss://`), `protocols`, `language?`, `events` (a channel) | over that channel, the link's `open` (or `error` then `close`), each frame of the room's as `message` with its `index` (the keepalive excepted: the app answers it), and `close` `{code, reason, wasClean}` | no |
+| `call_link_send` | `sidevoice-shared-tauri:allow-call-link-send` | room | room page | `page`, `key`, `text` | nothing (the text goes to the room, after what was sent before) | no |
+| `call_link_close` | `sidevoice-shared-tauri:allow-call-link-close` | room | room page | `page`, `key`, `code?`, `reason?` | the link's `close`, once the room answered | no |
+| `call_link_since` | `sidevoice-shared-tauri:allow-call-link-since` | room | room page | `page`, `key`, `after` | nothing (it answers `{readyState, frames, close}`: the frames kept after index `after`, and how the link ended) | no |
+| `call_link_forget` | `sidevoice-shared-tauri:allow-call-link-forget` | room | room page | `page`, `key` | nothing (the link is closed if it is open, and nothing of it is kept) | no |
 | `microphone` | `sidevoice-shared-tauri:allow-microphone` | room | room page | `action` (`state`, `request`, `open-settings`) | nothing (the system's answer, or its privacy page opened) | no |
 | `crash_reports` | `sidevoice-shared-tauri:allow-crash-reports` | room | room page | `action` (`get`, `set`, `install_id`), `mode?` (`auto`, `never`) | the app's crash reports setting (`get`, `set`, kept by its reporter), or `install_id`: `{installId}`, the installation id, `null` under `never` | no |
 | `bridge_level` | `sidevoice-shared-tauri:allow-bridge-level` | room | room page | `level` | nothing (the app's `CallObserver` is told the microphone's level) | no |

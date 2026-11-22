@@ -319,6 +319,66 @@
           "markdownDescription": "Denies the bridge_playback command without any pre-configured scope."
         },
         {
+          "description": "Enables the call_link_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-call-link-close",
+          "markdownDescription": "Enables the call_link_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the call_link_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-call-link-close",
+          "markdownDescription": "Denies the call_link_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the call_link_forget command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-call-link-forget",
+          "markdownDescription": "Enables the call_link_forget command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the call_link_forget command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-call-link-forget",
+          "markdownDescription": "Denies the call_link_forget command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the call_link_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-call-link-open",
+          "markdownDescription": "Enables the call_link_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the call_link_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-call-link-open",
+          "markdownDescription": "Denies the call_link_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the call_link_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-call-link-send",
+          "markdownDescription": "Enables the call_link_send command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the call_link_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-call-link-send",
+          "markdownDescription": "Denies the call_link_send command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the call_link_since command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-call-link-since",
+          "markdownDescription": "Enables the call_link_since command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the call_link_since command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-call-link-since",
+          "markdownDescription": "Denies the call_link_since command without any pre-configured scope."
+        },
+        {
           "description": "Enables the crash_reports command without any pre-configured scope.",
           "type": "string",
           "const": "allow-crash-reports",

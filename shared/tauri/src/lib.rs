@@ -1,5 +1,5 @@
 //! The commands every Sidevoice app shares, as one Tauri plugin over sidevoice-shared's application host
-//! (`AppHost`): the voice call's (`voice_*`) and the engine's (`engine_*`). The page invokes them as
+//! (`AppHost`): the voice call's (`voice_*`), the call link's (`call_link_*`) and the engine's (`engine_*`). The page invokes them as
 //! `plugin:sidevoice-shared-tauri|<command>`, and an app grants each to a window with the permission
 //! `sidevoice-shared-tauri:allow-<command>` (ACL.md says which, to whom, with what arguments and what each tells the page).
 //!
@@ -15,6 +15,7 @@
 //! grants them to) cannot know which room window is the current one (ACL.md).
 
 mod acl;
+mod call_link;
 mod crash_reports;
 mod engine;
 pub mod headset;
@@ -94,6 +95,11 @@ pub fn init<R: Runtime>(
             voice::voice_end_input,
             voice::voice_audio_devices,
             voice::voice_set_audio_devices,
+            call_link::call_link_open,
+            call_link::call_link_send,
+            call_link::call_link_close,
+            call_link::call_link_since,
+            call_link::call_link_forget,
             microphone::microphone,
             crash_reports::crash_reports,
             observers::bridge_level,
@@ -168,6 +174,7 @@ mod tests {
         let sources = [
             lf(include_str!("engine.rs")),
             lf(include_str!("voice.rs")),
+            lf(include_str!("call_link.rs")),
             lf(include_str!("microphone.rs")),
             lf(include_str!("crash_reports.rs")),
             lf(include_str!("observers.rs")),

@@ -13,6 +13,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `desktop/tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The global shortcuts, behind `shortcuts` and `muteShortcut` (`shortcuts.rs`), and the one writer of the app's settings (below). |
 | `shared/tauri/src/engine.rs`, `shared/core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The plugin's are the transport (`shared/tauri/ACL.md` says who may call each); `shared/core`'s do the work. |
 | `shared/tauri/src/voice.rs`, `desktop/tauri/src/voice.rs`, `shared/core/src/platform/credentials.rs`, `shared/core/src/app.rs`, `shared/core/src/app/voice.rs`, `shared/core/src/voice.rs`, `shared/core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the plugin, what they do and the hooks the app gives the host (admission, events, keys: `shared/core`'s `AppHost`, `desktop/tauri/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `shared/core` (unit-tested), and the keychain the engine reads provider keys from. |
+| `shared/core/src/call_link.rs`, `shared/core/src/app/call_link.rs`, `shared/tauri/src/call_link.rs` | The call's link to the room, behind `callLink` (below): the core's call websocket, held by the app so it goes on while a phone freezes the page. |
 | `desktop/tauri/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `desktop/tauri/src/tray.rs` | The menu-bar icon and its menu. |
 | `desktop/tauri/js/call-controls-bridge.js` | Injected into the call controls card's window (below). |
@@ -297,6 +298,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `microphone` | always | Native microphone access; `openSettings` only where the OS has a privacy page; `help(language)`, the app's words for a blocked one. |
 | `messages(language)` | always | The app's wording of the web's texts its place changes, for that exact language: `{ "<web catalogue key>": text }` ("The message overlay", below). |
 | `engine`, `voice` | always | The model engine and the voice call the app runs (below). |
+| `callLink` | always | The call's link to the room, which the app opens and keeps: `open(url, protocols)`, a socket the page drives as a browser's websocket ("The call link", below). |
 | `presence` | only where the app owns the system's media | `{ media: "app" }`, supplied by `platform::media_controls::available()`: macOS. The mobile app offers it always (iOS and Android own the media; docs/MOBILE.md → "The bridge"). |
 | `pairings` | always | The pairings the app keeps for the page (above). |
 | `reach` | always | `{ plainHttpPrivate: true }`: the webview, at the app's own origin, sends plain http to a private address; whom it may send a secret to, and with whose consent, stay the page's policy. |
@@ -923,6 +925,54 @@ What is this app's own:
 - Keys: `host.engine.setCredential` writes the OS credential store (`shared/core/src/platform/credentials.rs`, in the namespace the app passes), and the engine reads it
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
+
+## The call link
+
+`window.__sidevoiceHost.host.callLink` is the call's link to the room: the websocket the call speaks the core's call
+protocol over (sidevoice-core `server/call`), opened, kept and read by the app instead of the page. Every app offers
+it (the desktop and the phone alike). The page never opens its own call socket where it is offered; in a browser the
+page keeps its own websocket. The seam is sidevoice-web's `CallLink` (`apps/web/src/host/types.ts`): `open(url,
+protocols)` answers a socket with the part of a browser's `WebSocket` the call uses (`readyState` and its numbers,
+`send`, `close`, `onopen`, `onmessage`, `onerror`, `onclose`), so the page drives the app's link exactly as it drives
+a browser's socket, and the core sees the same protocol from either.
+
+Why: a phone freezes the page's script when its screen locks or another app is in front, while the app (its native
+audio) keeps running. A link held by the page then answers nothing; the room parks the call after 30 s of silence and
+ends it after its resume window (briefs: native call link, N1–N5). Held by the app:
+
+- **The keepalive is the app's.** The room's `voice-ping` is answered by the app with `voice-pong` (for the session the
+  ping names, else the one the room's last `voice-session` named) and never reaches the page.
+- **What the room sends is kept.** Every other text frame is numbered (`index`, from 1), kept (the last 512, within 16
+  MB, as the room keeps them for a resume) and sent to the page over the link's channel. A page that runs again
+  (`visibilitychange` to visible, `pageshow`, `focus`), and a page that sees a gap in the indices, asks for what came
+  after the last index it read (`call_link_since`): what the app sent while the page was frozen may not have reached
+  it. The bridge reads each index once, so the page reads each frame once and in order.
+- **The end is kept** with the frames (`{code, reason, wasClean}`) until the page has read it (`call_link_forget`).
+- **A replaced page's links go away, not hang up.** When the room window's page is replaced (`page_changed`) its links
+  are closed with 1001, so the room parks their calls and the new page takes them back with its resume ticket; a
+  hang-up (1000) is only ever the page's own `close()`. Quitting closes every link the same way.
+
+What the page reads of a socket is what it reads of a browser's: `onopen`, then `onmessage` per frame, then `onclose`
+(`onerror` before an abnormal close). A send before the socket opens throws `InvalidStateError`; sends after `close()`
+are let go; sends and the close reach the room in the order asked. TLS is rustls on the system's verifier
+(rustls-platform-verifier, set up on Android by the mobile app, `platform/tls`), the stack the engine's requests use.
+The socket carries no `Origin` (the core admits a request without one) and the page's language as `Accept-Language`
+(the room's close reasons are worded in it). Nothing the link carries is logged: only that it opened and how it
+closed (its code).
+
+Commands (`plugin:sidevoice-shared-tauri|<command>`, each with the page's number, ACL.md): `call_link_open {page, key,
+url, protocols, language?, events}` (`url` `ws://` or `wss://`, else `call_link_url`; answers at once, the link tells
+over `events` `{type: "open"}`, `{type: "message", index, data}`, `{type: "error"}` and `{type: "close", code, reason,
+wasClean}`), `call_link_send {page, key, text}` (`call_link_not_open` before it opened), `call_link_close {page, key,
+code?, reason?}`, `call_link_since {page, key, after}` (answers `{readyState, frames: [{index, data}], close}`) and
+`call_link_forget {page, key}`. A key the page does not own is `call_link_unknown`. The link itself is
+`shared/core/src/call_link.rs` (unit-tested against a stand-in room: the subprotocols, the order of sends, the
+keepalive, the catch-up, the closes), its commands `shared/core/src/app/call_link.rs` and
+`shared/tauri/src/call_link.rs`, and the page's side `shared/tauri/js/members.js` `callLink()` (`test/members.test.mjs`).
+
+Not here yet: while the page is frozen, the app keeps the call and what the room says, but does not speak the replies
+itself, send the turns the person says, or feed the Live Activity from the link: those are still the page's, done
+when it runs again.
 
 ## The message overlay
 

@@ -559,6 +559,9 @@
       }),
       // The voice call the app runs: the page neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
+      // The call's link to the room, which the app opens and keeps (docs/BRIDGE.md -> "The call link"): the page never
+      // opens its own call socket here.
+      callLink: members.callLink(),
       // The app's native microphone access, on every OS (src/platform/microphone.rs), and its words for a blocked one.
       microphone: members.microphone(microphoneSettingsOffered === true, microphoneHelp),
       // The app's wording of the web's texts that an app changes (shared/tauri/i18n), over the web's catalogue.

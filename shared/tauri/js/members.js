@@ -1,5 +1,5 @@
 // The members of the page's `host` that every Sidevoice app shares, whatever shell it is made with
-// (sidevoice-shared): the app's engine, the voice call it runs, the microphone's permission and the pairings, and
+// (sidevoice-shared): the app's engine, the voice call it runs, the call's link to the room, the microphone's permission and the pairings, and
 // the room page's call state reported to the app, with the commands the app runs on it. They name no shell: what
 // reaches the app is a `transport`, handed in, that has the shape below (the shell's binding makes it).
 //
@@ -17,6 +17,24 @@
   const { call, channel } = transport;
 
   let installs = 0; // numbers each install call's job
+
+  // The app numbers the pages that own its calls and call links, and sends a page's voice events over the channel it opens
+  // when it loads, to that page only. Every command of the voice and of the call link carries the number back, so that a
+  // page that was replaced moves nothing of the one that replaced it. Asked once, with the first command; asked again if
+  // the app refused it. The voice's events go to `voiceEvents`, once `voice()` is made.
+  let voiceEvents = null;
+  let numbered = null;
+  const paged = (command, args) => {
+    numbered ??= Promise.resolve().then(() => call("voice_events", {
+      // Which document asks: a request of a page that was replaced can reach the app after the new page's, and is told so.
+      document: win.performance.timeOrigin,
+      events: channel((event) => voiceEvents?.(event)),
+    }));
+    return numbered.then((page) => call(command, { page, ...args }), (error) => {
+      numbered = null;
+      throw error;
+    });
+  };
 
   /** A refusal of `host.engine`'s catalogue and key calls, with the `code` the page reads: the refusal's own, else its
    *  key with dashes. */
@@ -119,22 +137,9 @@
    *  recognition state, and `preload(settings)` loads the models a call of them would use. */
   function voice() {
     const calls = new Map();
-    // The app numbers the pages that own its calls and sends a page's events over the channel it opens when it loads, to that
-    // page only. Every command carries the number back, so that a page that was replaced moves nothing of the one that
-    // replaced it. Asked once, with the first command; asked again if the app refused it.
     let voiceApi;
-    let numbered = null;
-    const toApp = (command, args) => {
-      numbered ??= Promise.resolve().then(() => call("voice_events", {
-        // Which document asks: a request of a page that was replaced can reach the app after the new page's, and is told so.
-        document: win.performance.timeOrigin,
-        events: channel((event) => voiceApi?.receive(event)),
-      }));
-      return numbered.then((page) => call(command, { page, ...args }), (error) => {
-        numbered = null;
-        throw error;
-      });
-    };
+    voiceEvents = (event) => voiceApi?.receive(event);
+    const toApp = paged;
     const deviceListeners = new Set();
     const epoch = Math.random().toString(36).slice(2, 10);
     let nextCall = 0;
@@ -556,6 +561,102 @@
     return Object.freeze({ snapshot, report, run, joined: () => reportedJoined, start });
   }
 
+  /** The call's link to the room, held by the app (docs/BRIDGE.md → "The call link"): `open(url, protocols)` answers a
+   *  socket with the part of a browser's `WebSocket` the page's call uses (`readyState` and its numbers, `send`, `close`,
+   *  `onopen`, `onmessage`, `onerror`, `onclose`), whose socket is the app's. The app answers the room's keepalive itself,
+   *  so the page never sees a `voice-ping`, and keeps what the room sends: a page that runs again after the system froze it
+   *  (a locked phone) asks the app for what came after the last frame it read, so nothing that came meanwhile is lost
+   *  and nothing is read twice. It implements sidevoice-web's `CallLink` (host/types.ts), which the browser's own
+   *  websocket implements in a browser. */
+  function callLink() {
+    const links = new Map();
+    const epoch = Math.random().toString(36).slice(2, 10);
+    let opened = 0;
+    const catchUpAll = () => { for (const link of links.values()) link.catchUp(); };
+    // A page the system froze runs again: whatever it was sent meanwhile is asked for.
+    win.document?.addEventListener?.("visibilitychange", () => {
+      if (win.document.visibilityState === "visible") catchUpAll();
+    });
+    win.addEventListener?.("pageshow", catchUpAll);
+    win.addEventListener?.("focus", catchUpAll);
+
+    function open(url, protocols) {
+      const key = `link-${epoch}-${++opened}`;
+      let readyState = 0;
+      let last = 0; // the index of the last of the room's frames the page read
+      let ended = false;
+      let catching = null;
+      let sending = Promise.resolve();
+      const socket = {
+        CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3,
+        url: String(url),
+        get readyState() { return readyState; },
+        onopen: null, onmessage: null, onerror: null, onclose: null,
+        /** As a browser's: refused before the socket opened, let go once it is closing; sent in the order asked. */
+        send(text) {
+          if (readyState === 0) throw Object.assign(new Error("the call link is not open yet"), { name: "InvalidStateError" });
+          if (readyState !== 1) return;
+          sending = sending.then(() => paged("call_link_send", { key, text: String(text) })).catch(() => {});
+        },
+        /** After what was sent before it; 1000 (a hang-up) when no code is given. */
+        close(code, reason) {
+          if (readyState >= 2) return;
+          readyState = 2;
+          sending = sending.then(() => paged("call_link_close", { key, code: code ?? null, reason: reason ?? null }))
+            .catch(() => deliver({ type: "close", code: 1006, reason: "", wasClean: false }));
+        },
+      };
+      const fire = (name, event) => {
+        const handler = socket[name];
+        if (typeof handler !== "function") return;
+        try { handler.call(socket, event); } catch (error) { win.console?.error?.(error); }
+      };
+      function deliver(event) {
+        if (ended || !event || typeof event !== "object") return;
+        if (event.type === "open" || (event.type === "message" && readyState === 0)) {
+          if (readyState === 0) { readyState = 1; fire("onopen", { type: "open" }); }
+        }
+        if (event.type === "message") {
+          const index = Number(event.index);
+          if (!(index > last)) return; // read already
+          // One the page has not read came before it: ask for everything after the last one read, this one included.
+          if (index > last + 1) { catchUp(); return; }
+          last = index;
+          fire("onmessage", { type: "message", data: event.data });
+        } else if (event.type === "error") {
+          fire("onerror", { type: "error" });
+        } else if (event.type === "close") {
+          ended = true;
+          readyState = 3;
+          links.delete(key);
+          fire("onclose", { type: "close", code: event.code, reason: event.reason ?? "", wasClean: event.wasClean === true });
+          paged("call_link_forget", { key }).catch(() => {});
+        }
+      }
+      function catchUp() {
+        if (ended) return Promise.resolve();
+        catching ??= paged("call_link_since", { key, after: last })
+          .then((held) => {
+            if (held?.readyState >= 1) deliver({ type: "open" });
+            for (const frame of held?.frames ?? []) deliver({ type: "message", index: frame.index, data: frame.data });
+            if (held?.close) deliver({ type: "close", ...held.close });
+          }, () => deliver({ type: "close", code: 1006, reason: "", wasClean: false }))
+          .finally(() => { catching = null; });
+        return catching;
+      }
+      links.set(key, { catchUp });
+      paged("call_link_open", {
+        key, url: String(url), protocols: [...(protocols ?? [])].map(String), language: win.navigator?.language ?? null,
+        events: channel(deliver),
+      }).catch(() => {
+        deliver({ type: "error" });
+        deliver({ type: "close", code: 1006, reason: "", wasClean: false });
+      });
+      return socket;
+    }
+    return Object.freeze({ open });
+  }
+
   /** The app's wording of the web's texts that its place changes (docs/BRIDGE.md → "The message overlay"). `tables`: one
    *  table per language, `{ "<language>": { "<web catalogue key>": text } }`, with `en` among them. `messages(language)` is
    *  the table of that exact language (the page tries the primary subtag itself), `{}` where the app has none. Answers at
@@ -568,5 +669,5 @@
     };
   }
 
-  return Object.freeze({ engine, voice, microphone, pairings, crashReports, room, messages });
+  return Object.freeze({ engine, voice, callLink, microphone, pairings, crashReports, room, messages });
 })

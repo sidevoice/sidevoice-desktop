@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-call-link-close"
+description = "Enables the call_link_close command without any pre-configured scope."
+commands.allow = ["call_link_close"]
+
+[[permission]]
+identifier = "deny-call-link-close"
+description = "Denies the call_link_close command without any pre-configured scope."
+commands.deny = ["call_link_close"]

@@ -274,3 +274,93 @@ test("the app's wording of the web's texts is the table of the exact language, o
   for (const other of ["es-419", "de", "", undefined, null, 7, "constructor", "__proto__", "toString"]) assert.deepEqual(plain(messages(other)), {}, String(other));
   for (const bad of [undefined, null, "text", {}, { es: tables.es }]) assert.equal(makeMembers(fakeWindow().win, transport).messages(bad), undefined, String(bad));
 });
+
+/** A window whose document and window events the test fires. */
+function wakingWindow() {
+  const listeners = {};
+  const on = (name, fn) => { (listeners[name] ??= []).push(fn); };
+  const document = { visibilityState: "visible", addEventListener: on };
+  const { win } = fakeWindow({ document, addEventListener: on, navigator: { language: "es-ES" } });
+  return { win, fire: (name) => (listeners[name] ?? []).forEach((fn) => fn()) };
+}
+
+test("the call link opens the app's socket for the page, sends in order and hands on the room's frames once each", async () => {
+  const { transport, calls, channels } = fakeTransport();
+  const link = makeMembers(wakingWindow().win, transport).callLink();
+  const socket = link.open("wss://core.example/api/presentation/ws", ["sidevoice", "sidevoice.token.t"]);
+  const seen = [];
+  socket.onopen = () => { seen.push("open"); socket.send("hello"); };
+  socket.onmessage = (event) => seen.push(event.data);
+  socket.onclose = (event) => seen.push(`close ${event.code} ${event.wasClean}`);
+  assert.equal(socket.readyState, 0);
+  assert.throws(() => socket.send("too early"), { name: "InvalidStateError" });
+  await flush();
+  const [command, args] = calls[1];
+  assert.equal(command, "call_link_open");
+  assert.deepEqual(args, { page: PAGE, key: args.key, url: "wss://core.example/api/presentation/ws",
+    protocols: ["sidevoice", "sidevoice.token.t"], language: "es-ES", events: args.events });
+  const app = channelOf(calls, channels);
+  app({ type: "open" });
+  assert.equal(socket.readyState, 1);
+  socket.send("turn");
+  app({ type: "message", index: 1, data: "session" });
+  app({ type: "message", index: 1, data: "session" });
+  app({ type: "message", index: 2, data: "reply" });
+  socket.close(1000);
+  socket.send("after the close");
+  assert.equal(socket.readyState, 2);
+  await flush(); await flush(); await flush();
+  assert.deepEqual(calls.slice(2).map(([name, a]) => [name, a.text ?? a.code]),
+    [["call_link_send", "hello"], ["call_link_send", "turn"], ["call_link_close", 1000]], "in the order asked");
+  app({ type: "close", code: 1000, reason: "", wasClean: true });
+  await flush();
+  assert.equal(socket.readyState, 3);
+  assert.deepEqual(seen, ["open", "session", "reply", "close 1000 true"]);
+  assert.equal(calls.at(-1)[0], "call_link_forget");
+});
+
+test("a page that runs again asks the app for what came after the last frame it read, and reads each once", async () => {
+  let held = { readyState: 1, frames: [], close: null };
+  const { transport, calls, channels } = fakeTransport((command) => (command === "call_link_since" ? held : undefined));
+  const { win, fire } = wakingWindow();
+  const socket = makeMembers(win, transport).callLink().open("ws://10.0.0.2:10829/api/presentation/ws", []);
+  const seen = [];
+  socket.onmessage = (event) => seen.push(event.data);
+  socket.onclose = (event) => seen.push(`close ${event.code}`);
+  await flush();
+  const app = channelOf(calls, channels);
+  app({ type: "message", index: 1, data: "one" });
+  assert.equal(socket.readyState, 1, "a frame says the socket is open");
+  // The frozen page missed 2: the next one it is handed shows the gap, and it asks for what came after 1.
+  held = { readyState: 1, frames: [{ index: 2, data: "two" }, { index: 3, data: "three" }], close: null };
+  app({ type: "message", index: 3, data: "three" });
+  await flush(); await flush();
+  assert.deepEqual(calls.filter(([name]) => name === "call_link_since").map(([, a]) => a.after), [1]);
+  assert.deepEqual(seen, ["one", "two", "three"]);
+  // Back in front: the link closed meanwhile, and the page learns it from the app.
+  held = { readyState: 3, frames: [{ index: 3, data: "three" }], close: { code: 1006, reason: "", wasClean: false } };
+  fire("visibilitychange");
+  await flush(); await flush();
+  assert.deepEqual(calls.filter(([name]) => name === "call_link_since").map(([, a]) => a.after), [1, 3]);
+  assert.deepEqual(seen, ["one", "two", "three", "close 1006"]);
+  fire("pageshow");
+  await flush();
+  assert.equal(calls.filter(([name]) => name === "call_link_since").length, 2, "a closed link is asked nothing");
+});
+
+test("a link the app refuses to open says error, then an abnormal close", async () => {
+  const { transport } = fakeTransport((command) => (command === "call_link_open" ? Promise.reject({ key: "call_link_url" }) : undefined));
+  const socket = makeMembers(wakingWindow().win, transport).callLink().open("http://nope", []);
+  const seen = [];
+  socket.onerror = () => seen.push("error");
+  socket.onclose = (event) => seen.push(`close ${event.code} ${event.wasClean}`);
+  await flush(); await flush();
+  assert.deepEqual(seen, ["error", "close 1006 false"]);
+  assert.equal(socket.readyState, 3);
+});
+
+/** The channel the page handed the app with its `call_link_open`. */
+function channelOf(calls, channels) {
+  const [, args] = calls.find(([name]) => name === "call_link_open");
+  return channels[Number(args.events.split("-")[1])];
+}

@@ -27,7 +27,7 @@ sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag 
 sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = "v0.10.0" }
 # A voice call's take reaches the page with its samples in base64 (src/voice/take.rs).
 base64 = "0.22"
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # The app's logging (src/logging.rs): events and spans everywhere, one subscriber in the process; `tracing-log` routes the
 # `log` records of tao, wry and tauri into it (and `NormalizeEvent`, which gives the system log layer, src/system_log.rs, a
 # record's real target back).
@@ -41,7 +41,7 @@ serde_json = "1"
 # The engine's futures run on the app's Tokio runtime; installs race a cancel (src/engine.rs); the calls' lanes
 # and what a stopped call keeps loaded run on it too, and the models' native work goes to its blocking pool
 # (src/voice/models.rs).
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros", "net"] }
 
 # Crash reports (src/crash): the maintained SDK's protocol types only (the event, the envelope, the DSN, the debug ids): no
 # client, integration or transport of the SDK exists in the process. The report is built from a record's closed field list
@@ -57,6 +57,14 @@ getrandom = "0.3"
 # The POST of an envelope, on a runtime of a thread of its own (src/crash/report.rs: nothing it runs on is a thread the app's
 # panic hook would count as the app's); the TLS stack the app already has.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+
+# The call's link to the room (src/call_link.rs): the core's call websocket, held by the app so it goes on while a
+# phone freezes the page. tungstenite over Tokio's TCP; TLS with rustls on the system's own verifier, the stack
+# reqwest already brings (aws-lc-rs, rustls-platform-verifier, which the mobile app sets up on Android).
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "aws_lc_rs"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-platform-verifier = "0.6"
 
 # Provider keys in the OS credential store (platform/credentials; docs/CREDENTIALS.md).
 keyring-core = "1.0.1"

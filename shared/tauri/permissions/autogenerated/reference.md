@@ -62,6 +62,136 @@ Denies the bridge_playback command without any pre-configured scope.
 <tr>
 <td>
 
+`sidevoice-shared-tauri:allow-call-link-close`
+
+</td>
+<td>
+
+Enables the call_link_close command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:deny-call-link-close`
+
+</td>
+<td>
+
+Denies the call_link_close command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:allow-call-link-forget`
+
+</td>
+<td>
+
+Enables the call_link_forget command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:deny-call-link-forget`
+
+</td>
+<td>
+
+Denies the call_link_forget command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:allow-call-link-open`
+
+</td>
+<td>
+
+Enables the call_link_open command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:deny-call-link-open`
+
+</td>
+<td>
+
+Denies the call_link_open command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:allow-call-link-send`
+
+</td>
+<td>
+
+Enables the call_link_send command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:deny-call-link-send`
+
+</td>
+<td>
+
+Denies the call_link_send command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:allow-call-link-since`
+
+</td>
+<td>
+
+Enables the call_link_since command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-shared-tauri:deny-call-link-since`
+
+</td>
+<td>
+
+Denies the call_link_since command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `sidevoice-shared-tauri:allow-crash-reports`
 
 </td>
