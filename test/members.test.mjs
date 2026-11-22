@@ -364,3 +364,21 @@ function channelOf(calls, channels) {
   const [, args] = calls.find(([name]) => name === "call_link_open");
   return channels[Number(args.events.split("-")[1])];
 }
+
+test("an end the app sends while missed frames are being asked for comes after them", async () => {
+  let answer;
+  const { transport, calls, channels } = fakeTransport((command) =>
+    command === "call_link_since" ? new Promise((resolve) => { answer = resolve; }) : undefined);
+  const socket = makeMembers(wakingWindow().win, transport).callLink().open("ws://h/", []);
+  const seen = [];
+  socket.onmessage = (event) => seen.push(event.data);
+  socket.onclose = (event) => seen.push(`close ${event.code}`);
+  await flush();
+  const app = channelOf(calls, channels);
+  app({ type: "message", index: 2, data: "two" });
+  await flush();
+  app({ type: "close", code: 1006, reason: "", wasClean: false });
+  answer({ readyState: 3, frames: [{ index: 1, data: "one" }, { index: 2, data: "two" }], close: null });
+  await flush(); await flush(); await flush();
+  assert.deepEqual(seen, ["one", "two", "close 1006"]);
+});

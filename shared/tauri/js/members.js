@@ -626,6 +626,8 @@
         } else if (event.type === "error") {
           fire("onerror", { type: "error" });
         } else if (event.type === "close") {
+          // Frames the page missed are being asked for: the end comes after them.
+          if (catching) { catching.then(() => deliver(event)); return; }
           ended = true;
           readyState = 3;
           links.delete(key);
