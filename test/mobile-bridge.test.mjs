@@ -377,6 +377,25 @@ test("a refusal of the native call is a failed hold, not an exception", async ()
   assert.equal(await api.host.presence.screenAwake.acquire(), "failed");
 });
 
+test("a release followed at once by a hold reaches the app in that order, and a failed one does not stop the next", async () => {
+  const { api, win } = install("tauri://localhost");
+  const order = [];
+  const pending = [];
+  win.__TAURI_INTERNALS__.invoke = (command, args) => command === "keep_screen_on"
+    ? new Promise((resolve, reject) => { order.push(args.on); pending.push({ resolve, reject }); })
+    : Promise.resolve(null);
+  const awake = api.host.presence.screenAwake;
+  awake.release();
+  const held = awake.acquire();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(order, [false], "the hold waits for the release to be answered");
+  pending[0].reject("no");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(order, [false, true], "a refused release does not hold the hold back");
+  pending[1].resolve(null);
+  assert.equal(await held, "held");
+});
+
 test("host.build is what the app says this build is, frozen", () => {
   const nightly = { channel: "nightly", version: "0.1.0", commit: "a1b2c3d", date: "2026-11-02" };
   const { api } = install("tauri://localhost", undefined, true, null, null, null, nightly);

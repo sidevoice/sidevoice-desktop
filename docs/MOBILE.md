@@ -676,7 +676,7 @@ While any install job runs, the screen is kept on: the host tells the app when t
 (`DownloadActivity`, one of `Hooks`), `mobile/tauri/src/screen.rs` passes that to the plugin's `keep_screen_on`, which sets iOS
 `UIApplication.isIdleTimerDisabled` (on the main thread) or Android's `FLAG_KEEP_SCREEN_ON` on the activity's window
 (`MobilePlugin.keepScreenOn`). The engine resumes a partial file with an HTTP range request, so a download that the system
-interrupts anyway (the person left the app) goes on where it stopped. The call asks the same way through the page's `host.presence.screenAwake` (the app's own command `keep_screen_on`); `Screen` keeps both reasons, so a call ending does not turn the screen off under a download, nor the reverse. Native background downloads are not here
+interrupts anyway (the person left the app) goes on where it stopped. The call asks the same way through the page's `host.presence.screenAwake` (the app's own command `keep_screen_on`); `Screen` keeps both reasons, so a call ending does not turn the screen off under a download, nor the reverse. The reasons record what is wanted and `sync` brings the system to it, from a blocking thread (the plugin waits on Kotlin, which answers on the main thread): the last change wins, a system call that failed is tried again by the next, and a page that loads anew lets go of the call's reason. Native background downloads are not here
 (sidevoice-desktop#361, option 2).
 
 ## Not here yet

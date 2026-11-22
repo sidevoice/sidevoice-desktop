@@ -371,16 +371,24 @@ async fn screen_locked(app: AppHandle, webview: Webview) -> Result<bool, serde_j
 }
 
 /// The page asks for the screen to stay on during the call, or to be let go (`host.presence.screenAwake`, the app's own
-/// command, capabilities/main.json). Asking twice is the same as once; a download may still need it.
+/// command, capabilities/main.json). Asking twice is the same as once; a download may still need it. The change is
+/// recorded here, in the order the commands arrive, and applied from a blocking thread: on Android the plugin waits on
+/// Kotlin, which answers on the main thread, where a synchronous command would run (an ANR). Applied after the others'
+/// recording, each sync brings the system to what is wanted by then: the last change wins.
 #[tauri::command]
-fn keep_screen_on(
+async fn keep_screen_on(
     app: AppHandle,
     webview: Webview,
     screen: tauri::State<'_, Arc<screen::Screen>>,
     on: bool,
 ) -> Result<(), String> {
     the_page(&app, &webview)?;
-    screen.call(on).map_err(|error| error.to_string())
+    let screen = screen.inner().clone();
+    screen.want_call(on);
+    tauri::async_runtime::spawn_blocking(move || screen.sync())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 /// A file of the app's own assets (its `frontendDist`, the web it bundles), by its path there (`voice/...`).
@@ -473,7 +481,7 @@ async fn call_still(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(png.as_bytes())
         .map_err(|_| refused("not base64"))?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let _ = tauri::async_runtime::spawn_blocking(move || {
         let room = app.state::<call::RoomCall>();
         room.save_still(page, id, bytes, px)
     })
@@ -684,6 +692,17 @@ fn run_app() {
                             room.page_changed(page);
                         }
                         *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
+                        // Nor does it keep the screen on the one before asked for: that page cannot let it go any more.
+                        // Applied from a blocking thread (the plugin waits on the main thread on Android).
+                        if let Some(screen) = page_app.try_state::<Arc<screen::Screen>>() {
+                            let screen = screen.inner().clone();
+                            screen.want_call(false);
+                            let _ = tauri::async_runtime::spawn_blocking(move || {
+                                if let Err(error) = screen.sync() {
+                                    tracing::warn!(%error, "the screen could not be released as the page loaded");
+                                }
+                            });
+                        }
                     }
                 })
                 .build()?

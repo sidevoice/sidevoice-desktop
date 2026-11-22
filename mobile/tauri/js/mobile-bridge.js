@@ -293,6 +293,14 @@
    *  and whether it plays only while the screen is locked (`whileLocked`: the page's "only with the screen off", which the app
    *  applies itself from each lock to the unlock, since a locked phone's page may not run to start it then). */
   let cueMember = null;
+  /** The screen kept on (`host.presence.screenAwake`): one command after the other, so that a release quickly followed by a hold
+   *  reaches the app in that order. A failure of one does not stop the next. */
+  let screenQueue = Promise.resolve();
+  const keepScreenOn = (on) => {
+    const asked = screenQueue.then(() => transport.own.call("keep_screen_on", { on }));
+    screenQueue = asked.catch(() => {});
+    return asked;
+  };
   const cue = (action, name, chosen) => transport.own.call("cue", { action, name, ...chosen }).catch((error) => {
     if (win.console) win.console.warn("[sidevoice] cue " + action + " failed:", error);
   });
@@ -381,9 +389,9 @@
          *  `keep_screen_on`) stay set until released: nothing takes them back. */
         screenAwake: Object.freeze({
           supported: true,
-          acquire: () => transport.own.call("keep_screen_on", { on: true }).then(() => "held", () => "failed"),
+          acquire: () => keepScreenOn(true).then(() => "held", () => "failed"),
           release: () => {
-            transport.own.call("keep_screen_on", { on: false }).catch(() => {});
+            keepScreenOn(false).catch((error) => { if (win.console) win.console.warn("[sidevoice] the screen could not be let go:", error); });
           },
           onReleased: () => () => {},
         }),
