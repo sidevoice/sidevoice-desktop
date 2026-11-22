@@ -374,7 +374,20 @@
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
        *  handlers or play a Now Playing element of its own. The app answers the headset's buttons and the lock screen
        *  (sidevoice-shared-tauri's platform/media_controls). */
-      presence: Object.freeze({ media: "app" }),
+      presence: Object.freeze({
+        media: "app",
+        /** The screen kept on during a call: the app's own, since a phone's webview has no Screen Wake Lock that holds (none in an
+         *  insecure context, none in WKWebView). iOS `isIdleTimerDisabled` and Android's `FLAG_KEEP_SCREEN_ON` (the plugin's
+         *  `keep_screen_on`) stay set until released: nothing takes them back. */
+        screenAwake: Object.freeze({
+          supported: true,
+          acquire: () => transport.own.call("keep_screen_on", { on: true }).then(() => "held", () => "failed"),
+          release: () => {
+            transport.own.call("keep_screen_on", { on: false }).catch(() => {});
+          },
+          onReleased: () => () => {},
+        }),
+      }),
       /** What a headset's presses do: the only shortcuts a phone has. */
       shortcuts: headset.host,
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
