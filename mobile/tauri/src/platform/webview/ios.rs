@@ -12,6 +12,10 @@ use objc2_foundation::NSString;
 use objc2_ui_kit::{
     UIColor, UIScrollView, UIScrollViewContentInsetAdjustmentBehavior, UIView, UIViewController,
 };
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 use tauri::webview::PlatformWebview;
 
 pub struct Native;
@@ -92,6 +96,25 @@ fn log_page(web_view: &UIView) {
         unsafe { msg_send![web_view, evaluateJavaScript: &*script, completionHandler: &*done] };
 }
 
+/// Reloads allowed in `RELOAD_WINDOW` after a termination, so a page that is killed on every load does not loop.
+const MAX_RELOADS: usize = 3;
+const RELOAD_WINDOW: Duration = Duration::from_secs(60);
+static RELOADS: Mutex<Vec<Instant>> = Mutex::new(Vec::new());
+
+/// Records a reload and says whether it is within the limit.
+fn reload_allowed(reloads: &Mutex<Vec<Instant>>) -> bool {
+    let now = Instant::now();
+    let mut reloads = reloads
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reloads.retain(|at| now.duration_since(*at) < RELOAD_WINDOW);
+    if reloads.len() >= MAX_RELOADS {
+        return false;
+    }
+    reloads.push(now);
+    true
+}
+
 impl Os for Native {
     fn fill_screen(webview: &PlatformWebview) {
         let Some((web_view, controller)) = views(webview) else {
@@ -150,8 +173,19 @@ impl Os for Native {
     }
 
     fn watch_termination(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
-        builder.on_web_content_process_terminate(|_webview| {
+        builder.on_web_content_process_terminate(|webview| {
             tracing::warn!("the web view's content process was terminated by the system");
+            if !reload_allowed(&RELOADS) {
+                tracing::error!(
+                    "the web view's content process keeps being terminated: not reloading it again"
+                );
+                return;
+            }
+            // WebKit leaves the page blank (black screen) and wry does not reload it: reloading starts the page again,
+            // which is what lets it rejoin the room.
+            if let Err(error) = webview.reload() {
+                tracing::error!(%error, "the web view could not be reloaded after its content process was terminated");
+            }
         })
     }
 }
