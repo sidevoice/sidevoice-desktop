@@ -357,7 +357,7 @@ test("the phone's name is offered as host.deviceName, and left out when the syst
 });
 
 // sidevoice-desktop#384: the phone's webview has no Screen Wake Lock that holds, so the page keeps the screen on through the
-// app: the member must reach the native call (`keep_screen_on`, the app's own command) with the page asking, and again to let go.
+// app: the member must reach the native call (`keep_screen_on`, the app's own command) with the page asking (and its number), and again to let go.
 test("host.presence.screenAwake reaches the native keep_screen_on, to hold and to release", async () => {
   const { api, invoked } = install("tauri://localhost");
   const awake = api.host.presence.screenAwake;
@@ -367,7 +367,7 @@ test("host.presence.screenAwake reaches the native keep_screen_on, to hold and t
   awake.release();
   await new Promise((resolve) => setTimeout(resolve, 0));
   const asked = invoked.filter(([command]) => command === "keep_screen_on");
-  assert.equal(JSON.stringify(asked), JSON.stringify([["keep_screen_on", { on: true }], ["keep_screen_on", { on: false }]]));
+  assert.equal(JSON.stringify(asked), JSON.stringify([["keep_screen_on", { page: 7, on: true }], ["keep_screen_on", { page: 7, on: false }]]));
   assert.equal(typeof awake.onReleased(() => {}), "function");
 });
 

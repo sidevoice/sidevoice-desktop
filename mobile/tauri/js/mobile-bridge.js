@@ -297,7 +297,7 @@
    *  reaches the app in that order. A failure of one does not stop the next. */
   let screenQueue = Promise.resolve();
   const keepScreenOn = (on) => {
-    const asked = screenQueue.then(() => transport.own.call("keep_screen_on", { on }));
+    const asked = screenQueue.then(() => numbered()).then((number) => transport.own.call("keep_screen_on", { page: number, on }));
     screenQueue = asked.catch(() => {});
     return asked;
   };

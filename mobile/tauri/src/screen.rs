@@ -55,6 +55,18 @@ impl Screen {
         self.reasons.lock().unwrap().call = on;
     }
 
+    /// The same, for a request of page `page`: ignored (`false`) unless it is still the current page, as `current` says
+    /// when asked under the lock. A load that starts after this releases after it (`want_call(false)`), so an old page's
+    /// late hold never outlives it.
+    pub fn want_call_from(&self, on: bool, page: u64, current: impl FnOnce() -> u64) -> bool {
+        let mut reasons = self.reasons.lock().unwrap();
+        if page != current() {
+            return false;
+        }
+        reasons.call = on;
+        true
+    }
+
     /// The download's reason, recorded the same way.
     fn want_download(&self, on: bool) {
         self.reasons.lock().unwrap().download = on;
@@ -222,5 +234,17 @@ mod tests {
         screen.want_call(true);
         screen.sync().unwrap();
         assert_eq!(*calls.lock().unwrap(), [true]);
+    }
+
+    #[test]
+    fn a_page_that_has_been_replaced_cannot_hold_the_screen() {
+        let (screen, calls) = recorded();
+        assert!(screen.want_call_from(true, 2, || 2));
+        screen.sync().unwrap();
+        // Page 3 loads: the hold is let go, and page 2's late ask is refused.
+        screen.want_call(false);
+        assert!(!screen.want_call_from(true, 2, || 3));
+        screen.sync().unwrap();
+        assert_eq!(*calls.lock().unwrap(), [true, false]);
     }
 }

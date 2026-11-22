@@ -380,11 +380,16 @@ async fn keep_screen_on(
     app: AppHandle,
     webview: Webview,
     screen: tauri::State<'_, Arc<screen::Screen>>,
+    page: u64,
     on: bool,
 ) -> Result<(), String> {
     the_page(&app, &webview)?;
     let screen = screen.inner().clone();
-    screen.want_call(on);
+    // A page that has been replaced asks for nothing: it cannot let the screen go any more. Checked under the screen's
+    // own lock, so that a load starting meanwhile releases after this, never before it.
+    if !screen.want_call_from(on, page, || app.state::<AppHost>().page().0) {
+        return Ok(());
+    }
     tauri::async_runtime::spawn_blocking(move || screen.sync())
         .await
         .map_err(|error| error.to_string())?
@@ -481,7 +486,7 @@ async fn call_still(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(png.as_bytes())
         .map_err(|_| refused("not base64"))?;
-    let _ = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let room = app.state::<call::RoomCall>();
         room.save_still(page, id, bytes, px)
     })
