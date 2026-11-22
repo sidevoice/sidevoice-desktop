@@ -153,6 +153,8 @@ Nothing is tagged yet: the manifest starts at 0.1.0, so the first release PR pro
 commit versions the mobile app and the desktop app needs a commit that changes a file ("Two products in one repository",
 above).
 
+Core, engine, voice and web are bundled: a PR that moves one of their pins (the `Cargo.toml` tags, `web.pin.json`) is a change of the desktop app and is titled `fix(deps): ...` (guideline, section 1), not `chore`.
+
 ## Nightly
 
 Every green `build` on `main` (a push that touches only `mobile/` runs none) moves the tag `nightly` to that commit
@@ -307,7 +309,7 @@ previous identifier".
 
 ## What this needs from the repository settings
 
-- The setting "Allow GitHub Actions to create and approve pull requests" (guideline §7) was off as of 2026-10-01.
+- The settings every repository needs are in the guideline, section 7; the setting "Allow GitHub Actions to create and approve pull requests" was off as of 2026-10-01.
 - Repository secrets for macOS signing (a release, or a manual `sign` run): `APPLE_CERTIFICATE` (the Developer ID
   Application certificate and key, a base64 .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`
   ("Developer ID Application: … (TEAMID)"), `APPLE_TEAM_ID`, and the notary's App Store Connect API key:
