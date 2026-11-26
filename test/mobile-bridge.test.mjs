@@ -51,7 +51,8 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.deepEqual(Object.keys(host).sort(), ["audioRoute", "build", "callSurface", "codeScanner", "crashReports", "cue", "engine", "microphone", "pairings", "presence", "reach", "screen", "shortcuts", "voice"]);
     assert.equal(host.callSurface.active(), true, "the app draws the call's surfaces");
     for (const fn of ["still", "forget"]) assert.equal(typeof host.callSurface[fn], "function", fn);
-    assert.equal(JSON.stringify(host.presence), JSON.stringify({ media: "app" }));
+    assert.equal(host.presence.media, "app");
+    assert.deepEqual(Object.keys(host.presence).sort(), ["media", "screenAwake"]);
     assert.equal(JSON.stringify(host.reach), JSON.stringify({ plainHttpPrivate: true }));
     for (const fn of ["catalogs", "install", "installed", "capabilities", "memory"]) assert.equal(typeof host.engine[fn], "function", fn);
     for (const fn of ["read", "write"]) assert.equal(typeof host.pairings[fn], "function", fn);
@@ -353,6 +354,46 @@ test("the phone's name is offered as host.deviceName, and left out when the syst
     const { api } = install("tauri://localhost", undefined, true, null, null, none);
     assert.equal("deviceName" in api.host, false);
   }
+});
+
+// sidevoice-desktop#384: the phone's webview has no Screen Wake Lock that holds, so the page keeps the screen on through the
+// app: the member must reach the native call (`keep_screen_on`, the app's own command) with the page asking (and its number), and again to let go.
+test("host.presence.screenAwake reaches the native keep_screen_on, to hold and to release", async () => {
+  const { api, invoked } = install("tauri://localhost");
+  const awake = api.host.presence.screenAwake;
+  assert.equal(awake.supported, true);
+  for (const fn of ["acquire", "release", "onReleased"]) assert.equal(typeof awake[fn], "function", fn);
+  assert.equal(await awake.acquire(), "held");
+  awake.release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const asked = invoked.filter(([command]) => command === "keep_screen_on");
+  assert.equal(JSON.stringify(asked), JSON.stringify([["keep_screen_on", { page: 7, on: true }], ["keep_screen_on", { page: 7, on: false }]]));
+  assert.equal(typeof awake.onReleased(() => {}), "function");
+});
+
+test("a refusal of the native call is a failed hold, not an exception", async () => {
+  const { api, win } = install("tauri://localhost");
+  win.__TAURI_INTERNALS__.invoke = (command) => command === "keep_screen_on" ? Promise.reject("no") : Promise.resolve(null);
+  assert.equal(await api.host.presence.screenAwake.acquire(), "failed");
+});
+
+test("a release followed at once by a hold reaches the app in that order, and a failed one does not stop the next", async () => {
+  const { api, win } = install("tauri://localhost");
+  const order = [];
+  const pending = [];
+  win.__TAURI_INTERNALS__.invoke = (command, args) => command === "keep_screen_on"
+    ? new Promise((resolve, reject) => { order.push(args.on); pending.push({ resolve, reject }); })
+    : Promise.resolve(null);
+  const awake = api.host.presence.screenAwake;
+  awake.release();
+  const held = awake.acquire();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(order, [false], "the hold waits for the release to be answered");
+  pending[0].reject("no");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(order, [false, true], "a refused release does not hold the hold back");
+  pending[1].resolve(null);
+  assert.equal(await held, "held");
 });
 
 test("host.build is what the app says this build is, frozen", () => {

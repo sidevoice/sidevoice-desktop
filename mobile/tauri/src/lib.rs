@@ -14,11 +14,11 @@ use bridge::headset;
 mod call;
 mod crash_reports;
 mod developer_options;
-mod downloads;
 mod hold;
 mod i18n;
 pub mod pairings;
 mod platform;
+mod screen;
 mod surface;
 
 use std::{path::PathBuf, sync::Arc};
@@ -370,6 +370,32 @@ async fn screen_locked(app: AppHandle, webview: Webview) -> Result<bool, serde_j
         .map_err(|error| serde_json::json!({ "key": "bad_request", "message": error.to_string() }))
 }
 
+/// The page asks for the screen to stay on during the call, or to be let go (`host.presence.screenAwake`, the app's own
+/// command, capabilities/main.json). Asking twice is the same as once; a download may still need it. The change is
+/// recorded here, in the order the commands arrive, and applied from a blocking thread: on Android the plugin waits on
+/// Kotlin, which answers on the main thread, where a synchronous command would run (an ANR). Applied after the others'
+/// recording, each sync brings the system to what is wanted by then: the last change wins.
+#[tauri::command]
+async fn keep_screen_on(
+    app: AppHandle,
+    webview: Webview,
+    screen: tauri::State<'_, Arc<screen::Screen>>,
+    page: u64,
+    on: bool,
+) -> Result<(), String> {
+    the_page(&app, &webview)?;
+    let screen = screen.inner().clone();
+    // A page that has been replaced asks for nothing: it cannot let the screen go any more. Checked under the screen's
+    // own lock, so that a load starting meanwhile releases after this, never before it.
+    if !screen.want_call_from(on, page, || app.state::<AppHost>().page().0) {
+        return Ok(());
+    }
+    tauri::async_runtime::spawn_blocking(move || screen.sync())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
 /// A file of the app's own assets (its `frontendDist`, the web it bundles), by its path there (`voice/...`).
 fn assets<R: Runtime>(app: &AppHandle<R>, path: &str) -> Option<Vec<u8>> {
     app.asset_resolver()
@@ -534,7 +560,8 @@ fn run_app() {
             cue,
             developer_options,
             global_shortcuts,
-            screen_locked
+            screen_locked,
+            keep_screen_on
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -579,6 +606,9 @@ fn run_app() {
                 tracing::error!("the audio session was not declared; the call cannot record");
             }
             let phone = Arc::new(call::PhoneCall::new(handle.clone()));
+            // The screen kept on: by a download, and by a call whose person asked for it.
+            let screen = Arc::new(screen::Screen::new(handle.clone()));
+            app.manage(screen.clone());
             // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
             app.manage(developer_options::DeveloperOptions::of_app(
                 &handle,
@@ -600,7 +630,7 @@ fn run_app() {
                     // The voice calls' audio holds the audio session (iOS).
                     calls: phone.clone(),
                     // The screen stays on while a model download runs: the system suspends the app soon after it turns off.
-                    downloads: Arc::new(downloads::KeepScreenOn::new(handle.clone())),
+                    downloads: Arc::new(screen::DownloadScreen(screen)),
                     // The microphone is the audio session's route on iOS (its available and preferred inputs).
                     inputs: platform::audio_input::route(),
                 },
@@ -667,6 +697,17 @@ fn run_app() {
                             room.page_changed(page);
                         }
                         *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
+                        // Nor does it keep the screen on the one before asked for: that page cannot let it go any more.
+                        // Applied from a blocking thread (the plugin waits on the main thread on Android).
+                        if let Some(screen) = page_app.try_state::<Arc<screen::Screen>>() {
+                            let screen = screen.inner().clone();
+                            screen.want_call(false);
+                            drop(tauri::async_runtime::spawn_blocking(move || {
+                                if let Err(error) = screen.sync() {
+                                    tracing::warn!(%error, "the screen could not be released as the page loaded");
+                                }
+                            }));
+                        }
                     }
                 })
                 .build()?

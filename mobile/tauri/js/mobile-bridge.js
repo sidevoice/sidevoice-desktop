@@ -293,6 +293,14 @@
    *  and whether it plays only while the screen is locked (`whileLocked`: the page's "only with the screen off", which the app
    *  applies itself from each lock to the unlock, since a locked phone's page may not run to start it then). */
   let cueMember = null;
+  /** The screen kept on (`host.presence.screenAwake`): one command after the other, so that a release quickly followed by a hold
+   *  reaches the app in that order. A failure of one does not stop the next. */
+  let screenQueue = Promise.resolve();
+  const keepScreenOn = (on) => {
+    const asked = screenQueue.then(() => numbered()).then((number) => transport.own.call("keep_screen_on", { page: number, on }));
+    screenQueue = asked.catch(() => {});
+    return asked;
+  };
   const cue = (action, name, chosen) => transport.own.call("cue", { action, name, ...chosen }).catch((error) => {
     if (win.console) win.console.warn("[sidevoice] cue " + action + " failed:", error);
   });
@@ -374,7 +382,20 @@
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
        *  handlers or play a Now Playing element of its own. The app answers the headset's buttons and the lock screen
        *  (sidevoice-shared-tauri's platform/media_controls). */
-      presence: Object.freeze({ media: "app" }),
+      presence: Object.freeze({
+        media: "app",
+        /** The screen kept on during a call: the app's own, since a phone's webview has no Screen Wake Lock that holds (none in an
+         *  insecure context, none in WKWebView). iOS `isIdleTimerDisabled` and Android's `FLAG_KEEP_SCREEN_ON` (the plugin's
+         *  `keep_screen_on`) stay set until released: nothing takes them back. */
+        screenAwake: Object.freeze({
+          supported: true,
+          acquire: () => keepScreenOn(true).then(() => "held", () => "failed"),
+          release: () => {
+            keepScreenOn(false).catch((error) => { if (win.console) win.console.warn("[sidevoice] the screen could not be let go:", error); });
+          },
+          onReleased: () => () => {},
+        }),
+      }),
       /** What a headset's presses do: the only shortcuts a phone has. */
       shortcuts: headset.host,
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */

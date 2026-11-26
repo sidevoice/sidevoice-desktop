@@ -84,6 +84,7 @@
 		035C90F560637AC4EE9E2858 /* microphone_help.rs */ = {isa = PBXFileReference; path = microphone_help.rs; sourceTree = "<group>"; };
 		04B561B0C6069C039FFEED09 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		084491628E8D53FF0885F833 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
+		085474441D5CE1D859DE3A39 /* screen.rs */ = {isa = PBXFileReference; path = screen.rs; sourceTree = "<group>"; };
 		08702CFC095D2F17073267AA /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		0C54967DE38A99011EDDA22E /* AVFAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFAudio.framework; path = System/Library/Frameworks/AVFAudio.framework; sourceTree = SDKROOT; };
 		109890CBCB27601B28629110 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
@@ -94,7 +95,6 @@
 		1981A931E18D3F4459297845 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		1CAE0679DD2A16427423BD0E /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		20F786B267C7F9B83687598C /* CallActivity */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CallActivity; path = ../../apple/CallActivity; sourceTree = SOURCE_ROOT; };
-		216916D93E3C8D75635265CC /* downloads.rs */ = {isa = PBXFileReference; path = downloads.rs; sourceTree = "<group>"; };
 		26D96D0B9DBADA3317A773B9 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		283E9FABA170116B2849F571 /* audio_input.rs */ = {isa = PBXFileReference; path = audio_input.rs; sourceTree = "<group>"; };
 		299D7B306F3BF743AC1EF244 /* interruption.rs */ = {isa = PBXFileReference; path = interruption.rs; sourceTree = "<group>"; };
@@ -340,12 +340,12 @@
 				F94DC09ACE0378E1E536E6AE /* call.rs */,
 				B4DABE0897F2FA10576F0239 /* crash_reports.rs */,
 				F82202DB265069BB71A79851 /* developer_options.rs */,
-				216916D93E3C8D75635265CC /* downloads.rs */,
 				D36FBE442FE36E95B601C9D1 /* hold.rs */,
 				013D7F0BABED445EF788A289 /* i18n.rs */,
 				AC7B192F6F772B984C2013E8 /* lib.rs */,
 				3ED59F09A85CF8FF41D62009 /* pairings.rs */,
 				749529AE2409B9FB50B39312 /* platform.rs */,
+				085474441D5CE1D859DE3A39 /* screen.rs */,
 				8609C7142CEC5C4009BB8B54 /* surface.rs */,
 				C8A96FD8F714BFFEBAC54283 /* platform */,
 			);
