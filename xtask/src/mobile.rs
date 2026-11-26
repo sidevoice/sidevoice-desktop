@@ -347,6 +347,33 @@ pub fn unsigned_apk() -> PathBuf {
     repo().join("dist/Sidevoice-android-unsigned.apk")
 }
 
+/// What an unsigned Android bundle build leaves, below mobile/tauri/gen/android.
+const UNSIGNED_AAB: &str = "app/build/outputs/bundle/universalRelease/app-universal-release.aab";
+
+/// The unsigned Android App Bundle `mobile bundle android` puts in dist/.
+pub fn unsigned_aab() -> PathBuf {
+    repo().join("dist/Sidevoice-android-unsigned.aab")
+}
+
+/// `mobile bundle android --version-code N`: the Android App Bundle Google Play takes, unsigned, into dist/, with `N` as the
+/// app's `versionCode` (Play wants it to grow with every upload; the CLI would derive it from the version, which does not
+/// change per build). The same build as [`build`], one AAB (arm64-v8a and armeabi-v7a) in place of the APK.
+pub fn bundle(version_code: &str) -> Result<()> {
+    let code: u32 = version_code.parse().map_err(|_| format!("mobile bundle: a number, not `{version_code}`"))?;
+    ensure(code > 0 && code <= 2_100_000_000, "mobile bundle: a versionCode is 1 to 2100000000")?;
+    mkdir(&repo().join("dist"))?;
+    let libs = AppBuildLibs::hold("android", &ANDROID_TARGETS)?;
+    let config = format!(r#"{{"bundle":{{"android":{{"versionCode":{code}}}}}}}"#);
+    build_tauri(&[
+        "android", "build", "--aab", "--target", "aarch64", "--target", "armv7", "--ci", "--config", &config,
+    ])?
+    .run()?;
+    drop(libs);
+    let aab = repo().join("mobile/tauri/gen/android").join(UNSIGNED_AAB);
+    fs::copy(&aab, unsigned_aab()).map_err(|e| format!("{}: {e}", aab.display()))?;
+    Ok(())
+}
+
 /// Where the Android project takes the native libraries it packages beside the app's own (`jniLibs/<abi>/`; git ignores
 /// the `.so` files there).
 const ANDROID_LIBS: &str = "mobile/tauri/gen/android/app/src/main/jniLibs";
