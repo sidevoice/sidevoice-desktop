@@ -1,5 +1,7 @@
 # Releasing
 
+This file is self-sufficient: it holds what anyone needs to build, release and download this repository. The maintainers also follow an internal release guideline shared by all Sidevoice repositories ([releasing guideline](https://github.com/sidevoice/.github-private/blob/main/docs/releasing.md), maintainers only; nothing here depends on it).
+
 One version for the whole desktop app, tagged `vX.Y.Z`. It lives in `desktop/tauri/tauri.conf.json`, `package.json`,
 `package-lock.json`, the three `Cargo.toml` and `Cargo.lock`; release-please moves them together
 (`release-please-config.json`). Never edit them by hand. This repository will release a second product, the mobile
@@ -151,7 +153,7 @@ platform allows:
 ## Which version comes next
 
 `fix:` → patch, `feat:` → minor. While the version is 0.x a breaking change (`feat!:` or a `BREAKING CHANGE:`
-footer) bumps the minor, not the major. `docs:`, `chore:`, `ci:`, `test:`, `refactor:` alone make no release.
+footer) bumps the minor, not the major. `docs:`, `chore:`, `ci:`, `test:`, `refactor:` alone make no release. Core (`sidevoice-platform`, the library of the core repository), engine, voice and web are bundled: a PR that moves one of their pins (the `Cargo.toml` tags, `web.pin.json`) is a change of the desktop app and is titled `fix(deps): ...`, not `chore`; `feat(deps): ...` when the web pin brings a new connector minor. That is the guideline's convention (section 1): a pin is a change.
 
 Nothing is tagged yet: the manifest starts at 0.1.0, so the first release PR proposes 0.2.0 if there is a `feat`.
 To publish the first one as 0.1.0, use `Release-As: 0.1.0` (below).
