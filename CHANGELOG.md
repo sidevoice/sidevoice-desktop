@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.6.0...v0.7.0) (2026-11-26)
+
+
+### Features
+
+* **logs:** give the viewer the app's own log ([#544](https://github.com/sidevoice/sidevoice-desktop/issues/544)) ([1bc7a7a](https://github.com/sidevoice/sidevoice-desktop/commit/1bc7a7a6007416e924987f3bff9b0ae37bd2b0b0))
+
+
+### Bug Fixes
+
+* **call:** log page loads, hang-ups and web view termination; no meters to a hidden page ([#543](https://github.com/sidevoice/sidevoice-desktop/issues/543)) ([85c26a3](https://github.com/sidevoice/sidevoice-desktop/commit/85c26a39e8db4ca450eba0655182fdfe5a4932a2))
+* **ios:** reload the web view when iOS kills its content process ([#548](https://github.com/sidevoice/sidevoice-desktop/issues/548)) ([d876828](https://github.com/sidevoice/sidevoice-desktop/commit/d876828d95dd820f8ed790904c4da8dc6d6c53be))
+
 ## [0.6.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.5.1...v0.6.0) (2026-11-19)
 
 
